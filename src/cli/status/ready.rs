@@ -59,6 +59,8 @@ pub(in crate::cli) enum Unready {
     /// an import with files this machine lacks, missing or damaged, which no link fetches, so no
     /// sync brings them: its name, and its folder.
     Imported { name: String, folder: String },
+    /// what a sync refuses before it follows a data folder link the first time, as it says it.
+    Refused(String),
 }
 
 impl Unready {
@@ -119,14 +121,15 @@ impl Unready {
                 "{name} is not pinned as data.toml asks: `{}` pins and places it",
                 command(sync)
             ),
-            Unready::Import { name, pinned, at } => line(if *pinned {
+            Unready::Import { name, pinned, at } => line(&if *pinned {
                 crate::source::local::changed(name, at.as_deref())
             } else {
                 crate::source::local::unpinned(name, at.as_deref())
             }),
-            Unready::Imported { name, folder } => line(crate::source::local::imported_elsewhere(
+            Unready::Imported { name, folder } => line(&crate::source::local::imported_elsewhere(
                 name, folder, false,
             )),
+            Unready::Refused(said) => said.clone(),
             Unready::NotDownloaded { name, by } => format!(
                 "{name} is pinned by its source's {by}, not downloaded yet: `{}` downloads and checks it",
                 command(&format!("sync {name}"))
@@ -139,7 +142,7 @@ impl Unready {
                 waiting.name, waiting.part
             ),
             Unready::Output(changed) => changed.said(),
-            Unready::Elsewhere { name, shown } => line(crate::source::local::made_elsewhere(
+            Unready::Elsewhere { name, shown } => line(&crate::source::local::made_elsewhere(
                 &[(name, shown)],
                 false,
             )),
@@ -159,11 +162,11 @@ impl Unready {
     }
 }
 
-/// the refusal of a file no link fetches as one line, what is wrong and then the ways on.
-pub(super) fn line(refused: Error) -> String {
-    match refused.help {
+/// `refused`, a refusal, as one line: what is wrong, then the ways on.
+pub(super) fn line(refused: &Error) -> String {
+    match &refused.help {
         Some(help) => format!("{}: {help}", refused.message),
-        None => refused.message,
+        None => refused.message.clone(),
     }
 }
 
@@ -279,7 +282,11 @@ pub(super) fn of_status(status: &Status, manifest: &Manifest) -> Vec<Unready> {
     let outputs = &status.changed_outputs;
     let made = lacking_outputs(status);
     let lacking: HashSet<&String> = status.imported_elsewhere.values().flatten().collect();
-    let mut unready = Vec::new();
+    let mut unready: Vec<Unready> = status
+        .refused
+        .iter()
+        .map(|refused| Unready::Refused(line(refused)))
+        .collect();
     if status.lockless {
         unready.push(Unready::Lockless(status.pins_lockless.clone()));
     } else {

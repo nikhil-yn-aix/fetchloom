@@ -81,6 +81,10 @@ pub(super) struct Status {
     /// the outputs whose folders hold other files than their pins, as sync judges them.
     #[serde(skip)]
     changed_outputs: Vec<place::ChangedOutput>,
+    /// what a sync refuses before it follows a data folder link the first time, as it would
+    /// harm what the folder holds.
+    #[serde(skip)]
+    refused: Option<Error>,
     /// the imports with files this machine cannot give back, missing or damaged, with those files:
     /// no link fetches them, so no sync places them.
     #[serde(skip)]
@@ -186,6 +190,10 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         &context.stop,
         verify.then_some(&context.output),
     )?;
+    // what a sync refuses, status refuses alike, but for --check, where it keeps data from ready
+    if !strict && let Some(refused) = status.refused.take() {
+        return Err(refused);
+    }
     let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
@@ -326,19 +334,22 @@ fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest
             .collect();
         // status asks no mirror, so it says only what the cache lacks
         let refused = crate::source::local::made_elsewhere(&made, false);
-        output.hint(&ready::line(refused));
+        output.hint(&ready::line(&refused));
     }
     let refused = match names.as_slice() {
         [] => return,
         [one] => crate::source::local::imported_elsewhere(one, &plan::folder(manifest, one), false),
         many => crate::source::local::several_imported_elsewhere(many, false),
     };
-    output.hint(&ready::line(refused));
+    output.hint(&ready::line(&refused));
 }
 
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
-    let (status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
+    let (mut status, manifest, lock) = check(project, context.threads, &context.stop, None)?;
+    if let Some(refused) = status.refused.take() {
+        return Err(refused);
+    }
     let output = &context.output;
     warn_git(output, project, lock.as_deref());
     if !sum_up(output, &status) {
@@ -1005,6 +1016,8 @@ fn compare(
     (status.changed_outputs, _) =
         place::changed_outputs(root, targets, &actions, survey, &Scope::All);
     status.committed = committed(&project.root, manifest, &status.untracked);
+    status.refused =
+        place::refuse_first_follows(project, manifest, (targets, &actions), survey).err();
     Ok(())
 }
 

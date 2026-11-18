@@ -1516,6 +1516,59 @@ fn a_file_force_would_harm_in_an_outputs_folder_refuses_the_first_follow() -> Re
     Ok(())
 }
 
+/// status checks a first follow as a sync does, writing nothing: what the sync refuses, status
+/// refuses with the same words, and `--check` says the data is not ready, with that refusal as the
+/// line that keeps it. until the follow is settled, a marker no record names there is no more
+/// fetchloom's than anyone's.
+#[test]
+fn status_checks_a_first_follow_as_a_sync_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir_all(&target)?;
+    let data = sandbox.work().join("data");
+    if link_folder(&target, &data).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("sepals.csv"), b"length\n5.1\n")?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    crate::support::delete_folder(&sandbox.work().join(".fetchloom"))?;
+    let refusal = format!(
+        " is a link to {}, where flowers/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it",
+        real(&target)?
+    );
+    for args in [&["sync", "--dry-run"][..], &["status"]] {
+        let refused = sandbox.run(args)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(stderr.contains(&refusal), "{args:?}: {stderr}");
+    }
+    let checked = sandbox.run(&["--json", "status", "--check"])?;
+    let document: serde_json::Value = serde_json::from_slice(&checked.stdout)?;
+    assert_eq!(checked.status.code(), Some(1), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "data.not_ready", "{document}");
+    assert!(
+        error["details"][0]
+            .as_str()
+            .is_some_and(|line| line.contains(&refusal)),
+        "{document}"
+    );
+    assert_eq!(
+        document["result"]["yours"],
+        serde_json::json!(["data/flowers/.gitignore"]),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a .gitignore in fetchloom's own marker form that this project's state does not record marks
 /// another project's or another copy's dataset folder, so a first follow refuses the folder holding it,
 /// whatever else lies beside it: a fresh link's, and a settled project's whose data folder moved
@@ -1564,16 +1617,19 @@ fn a_folder_another_projects_marker_holds_is_refused() -> Result {
     fs::rename(target.join("results"), moved.join("results"))?;
     link_folder(&moved, &data)?;
     let before = listing(&moved)?;
-    let synced = sandbox.run(&["--offline", "sync"])?;
-    let stderr = text(&synced.stderr)?;
-    assert_eq!(synced.status.code(), Some(50), "{stderr}");
-    assert!(
-        stderr.contains(&format!(
-            " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
-            real(&moved)?
-        )),
-        "{stderr}"
-    );
+    // status, which finds every file as recorded, checks the follow as the sync does
+    for args in [&["--offline", "sync"][..], &["status"]] {
+        let refused = sandbox.run(args)?;
+        let stderr = text(&refused.stderr)?;
+        assert_eq!(refused.status.code(), Some(50), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                " is a link to {}, where results/.gitignore marks another project's or another copy's dataset folder, or this project's own, from before its .fetchloom folder was lost, so fetchloom places nothing through it\n",
+                real(&moved)?
+            )),
+            "{args:?}: {stderr}"
+        );
+    }
     assert_eq!(listing(&moved)?, before);
     Ok(())
 }

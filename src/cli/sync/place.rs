@@ -1002,9 +1002,7 @@ impl<'a> Placing<'a> {
                 .map(|action| clearing(action, &survey, &freeing, scope))
                 .collect();
         }
-        for link in survey.followed.iter().filter(|link| link.first) {
-            follow::refuse_harm(project, manifest, (&plan.targets, &actions), &survey, link)?;
-        }
+        refuse_first_follows(project, manifest, (&plan.targets, &actions), &survey)?;
         let (changed, extras) = changed_outputs(
             (&project.root, manifest),
             &plan.targets,
@@ -3340,6 +3338,21 @@ pub(crate) fn authored(state: &State) -> HashSet<&str> {
         .filter(|placed| placed.output && placed.adopted)
         .map(|placed| placed.dataset.as_str())
         .collect()
+}
+
+/// refuses each data folder link `survey` follows first that would harm what the folder it leads
+/// to holds, as `actions`, decided for `targets`, tell, before a run places or deletes anything
+/// through it. status asks the same, writing nothing.
+pub(crate) fn refuse_first_follows(
+    project: &Project,
+    manifest: &Manifest,
+    (targets, actions): (&[Target], &[Action]),
+    survey: &Survey,
+) -> Result<(), Error> {
+    for link in survey.followed.iter().filter(|link| link.first) {
+        follow::refuse_harm(project, manifest, (targets, actions), survey, link)?;
+    }
+    Ok(())
 }
 
 /// whether `path`, a file of the project no pin places, is in an output's folder yet no part of the
