@@ -1087,7 +1087,7 @@ fn a_stray_file_in_an_outputs_folder_refuses_the_first_follow() -> Result {
             "{args:?}: {stderr}"
         );
         assert!(
-            stderr.contains("help: point the link at a folder of this project's own, or keep that file by moving it out of the output's folder or by pinning the folder again with `fetchloom add data/processed --as processed`\n"),
+            stderr.contains("help: point the link at a folder of this project's own, or keep that file by moving it out of the output's folder or by pinning the folder again with `fetchloom add ./data/processed --as processed`\n"),
             "{args:?}: {stderr}"
         );
         assert_eq!(listing(&target)?, before, "{args:?}");

@@ -1045,12 +1045,9 @@ fn tell_imports_kept(output: &Output, project: &Project, manifest: &Manifest) {
         [] => return,
         [one] => format!(
             "{one}, an output, which `{}` pins again",
-            command(&format!(
-                "add {} --as {one}",
-                crate::suggested::shell_word(&super::folder_from_here(
-                    &project.root,
-                    &plan::folder(manifest, one)
-                ))
+            command(&crate::source::local::output_pin(
+                one,
+                &super::folder_from_here(&project.root, &plan::folder(manifest, one))
             ))
         ),
         many => format!(
@@ -1231,10 +1228,7 @@ fn check(
             let at = output_from_here(project, manifest, name)?;
             Some(format!(
                 "{said}; `{}` pins what its folder holds",
-                command(&format!(
-                    "add {} --as {name}",
-                    crate::suggested::shell_word(&at)
-                ))
+                command(&crate::source::local::output_pin(name, &at))
             ))
         };
         // a pin by its source's digests counts as locked until data.toml changes, and so does

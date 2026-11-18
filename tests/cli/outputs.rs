@@ -288,6 +288,55 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
     Ok(())
 }
 
+/// an output's folder that is gone, as after a move data.toml does not know of yet or a failed
+/// run, is told as gone with the two ways back, and an add of it in any spelling says so rather
+/// than send the folder's name off as search words.
+#[test]
+fn a_gone_outputs_folder_is_told_as_gone_and_never_searched_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    fs::rename(work.join("data/processed"), work.join("data/features"))?;
+    let back = "`fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at = \"<new folder>\" for processed in data.toml";
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains(&format!("hint: data/processed is gone: {back}\n")),
+        "{stderr}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert!(stderr.contains(&format!("help: {back}\n")), "{stderr}");
+    let checked = sandbox.run(&["--json", "status", "--check"])?;
+    let document = json(&checked)?;
+    assert_eq!(checked.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["details"],
+        serde_json::json!([format!("data/processed is gone: {back}")]),
+        "{document}"
+    );
+    for typed in [
+        &["data/processed", "--as", "processed"][..],
+        &["./data/processed", "--as", "processed"],
+        &["data/processed"],
+    ] {
+        let added = sandbox.run(&[&["--offline", "add"][..], typed].concat())?;
+        let stderr = text(&added.stderr)?;
+        assert_eq!(added.status.code(), Some(2), "{typed:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "error: {} is the folder of the output processed, and it is not there\n  help: run your pipeline to make it, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n",
+                typed[0]
+            )),
+            "{typed:?}: {stderr}"
+        );
+    }
+    ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+    assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
+    Ok(())
+}
+
 /// git carries data.lock, never an output's bytes: a teammate whose cache and mirrors lack them
 /// still gets every other dataset, and the run names the output once, as made on another machine,
 /// with both ways on, and ends well, so a pipeline run after it can make the output. the output's
@@ -316,7 +365,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
             .output()
     };
     let said = "processed was made on another machine, and its files are in no mirror this machine reaches";
-    let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add data/processed --as processed`";
+    let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`";
     let folder = teammate.join("data").join("processed");
     let dry = sync(&["sync", "--dry-run"])?;
     assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr)?);
@@ -341,7 +390,7 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
         ),
         "{stderr}"
     );
-    let not_ready = "processed was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `fetchloom add data/processed --as processed`";
+    let not_ready = "processed was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `fetchloom add ./data/processed --as processed`";
     for args in [
         ["--json", "sync", "--strict"],
         ["--json", "status", "--check"],
@@ -557,7 +606,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
         "{said}"
     );
     assert!(
-        said.contains("fetchloom add data/processed --as processed"),
+        said.contains("fetchloom add ./data/processed --as processed"),
         "{said}"
     );
     let folder = work.join("data/processed");
@@ -806,7 +855,7 @@ fn status_after_a_rerun_names_the_pin_first() -> Result {
     assert_eq!(
         hints,
         [
-            "data/processed changed since processed was pinned: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
         ],
         "{stderr}"
     );
@@ -895,7 +944,7 @@ fn the_same_add_pins_a_rerun_in_one_step_keeping_the_table() -> Result {
         "an excluded file is no change: {stderr}"
     );
     assert!(
-        stderr.contains("fetchloom add data/processed --as processed --yes"),
+        stderr.contains("fetchloom add ./data/processed --as processed --yes"),
         "{stderr}"
     );
     assert!(
@@ -947,7 +996,8 @@ fn lock_upgrade_names_the_add_that_pins_an_output_again() -> Result {
         "{document}"
     );
     assert_eq!(
-        error["help"], "run `fetchloom add data/processed --as processed` to pin what it holds now",
+        error["help"],
+        "run `fetchloom add ./data/processed --as processed` to pin what it holds now",
         "{document}"
     );
     let every = sandbox.run(&["lock", "--upgrade"])?;
@@ -955,7 +1005,7 @@ fn lock_upgrade_names_the_add_that_pins_an_output_again() -> Result {
     assert_eq!(every.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.contains(
-            "Skipped processed, an output, which `fetchloom add data/processed --as processed` pins again"
+            "Skipped processed, an output, which `fetchloom add ./data/processed --as processed` pins again"
         ),
         "{stderr}"
     );
@@ -979,7 +1029,7 @@ fn a_changed_outputs_table_is_pinned_again_by_its_add() -> Result {
     );
     assert_ne!(table, manifest);
     fs::write(work.join("data.toml"), &table)?;
-    let add = "`fetchloom add data/processed --as processed`";
+    let add = "`fetchloom add ./data/processed --as processed`";
     for args in [
         &["sync"][..],
         &["lock"],
@@ -1052,7 +1102,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         synced["errors"][0]["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned, 1 file changed: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
         ]),
         "{synced}"
     );
@@ -1071,7 +1121,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         error["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom add data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
         ]),
         "{document}"
     );

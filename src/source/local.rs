@@ -27,13 +27,22 @@ pub(crate) fn unlisted() -> Error {
     ))
 }
 
+/// the words of the add that pins the output `name` from `folder`, its folder as a command run
+/// here names it, written as a path, as `./data/processed`, so add never takes the folder for
+/// words to search with, even once it is gone.
+pub(crate) fn output_pin(name: &str, folder: &str) -> String {
+    let path = if is_path(folder) {
+        folder.to_owned()
+    } else {
+        format!("./{folder}")
+    };
+    format!("add {} --as {name}", crate::suggested::shell_word(&path))
+}
+
 /// the command that pins what the folder of the output `name` holds now, `at` as a command names
 /// it, keeping its table in data.toml as written.
 fn pinned_again(name: &str, at: &str) -> String {
-    crate::suggested::command(&format!(
-        "add {} --as {name}",
-        crate::suggested::shell_word(at)
-    ))
+    crate::suggested::command(&output_pin(name, at))
 }
 
 /// the refusal of a changed data.toml entry of `name`: an import, which only importing the files
@@ -145,10 +154,7 @@ pub(crate) fn made_elsewhere(name: &str, at: &str) -> Error {
         "push them from the machine that made them with `{}` and add that mirror here with `{}`, or run your pipeline here, then `{}`",
         crate::suggested::command("push --to <mirror>"),
         crate::suggested::command("settings set mirrors <mirror>"),
-        crate::suggested::command(&format!(
-            "add {} --as {name}",
-            crate::suggested::shell_word(at)
-        ))
+        pinned_again(name, at)
     ))
 }
 

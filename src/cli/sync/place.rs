@@ -216,6 +216,9 @@ pub(crate) struct ChangedOutput {
     /// its files a run leaves as they are, at pinned paths or added, as edits are told of, so a
     /// folder moved keeping their times keeps them the person's.
     pub(crate) edits: Vec<String>,
+    /// whether nothing is at its folder, as after a move or a run that deleted it, so pinning
+    /// what it holds now pins nothing.
+    pub(crate) gone: bool,
 }
 
 impl ChangedOutput {
@@ -231,7 +234,15 @@ impl ChangedOutput {
             change: String::new(),
             told: false,
             edits: Vec::new(),
+            gone: false,
         }
+    }
+
+    /// this output, as its folder in the project at `root` is there or gone.
+    pub(crate) fn looked_at(mut self, root: &Path) -> Self {
+        self.gone = fs::symlink_metadata(native(root, &self.at))
+            .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
+        self
     }
 
     /// this output with what changed, `changes`, as a run tells it once, and whether one did.
@@ -251,6 +262,15 @@ impl ChangedOutput {
     fn is_changed(&self) -> bool {
         self.changed + self.added + self.removed > 0
     }
+}
+
+/// how the output `name` comes back once its folder is gone: `sync --force` puts back the files it
+/// pins, and a folder moved on purpose is named in data.toml.
+pub(crate) fn ways_back(name: &str) -> String {
+    format!(
+        "`{}` puts back the files {name} pins, or if you moved it, set at = \"<new folder>\" for {name} in data.toml",
+        crate::suggested::command(&format!("sync --force {name}"))
+    )
 }
 
 /// `1 file changed, 2 added, 1 removed` for these counts of files, leaving out what is none.
@@ -3301,7 +3321,7 @@ fn changed_outputs(
     let changed: Vec<ChangedOutput> = found
         .into_values()
         .filter(|(output, _)| output.is_changed())
-        .map(|(output, changes)| output.told_of(changes, &survey.state.told))
+        .map(|(output, changes)| output.told_of(changes, &survey.state.told).looked_at(root))
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
     extras.retain(|(_, name)| left.contains(name.as_str()));

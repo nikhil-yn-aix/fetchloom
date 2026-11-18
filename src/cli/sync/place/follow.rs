@@ -130,10 +130,12 @@ fn unpinned(
     };
     let outputs: BTreeSet<(&str, &str)> = deleted.values().copied().collect();
     let again = match outputs.iter().next() {
-        Some((name, at)) if outputs.len() == 1 => crate::suggested::command(&format!(
-            "add {} --as {name}",
-            crate::suggested::shell_word(&crate::cli::folder_from_here(&project.root, at))
-        )),
+        Some((name, at)) if outputs.len() == 1 => {
+            crate::suggested::command(&crate::source::local::output_pin(
+                name,
+                &crate::cli::folder_from_here(&project.root, at),
+            ))
+        }
         _ => crate::suggested::command("add <folder> --as <name>"),
     };
     refused(

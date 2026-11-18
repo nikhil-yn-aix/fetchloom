@@ -424,10 +424,7 @@ fn tell_changed_outputs(
             ),
             &format!(
                 "run `{}` first to pin what it holds now",
-                super::project::command(&format!(
-                    "add {} --as {name}",
-                    super::shell_word(&changed.shown)
-                ))
+                super::project::command(&crate::source::local::output_pin(name, &changed.shown))
             ),
         );
     }

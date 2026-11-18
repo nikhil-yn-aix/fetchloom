@@ -331,6 +331,9 @@ fn request(args: &mut Add, project: &Project) -> Result<Request, Error> {
             )),
         );
     };
+    if let Some(refused) = output_gone(&link, project) {
+        return Err(refused);
+    }
     // with --as, a folder of the project is pinned where it is, as `add data/processed --as
     // processed` reads; without it, the word may be search words too
     if local::is_path(&link) || (args.name.is_some() && names_project_folder(&link, project)) {
@@ -365,6 +368,50 @@ fn names_project_folder(word: &str, project: &Project) -> bool {
             super::import::in_project(project, &data_dir, &folder),
             Ok(Some(at)) if !at.is_empty()
         )
+}
+
+/// the refusal of `word`, typed here, when it names the folder of an output of `project` with
+/// nothing there, as after a move or a failed run: an add of it says so, whatever its spelling,
+/// rather than send the folder's name off as search words.
+fn output_gone(word: &str, project: &Project) -> Option<Error> {
+    if word.contains(':') && !local::is_path(word) {
+        return None;
+    }
+    let here = std::env::current_dir().ok()?;
+    let below = here.join(word.trim());
+    let mut names: Vec<&str> = Vec::new();
+    for part in below.strip_prefix(&project.root).ok()?.components() {
+        match part {
+            std::path::Component::Normal(part) => names.push(part.to_str()?),
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                names.pop()?;
+            }
+            _ => return None,
+        }
+    }
+    let folded = name::fold(&names.join("/"));
+    let (_, manifest) = project.manifest().ok()?;
+    let (output, at) = manifest.datasets.iter().find_map(|(output, entry)| {
+        let at = entry.at.as_deref()?;
+        (name::fold(at) == folded).then_some((output, at))
+    })?;
+    match std::fs::symlink_metadata(crate::project::native(&project.root, at)) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return None,
+    }
+    Some(
+        Error::new(
+            Kind::Usage,
+            format!(
+                "{} is the folder of the output {output}, and it is not there",
+                word.trim()
+            ),
+        )
+        .help(format!(
+            "run your pipeline to make it, or if you moved it, set at = \"<new folder>\" for {output} in data.toml"
+        )),
+    )
 }
 
 /// the reference data.toml gives the list at `path`, typed in `here`: `list:` and its path in the

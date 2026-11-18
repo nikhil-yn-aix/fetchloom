@@ -51,11 +51,12 @@ pub(in crate::cli) enum Unready {
     /// a dataset whose file list, which data.lock names, is not beside it.
     Waiting(Box<Waiting>),
     /// an output whose folder changed since it was pinned, which sync leaves whole: its name,
-    /// its folder as a command names it, and what changed.
+    /// its folder as a command names it, what changed, and whether the folder is gone.
     Output {
         name: String,
         shown: String,
         changes: String,
+        gone: bool,
     },
     /// an output whose files this machine lacks, as a clone of the project that made it does,
     /// which sync leaves out: its name, and its folder as a command names it.
@@ -143,15 +144,19 @@ impl Unready {
                 waiting.name, waiting.part
             ),
             Unready::Output {
+                name, shown, gone, ..
+            } if *gone => format!(
+                "{shown} is gone: {}",
+                crate::cli::sync::place::ways_back(name)
+            ),
+            Unready::Output {
                 name,
                 shown,
                 changes,
+                ..
             } => format!(
                 "{shown} changed since {name} was pinned, {changes}: `{}` pins it as it is now, or `{}` discards the changes",
-                command(&format!(
-                    "add {} --as {name}",
-                    crate::suggested::shell_word(shown)
-                )),
+                command(&crate::source::local::output_pin(name, shown)),
                 command(&format!("sync --force {name}"))
             ),
             Unready::Elsewhere { name, shown } => made_elsewhere(name, shown),
@@ -176,10 +181,7 @@ impl Unready {
 pub(super) fn made_elsewhere(name: &str, shown: &str) -> String {
     format!(
         "{name} was made on another machine, so only a mirror that holds its files brings them here, or your pipeline run here, then `{}`",
-        command(&format!(
-            "add {} --as {name}",
-            crate::suggested::shell_word(shown)
-        ))
+        command(&crate::source::local::output_pin(name, shown))
     )
 }
 
@@ -247,6 +249,7 @@ pub(in crate::cli) fn after_sync(
                 name: changed.name.clone(),
                 shown: changed.shown.clone(),
                 changes: changed.summary(),
+                gone: changed.gone,
             }),
     );
     unready.extend(elsewhere(
@@ -395,6 +398,7 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
         name: changed.name.clone(),
         shown: changed.shown.clone(),
         changes: changed.summary(),
+        gone: changed.gone,
     }));
     unready.extend(elsewhere(made));
     unready

@@ -23,8 +23,8 @@ use crate::project::lock::{Lock, Locked, LockedFile};
 use crate::project::manifest::{self, Manifest, Source};
 use crate::project::state::{Placed, State};
 use crate::project::{Project, git};
+use crate::source::local::output_pin;
 use crate::stop::Stop;
-use crate::suggested::shell_word;
 use crate::{name, place, plan, units};
 
 /// the folder `start`, a real path, as [`super::in_project`] names it in `project`, whose data
@@ -360,7 +360,7 @@ fn refuse_folder(manifest: &Manifest, at: &str, shown: &str) -> Result<(), Error
         )
         .help(format!(
             "pin the folder your pipeline writes, as in `{}`",
-            crate::suggested::command("add data/processed --as processed")
+            crate::suggested::command("add ./data/processed --as processed")
         )));
     }
     let said = match manifest::folder(at, "at") {
@@ -413,7 +413,7 @@ fn output_name<'m>(
         )
         .help(format!(
             "run `{}` to pin it again, or rename datasets.{owner} in data.toml",
-            crate::suggested::command(&format!("add {} --as {owner}", shell_word(shown)))
+            crate::suggested::command(&output_pin(owner, shown))
         ))),
         (_, Some((owner, entry))) => Ok((owner.clone(), Some(entry))),
         (Some(asked), None) => {
@@ -738,7 +738,7 @@ fn approved(
         return Ok(());
     }
     let output = &context.output;
-    let again = crate::suggested::command(&format!("add {} --as {name} --yes", shell_word(shown)));
+    let again = crate::suggested::command(&format!("{} --yes", output_pin(name, shown)));
     if output.can_ask() {
         output.step("Changed", &format!("{name} · {}", changes.summary()));
         for line in changes.lines() {

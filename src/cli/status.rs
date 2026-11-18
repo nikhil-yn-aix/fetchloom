@@ -278,7 +278,7 @@ fn changed_outputs(
                     .iter()
                     .filter(|path| ours || state.files.contains_key(*path)),
             );
-            (output.changed + output.added + output.removed > 0).then_some(output)
+            (output.changed + output.added + output.removed > 0).then(|| output.looked_at(root))
         })
         .collect()
 }
@@ -300,13 +300,18 @@ fn tell_repairs(output: &Output, status: &Status) {
     // an output's rerun is pinned as it is, which comes first; --force discards it
     for changed in &status.changed_outputs {
         let name = &changed.name;
+        if changed.gone {
+            output.hint(&format!(
+                "{} is gone: {}",
+                changed.shown,
+                place::ways_back(name)
+            ));
+            continue;
+        }
         output.hint(&format!(
             "{} changed since {name} was pinned: `{}` pins it as it is now, or `{}` discards the changes",
             changed.shown,
-            super::project::command(&format!(
-                "add {} --as {name}",
-                crate::suggested::shell_word(&changed.shown)
-            )),
+            super::project::command(&crate::source::local::output_pin(name, &changed.shown)),
             super::project::command(&format!("sync --force {name}"))
         ));
     }
