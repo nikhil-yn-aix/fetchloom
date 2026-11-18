@@ -716,6 +716,69 @@ fn a_file_checked_by_size_alone_says_so_and_a_later_change_warns() -> Result {
     Ok(())
 }
 
+/// a server that names no `ETag`, only `Last-Modified`, as python's `http.server`, answers 304 for
+/// a file changed under its old date, as `cp -p` or `rsync -t` leave it. `audit` finds the change
+/// by its size, and `lock --upgrade` agrees: it pins the new bytes. while the size holds, the 304
+/// stands and the upgrade downloads nothing.
+#[test]
+fn audit_and_an_upgrade_agree_on_a_file_changed_under_its_old_date() -> Result {
+    const DATE: &str = "Thu, 01 Jan 2026 00:00:00 GMT";
+    let dated = |body: &[u8]| {
+        reply(
+            "200 OK",
+            &[
+                ("Content-Length", &body.len().to_string()),
+                ("Last-Modified", DATE),
+            ],
+            body,
+        )
+    };
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![("/f.csv".to_owned(), dated(b"a,b\n1,2\n"))])?;
+    source.unmodified("/f.csv", DATE);
+    pinned(&sandbox, &source, &["/f.csv"])?;
+    let added = source.requests().len();
+    let same = sandbox.run(&["lock", "--upgrade", "f"])?;
+    assert_eq!(
+        text(&same.stderr)?,
+        "         Ok data.lock is already up to date, nothing to do\n"
+    );
+    let asked = &source.requests()[added..];
+    let dated_ask = format!("if-modified-since: {}", DATE.to_ascii_lowercase());
+    assert!(
+        asked.iter().any(|head| head.contains(&dated_ask)),
+        "{asked:?}"
+    );
+    assert!(
+        asked
+            .iter()
+            .all(|head| head.contains(&dated_ask) || head.contains("range: bytes=0-0")),
+        "an upgrade of an unchanged file downloads nothing: {asked:?}"
+    );
+    let longer = b"a,b\n1,2\n3,4\n";
+    source.change(vec![("/f.csv".to_owned(), dated(longer))]);
+    let audited = sandbox.run(&["audit"])?;
+    ok(&audited)?;
+    let rows = text(&audited.stdout)?;
+    assert!(
+        rows.contains("f/f.csv · changed: 127.0.0.1 serves 12 B where data.lock pins 8 B"),
+        "{rows}"
+    );
+    let upgraded = sandbox.run(&["lock", "--upgrade", "f"])?;
+    ok(&upgraded)?;
+    let lock = std::fs::read_to_string(sandbox.work().join("data.lock"))?;
+    assert!(
+        lock.contains(&sha256_hex(longer)),
+        "{}",
+        text(&upgraded.stderr)?
+    );
+    let again = sandbox.run(&["audit"])?;
+    ok(&again)?;
+    let stderr = text(&again.stderr)?;
+    assert!(stderr.contains("     Served f · 1 file\n"), "{stderr}");
+    Ok(())
+}
+
 /// a record data.toml pins by its version, `zenodo:101`, whose source names a newer one,
 /// `zenodo:102`, gets a line naming that version and its page, with nothing for `--check` to
 /// fail, since the person chose the version; a record that is its newest gets none.

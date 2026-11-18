@@ -1367,8 +1367,8 @@ pub(crate) struct Routes {
     together: Arc<Mutex<std::collections::HashSet<String>>>,
     /// the start of targets answered only to a request whose head holds a line, lowercased.
     keyed: Arc<Mutex<Vec<(String, String)>>>,
-    /// targets answered `304 Not Modified` to a request that asks with their `ETag`.
-    unchanged: Arc<Mutex<Vec<(String, String)>>>,
+    /// targets answered `304 Not Modified` to a request that asks with a line of theirs.
+    unchanged: Arc<Mutex<Vec<Unchanged>>>,
     _running: ServerTask,
 }
 
@@ -1380,7 +1380,7 @@ impl Routes {
         let turns = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let together = Arc::new(Mutex::new(std::collections::HashSet::new()));
         let keyed: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
-        let unchanged: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+        let unchanged: Arc<Mutex<Vec<Unchanged>>> = Arc::default();
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let url = format!("http://{}", listener.local_addr()?);
         let requests = Arc::new(Mutex::new(Vec::new()));
@@ -1539,10 +1539,25 @@ impl Routes {
     /// answers `target` with `304 Not Modified` to a request asking `If-None-Match` with `etag`,
     /// as a server whose file still has that `ETag` does, and as before to any other request.
     pub(crate) fn unchanged(&self, target: &str, etag: &str) {
+        self.not_modified_to(target, &format!("If-None-Match: {etag}"), &[("ETag", etag)]);
+    }
+
+    /// answers `target` with a bare `304 Not Modified` to a request asking `If-Modified-Since`
+    /// with `date`, as python's `http.server` does for a file whose time is no later, and as
+    /// before to any other request.
+    pub(crate) fn unmodified(&self, target: &str, date: &str) {
+        self.not_modified_to(target, &format!("If-Modified-Since: {date}"), &[]);
+    }
+
+    fn not_modified_to(&self, target: &str, line: &str, headers: &[(&str, &str)]) {
         self.unchanged
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .push((target.to_owned(), etag.to_owned()));
+            .push(Unchanged {
+                target: target.to_owned(),
+                line: line.to_ascii_lowercase(),
+                answer: head("304 Not Modified", headers),
+            });
     }
 
     /// the head of every request so far, lowercased.
@@ -1620,19 +1635,22 @@ pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
     )
 }
 
-/// the answer `304 Not Modified` to a request for `target` whose head, lowercased as `lines`, asks
-/// with the `ETag` it has among `unchanged`, as [`Routes::unchanged`] names them.
-fn not_modified(
-    unchanged: &Mutex<Vec<(String, String)>>,
-    target: &str,
-    lines: &str,
-) -> Option<Vec<u8>> {
+/// a target answered `answer`, a `304 Not Modified`, to a request whose head holds `line`,
+/// lowercased.
+struct Unchanged {
+    target: String,
+    line: String,
+    answer: Vec<u8>,
+}
+
+/// the `304 Not Modified` for a request for `target` whose head, lowercased as `lines`, asks with a
+/// line it has among `unchanged`, as [`Routes::unchanged`] and [`Routes::unmodified`] name them.
+fn not_modified(unchanged: &Mutex<Vec<Unchanged>>, target: &str, lines: &str) -> Option<Vec<u8>> {
     let unchanged = unchanged.lock().unwrap_or_else(PoisonError::into_inner);
-    let (_, etag) = unchanged.iter().find(|(asked, etag)| {
-        let line = format!("if-none-match: {}", etag.to_ascii_lowercase());
-        asked == target && lines.lines().any(|held| held.trim() == line)
+    let found = unchanged.iter().find(|unchanged| {
+        unchanged.target == target && lines.lines().any(|held| held.trim() == unchanged.line)
     })?;
-    Some(head("304 Not Modified", &[("ETag", etag)]))
+    Some(found.answer.clone())
 }
 
 /// a value that other threads change, and a signal at each change, so a test can wait for what

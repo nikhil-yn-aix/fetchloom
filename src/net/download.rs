@@ -882,11 +882,12 @@ impl Net {
         fetch: &Fetch,
         cache: &Cache,
         partial: &Partial,
-        known: Option<UrlRecord>,
+        mut known: Option<UrlRecord>,
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         let mut whole = kept_before(fetch, partial, on)?;
-        let validators = known.as_ref().map(|record| record.validators.clone());
+        let has_copy = known.is_some();
+        let mut validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
         let mut relinks = 0;
@@ -931,7 +932,7 @@ impl Net {
             retry.moved(reach.further());
             match answer {
                 Ok(Answer::NotModified) => {
-                    let Some(record) = known else {
+                    let Some(record) = known.take() else {
                         return Err(Error::new(
                             Kind::NetworkStatus,
                             format!(
@@ -940,6 +941,24 @@ impl Net {
                             ),
                         ));
                     };
+                    // a date can stay while the bytes change, as `cp -p` leaves it, so a 304 on a
+                    // date alone stands only while the link serves the recorded size, as audit asks
+                    if record.validators.etag.is_none() {
+                        Self::release_for_wait(&mut state.permits);
+                        if let Probed::File {
+                            total: Some(total), ..
+                        } = self.probe(fetch).await?
+                            && total != record.size
+                        {
+                            tracing::debug!(
+                                total,
+                                recorded = record.size,
+                                "a 304 on a date alone, for a file of another size now: asking for it whole"
+                            );
+                            validators = None;
+                            continue;
+                        }
+                    }
                     return recalled(record, Origin::NotModified, on);
                 }
                 Ok(Answer::Stored {
@@ -978,7 +997,7 @@ impl Net {
                 Err(Failure::Final(err)) => return Err(err),
                 Err(Failure::Limited { reason, wait }) => {
                     Self::release_for_wait(&mut state.permits);
-                    retry.limited(reason, wait, known.is_some()).await?;
+                    retry.limited(reason, wait, has_copy).await?;
                 }
                 Err(Failure::Transient {
                     reason,
@@ -987,9 +1006,9 @@ impl Net {
                 }) => {
                     Self::release_for_wait(&mut state.permits);
                     if unreachable {
-                        retry.unreachable(reason, known.is_some()).await?;
+                        retry.unreachable(reason, has_copy).await?;
                     } else {
-                        retry.wait(reason, retry_after, known.is_some()).await?;
+                        retry.wait(reason, retry_after, has_copy).await?;
                     }
                 }
             }
