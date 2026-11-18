@@ -277,73 +277,62 @@ pub(crate) fn holds_pinned(
 }
 
 /// the SHA-256 of the file at `source` when it is a plain file of `size` bytes, read as
-/// [`Cache::copy_in`] reads it but writing nothing. a file that cannot be read has none.
+/// [`read_whole`] reads it. a file that cannot be read has none.
 ///
 /// # Errors
 ///
 /// `Interrupted` when `stop` asks.
 pub(crate) fn sha256_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option<Sha256>> {
-    let Ok(mut input) = opened(source, size) else {
-        return Ok(None);
-    };
-    let (mut hasher, mut read) = (Hasher::default(), 0_u64);
-    let most = size.saturating_add(1);
-    let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
-        hasher.update(block);
-        read += block.len() as u64;
-        Ok(())
-    });
-    match ended {
-        Ok(()) => Ok((read == size).then(|| hasher.sha256_so_far())),
-        Err(Fault::Source(_)) => Ok(None),
-        Err(Fault::Cache(err)) => Err(err),
-    }
+    let mut hasher = Hasher::default();
+    let whole = read_whole(source, size, stop, |block| hasher.update(block))?;
+    Ok(whole.then(|| hasher.sha256_so_far()))
 }
 
 /// the id git gives the file at `source` when it is a plain file of `size` bytes, read as
-/// [`sha256_of`] reads it. a file that cannot be read has none.
+/// [`read_whole`] reads it. a file that cannot be read has none.
 ///
 /// # Errors
 ///
 /// `Interrupted` when `stop` asks.
 pub(super) fn blob_id_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option<BlobId>> {
-    let Ok(mut input) = opened(source, size) else {
-        return Ok(None);
-    };
-    let (mut hasher, mut read) = (BlobHasher::new(size), 0_u64);
-    let most = size.saturating_add(1);
-    let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
-        hasher.update(block);
-        read += block.len() as u64;
-        Ok(())
-    });
-    match ended {
-        Ok(()) => Ok((read == size).then(|| hasher.finish())),
-        Err(Fault::Source(_)) => Ok(None),
-        Err(Fault::Cache(err)) => Err(err),
-    }
+    let mut hasher = BlobHasher::new(size);
+    let whole = read_whole(source, size, stop, |block| hasher.update(block))?;
+    Ok(whole.then(|| hasher.finish()))
 }
 
 /// the MD5 of the file at `source` when it is a plain file of `size` bytes, read as
-/// [`blob_id_of`] reads it. a file that cannot be read has none.
+/// [`read_whole`] reads it. a file that cannot be read has none.
 ///
 /// # Errors
 ///
 /// `Interrupted` when `stop` asks.
 pub(super) fn md5_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option<Md5>> {
+    let mut hasher = Md5Hasher::default();
+    let whole = read_whole(source, size, stop, |block| hasher.update(block))?;
+    Ok(whole.then(|| hasher.finish()))
+}
+
+/// hands each block of the file at `source` to `take`, read as [`Cache::copy_in`] reads it but
+/// writing nothing: whether it is a plain file of `size` bytes, read whole.
+fn read_whole(
+    source: &Path,
+    size: u64,
+    stop: &Stop,
+    mut take: impl FnMut(&[u8]),
+) -> io::Result<bool> {
     let Ok(mut input) = opened(source, size) else {
-        return Ok(None);
+        return Ok(false);
     };
-    let (mut hasher, mut read) = (Md5Hasher::default(), 0_u64);
+    let mut read = 0_u64;
     let most = size.saturating_add(1);
     let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
-        hasher.update(block);
+        take(block);
         read += block.len() as u64;
         Ok(())
     });
     match ended {
-        Ok(()) => Ok((read == size).then(|| hasher.finish())),
-        Err(Fault::Source(_)) => Ok(None),
+        Ok(()) => Ok(read == size),
+        Err(Fault::Source(_)) => Ok(false),
         Err(Fault::Cache(err)) => Err(err),
     }
 }
