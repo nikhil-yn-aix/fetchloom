@@ -213,7 +213,7 @@ fn warnings_name_the_problem_with_or_without_color() -> Result {
             ),
             "{stderr}"
         );
-        assert!(!stderr.contains("marked"), "{stderr}");
+        assert!(!sandbox.unrooted(&stderr).contains("marked"), "{stderr}");
         assert_eq!(stderr.contains("\x1b["), colored, "{stderr}");
     }
     Ok(())
@@ -1695,7 +1695,7 @@ fn check_unreadable_change_marks(mode: Option<u32>) -> Result {
         )),
         "{report}"
     );
-    assert!(!message.contains("mark"), "{report}");
+    assert!(!sandbox.unrooted(message).contains("mark"), "{report}");
     assert!(
         !copier.join("data/sample/good.bin").exists(),
         "unknown cache bytes were placed"

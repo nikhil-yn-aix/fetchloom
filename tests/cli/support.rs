@@ -355,6 +355,12 @@ impl Sandbox {
         }
     }
 
+    /// `text` with this sandbox's path as `[sandbox]`, so a test can check fetchloom's own words
+    /// wherever the temporary folder is, even under a path that holds the word checked.
+    pub(crate) fn unrooted(&self, text: &str) -> String {
+        text.replace(&self.root.display().to_string(), "[sandbox]")
+    }
+
     /// snapshot settings that hide what changes between runs: this sandbox's path, ports, timings,
     /// rates, which a slow run alone shows, and backslashes, which become slashes for windows.
     pub(crate) fn filters(&self) -> insta::Settings {
