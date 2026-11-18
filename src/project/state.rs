@@ -208,8 +208,9 @@ pub(crate) struct Uncached {
 /// which folder a state was written for: its file number, the inode on unix and the file index
 /// on windows, and its creation time where the disk keeps one finer than the second. a rename or a
 /// move within the disk keeps the number, and a move on fat or exfat, which keep no lasting
-/// numbers, keeps the time. hfs+ keeps whole seconds, which a copy made in the same second shares,
-/// so its time is not kept. the disk's own number is left out, since network disks number it apart
+/// numbers, keeps the time. windows takes no number on fat or exfat, and takes the time only where
+/// neither side has a number, as a copy tool there may keep it. hfs+ keeps whole seconds, which a
+/// copy made in the same second shares, so its time is not kept. the disk's own number is left out, since network disks number it apart
 /// on each machine. a clone, a copy or a state from git matches neither, so the records of a state
 /// that came with it, which anyone could have written, are not used.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,30 +226,47 @@ impl Folder {
     /// the folder at `root`, none when the system can tell neither its number nor its creation
     /// time.
     pub(crate) fn of(root: &std::path::Path) -> Option<Folder> {
+        use crate::space::Filesystem;
         let metadata = std::fs::metadata(root).ok();
+        let filesystem = Filesystem::of(root);
         let created = metadata
             .as_ref()
             .and_then(|metadata| metadata.created().ok())
             .and_then(|created| created.duration_since(std::time::UNIX_EPOCH).ok())
             .and_then(|since| u64::try_from(since.as_nanos()).ok())
-            .filter(|_| crate::space::Filesystem::of(root) != crate::space::Filesystem::Hfs);
+            .filter(|_| filesystem != Filesystem::Hfs);
         #[cfg(unix)]
         let inode = metadata.as_ref().map(std::os::unix::fs::MetadataExt::ino);
         #[cfg(windows)]
         let inode = winapi_util::Handle::from_path_any(root)
             .and_then(|handle| winapi_util::file::information(&handle))
             .ok()
-            .map(|information| information.file_index());
+            .map(|information| information.file_index())
+            .filter(|_| !matches!(filesystem, Filesystem::Fat | Filesystem::Exfat));
         #[cfg(not(any(unix, windows)))]
         let inode = None;
         (inode.is_some() || created.is_some()).then_some(Folder { inode, created })
     }
 
     /// whether a state written for this folder is one for `here`: the same number, or the same
-    /// creation time. what either side cannot tell matches nothing.
+    /// creation time. what either side cannot tell matches nothing. on windows a copy tool may keep
+    /// a folder's creation time, as robocopy /DCOPY:T does, so there the numbers decide where both
+    /// sides tell one, and the creation time only where neither does.
     pub(crate) fn matches(&self, here: &Folder) -> bool {
+        self.matches_by(here, cfg!(windows))
+    }
+
+    /// [`Folder::matches`], by the number alone where both sides tell one when `numbers_first`.
+    fn matches_by(&self, here: &Folder, numbers_first: bool) -> bool {
         let same =
             |recorded: Option<u64>, found: Option<u64>| recorded.is_some() && recorded == found;
+        if numbers_first {
+            return match (self.inode, here.inode) {
+                (Some(_), Some(_)) => same(self.inode, here.inode),
+                (None, None) => same(self.created, here.created),
+                _ => false,
+            };
+        }
         same(self.inode, here.inode) || same(self.created, here.created)
     }
 }
@@ -1151,7 +1169,39 @@ mod tests {
                 true,
             ),
         ] {
-            assert_eq!(recorded.matches(&here), matches, "{recorded:?} {here:?}");
+            assert_eq!(
+                recorded.matches_by(&here, false),
+                matches,
+                "{recorded:?} {here:?}"
+            );
+        }
+    }
+
+    /// on windows a copy tool may keep a folder's creation time, as robocopy /DCOPY:T does, so a
+    /// state is its folder's by the number where both sides tell one, and by the creation time only
+    /// where neither does.
+    #[test]
+    fn a_folder_matches_by_its_number_first_where_copies_keep_creation_times() {
+        let folder = |inode, created| Folder { inode, created };
+        for (recorded, here, matches) in [
+            (folder(Some(7), Some(100)), folder(Some(7), Some(200)), true),
+            (
+                folder(Some(7), Some(100)),
+                folder(Some(8), Some(100)),
+                false,
+            ),
+            (folder(Some(7), None), folder(Some(7), Some(100)), true),
+            (folder(None, Some(100)), folder(None, Some(100)), true),
+            (folder(None, Some(100)), folder(None, Some(200)), false),
+            (folder(None, Some(100)), folder(Some(7), Some(100)), false),
+            (folder(Some(7), Some(100)), folder(None, Some(100)), false),
+            (folder(None, None), folder(None, None), false),
+        ] {
+            assert_eq!(
+                recorded.matches_by(&here, true),
+                matches,
+                "{recorded:?} {here:?}"
+            );
         }
     }
 

@@ -2383,9 +2383,10 @@ fn remove_in_a_copy_says_what_it_keeps_and_why() -> Result {
     Ok(())
 }
 
-/// iris placed in `sandbox`, its state then recording another folder number but the folder's own
-/// creation time, as a move on fat or exfat leaves it. false on a disk that keeps no creation time,
-/// or keeps it to the whole second, as hfs+ does, where fetchloom records none.
+/// iris placed in `sandbox`, its state then recording the folder as a move on fat or exfat leaves
+/// it: another folder number but the folder's own creation time, or on windows, which takes no
+/// number there, the time alone. false on a disk that keeps no creation time, or keeps it to the
+/// whole second, as hfs+ does, where fetchloom records none.
 fn moved_on_a_disk_without_lasting_numbers(sandbox: &Sandbox, server: &Server) -> Result<bool> {
     let Ok(created) = fs::metadata(sandbox.work())?.created() else {
         return Ok(false);
@@ -2398,10 +2399,12 @@ fn moved_on_a_disk_without_lasting_numbers(sandbox: &Sandbox, server: &Server) -
     let path = sandbox.work().join(".fetchloom").join("state");
     let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
     let inode = state["folder"]["inode"].as_u64().unwrap_or_default();
-    state["folder"] = serde_json::json!({
-        "inode": inode.wrapping_add(1),
-        "created": u64::try_from(created.as_nanos())?,
-    });
+    let created = u64::try_from(created.as_nanos())?;
+    state["folder"] = if cfg!(windows) {
+        serde_json::json!({ "created": created })
+    } else {
+        serde_json::json!({ "inode": inode.wrapping_add(1), "created": created })
+    };
     fs::write(&path, serde_json::to_vec(&state)?)?;
     Ok(true)
 }
@@ -2416,7 +2419,12 @@ fn a_state_whose_folder_kept_its_creation_time_is_still_used() -> Result {
     if !moved_on_a_disk_without_lasting_numbers(&sandbox, &server)? {
         return crate::support::skipped("creation-time", "this disk keeps no fine creation time");
     }
-    let removed = sandbox.run(&["--offline", "remove", "iris"])?;
+    let mut remove = sandbox.command(&["--offline", "remove", "iris"]);
+    // windows takes a folder's number everywhere but on fat or exfat, which this disk then must be
+    if cfg!(windows) {
+        remove.env("FETCHLOOM_TEST_FILESYSTEM", "exfat");
+    }
+    let removed = remove.output()?;
     assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
     assert!(!sandbox.work().join("data/iris/iris.csv").exists());
     Ok(())
