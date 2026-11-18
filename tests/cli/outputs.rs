@@ -574,7 +574,12 @@ fn a_gone_outputs_folder_is_told_as_gone_and_never_searched_for() -> Result {
     );
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
-    assert!(stderr.contains(&format!("help: {back}\n")), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "warning: data/processed is gone\n  help: {back}\n"
+        )),
+        "{stderr}"
+    );
     let checked = sandbox.run(&["--json", "status", "--check"])?;
     let document = json(&checked)?;
     assert_eq!(checked.status.code(), Some(1), "{document}");
@@ -2362,6 +2367,11 @@ fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Resu
     );
     delete_folder(&work.join("data/processed"))?;
     let gone = json(&sandbox.run(&["--json", "push", "--to", &mirror, "--yes"])?)?;
+    assert_eq!(
+        crate::support::warning(&gone, "output.changed")["message"],
+        "data/processed is gone, so push sends the files processed pins",
+        "{gone}"
+    );
     assert_eq!(
         help(&gone),
         "`fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at = \"<new folder>\" for processed in data.toml",

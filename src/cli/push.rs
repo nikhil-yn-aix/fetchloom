@@ -415,13 +415,17 @@ fn tell_changed_outputs(
     };
     for changed in placing.changed_outputs() {
         let name = &changed.name;
-        context.output.warn_with(
-            Warning::OutputChanged,
-            &format!(
+        let said = match changed.gone_said(&changed.at) {
+            Some(gone) => format!("{gone}, so push sends the files {name} pins"),
+            None => format!(
                 "{} changed since {name} was pinned: {}, so push sends the files {name} pins, not these",
                 changed.at,
                 changed.summary()
             ),
+        };
+        context.output.warn_with(
+            Warning::OutputChanged,
+            &said,
             &if changed.gone {
                 changed.ways_on()
             } else {

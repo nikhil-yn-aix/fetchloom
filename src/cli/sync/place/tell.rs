@@ -1063,23 +1063,22 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
 }
 
 /// a warning for each output `placement` leaves whole, as its folder changed since it was pinned,
-/// with the two ways on, unless an earlier run told of the same change.
+/// or is gone, with the ways on, unless an earlier run told of the same change.
 fn warn_changed_outputs(output: &Output, placement: &Placement) {
     for changed in placement
         .changed_outputs
         .iter()
         .filter(|changed| !changed.told)
     {
-        let name = &changed.name;
-        output.warn_with(
-            Warning::OutputChanged,
-            &format!(
-                "{} changed since {name} was pinned: {}, so sync leaves it as it is",
+        let said = changed.gone_said(&changed.at).unwrap_or_else(|| {
+            format!(
+                "{} changed since {} was pinned: {}, so sync leaves it as it is",
                 changed.at,
+                changed.name,
                 changed.summary()
-            ),
-            &changed.ways_on(),
-        );
+            )
+        });
+        output.warn_with(Warning::OutputChanged, &said, &changed.ways_on());
     }
 }
 

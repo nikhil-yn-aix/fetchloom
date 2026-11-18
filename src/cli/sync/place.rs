@@ -288,6 +288,11 @@ impl ChangedOutput {
         changes_said(self.changed, self.added, self.removed)
     }
 
+    /// that this output's folder, as `folder` names it, is gone, when nothing is at it.
+    pub(crate) fn gone_said(&self, folder: &str) -> Option<String> {
+        self.gone.then(|| format!("{folder} is gone"))
+    }
+
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
         let since = match &self.left {
@@ -301,8 +306,8 @@ impl ChangedOutput {
 
     /// what became of this output's folder and the ways on, as a line of status says it.
     pub(crate) fn said(&self) -> String {
-        if self.gone {
-            return format!("{} is gone: {}", self.shown, self.ways_on());
+        if let Some(gone) = self.gone_said(&self.shown) {
+            return format!("{gone}: {}", self.ways_on());
         }
         format!(
             "{} changed since {} was pinned, {}: {}",
