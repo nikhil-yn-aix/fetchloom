@@ -492,10 +492,14 @@ pub(crate) struct Kept {
     /// it keeps an earlier version, as after a rebuild or an upgrade.
     #[serde(skip)]
     pub(crate) earlier: bool,
-    /// for reason `changed`, whether an earlier run told of this edit while the file looked as it
-    /// does now, so this one only counts it.
+    /// for reasons `changed` and `foreign`, whether an earlier run told of this file while it
+    /// looked as it does now, so this one only counts it.
     #[serde(skip)]
     pub(crate) told: bool,
+    /// for reason `foreign`, whether the state a copy of the project brought told of this very
+    /// edit, so its help is a kept edit's: words only, as anyone could have written that state.
+    #[serde(skip)]
+    pub(crate) copied_edit: bool,
 }
 
 impl Kept {
@@ -507,11 +511,12 @@ impl Kept {
             dataset: None,
             earlier: false,
             told: false,
+            copied_edit: false,
         }
     }
 
     fn of(target: &Target, reason: Reason, survey: &Survey) -> Kept {
-        let told = reason == Reason::Changed
+        let told = matches!(reason, Reason::Changed | Reason::Foreign)
             && survey.disk.get(&target.path).is_some_and(|look| {
                 let edit = edited(&target.path, look);
                 survey.state.told.has(Once::Edit, &edit)
@@ -540,13 +545,13 @@ fn edited_path(edit: &str) -> &str {
 }
 
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
-/// with how its file looks on `disk`, each change of an output left whole, with how each of its
-/// files at a pinned path looks, each folder told how to keep away, the data folder told how to
-/// keep elsewhere, an R package told where raw files go, each folder told it is too full to name,
-/// why files were copied on the data folder's disk, the lines of the markers made, and whether git
-/// keeps the folder of an output pinned now, as `git_keeps` reads it. forgets the edits and output
-/// changes of `scope` this run found no more, and the folders, and their markers' lines, no dataset
-/// has now. says whether the state changed.
+/// and each file kept as fetchloom did not place it, with how its file looks on `disk`, each change
+/// of an output left whole, with how each of its files at a pinned path looks, each folder told how
+/// to keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
+/// each folder told it is too full to name, why files were copied on the data folder's disk, the
+/// lines of the markers made, and whether git keeps the folder of an output pinned now, as
+/// `git_keeps` reads it. forgets the edits and output changes of `scope` this run found no more,
+/// and the folders, and their markers' lines, no dataset has now. says whether the state changed.
 fn note_told(
     state: &mut State,
     manifest: &Manifest,
@@ -557,7 +562,7 @@ fn note_told(
     let edits: HashSet<String> = placement
         .kept
         .iter()
-        .filter(|kept| kept.reason == Reason::Changed)
+        .filter(|kept| matches!(kept.reason, Reason::Changed | Reason::Foreign))
         .filter_map(|kept| Some(edited(&kept.path, disk.get(&kept.path)?)))
         .chain(
             placement
@@ -585,9 +590,11 @@ fn note_told(
     let told = &mut state.told;
     let mut changed = told.retain(Once::Edit, |edit| {
         edits.contains(edit)
-            || files
-                .get(edited_path(edit))
-                .is_some_and(|placed| !scope.includes(&placed.dataset))
+            || match files.get(edited_path(edit)) {
+                Some(placed) => !scope.includes(&placed.dataset),
+                // one fetchloom did not place is forgotten only by a run over every dataset
+                None => *scope != Scope::All,
+            }
     });
     // an output the run did not look at keeps what was told of it
     changed |= told.retain(Once::Output, |change| {
@@ -645,6 +652,26 @@ fn note_told(
         None => {}
     }
     changed
+}
+
+/// marks each file of `kept` fetchloom did not place, never told of here, whose very edit the
+/// state a copy of the project brought told of while the file looked as it does now, so its help
+/// is a kept edit's. that state only chooses words: anyone could have written it.
+fn copied_edits(project: &Project, survey: &Survey, kept: &mut [Kept]) {
+    let mut untold = kept
+        .iter_mut()
+        .filter(|kept| kept.reason == Reason::Foreign && !kept.told)
+        .peekable();
+    if untold.peek().is_none() {
+        return;
+    }
+    let told = project.copied_told();
+    for kept in untold {
+        kept.copied_edit = survey
+            .disk
+            .get(&kept.path)
+            .is_some_and(|look| told.has(Once::Edit, &edited(&kept.path, look)));
+    }
 }
 
 /// the folders of `wanted` that `contents` gives no marker, as too full to name, that no run
@@ -1362,6 +1389,7 @@ impl<'a> Placing<'a> {
             }
         }
         self.preview_marks(&mut preview.placement);
+        copied_edits(self.project, &self.survey, &mut preview.placement.kept);
         preview
     }
 
@@ -1608,6 +1636,7 @@ impl<'a> Placing<'a> {
             Ok((todo, adopted)) => (todo, adopted, None),
             Err(error) => (Vec::new(), true, Some(error)),
         };
+        copied_edits(project, &survey, &mut placement.kept);
         survey.smudge_edited();
         // before the files land, so git never sees a dataset's folder while it fills
         let (rewritten, made) = mark::write(

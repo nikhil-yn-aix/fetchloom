@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::{Folder, Look, State, Synced};
+use self::state::{Folder, Look, State, Synced, Told};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 use crate::volume::Volume;
@@ -550,6 +550,19 @@ impl Project {
         let is_ours = self.is_ours();
         self.open_state()
             .and_then(|(mut file, _)| State::copied(&mut file, folders, keep, &is_ours))
+            .unwrap_or_default()
+    }
+
+    /// the told record of the state a copy of the project brought, as [`Project::copied_records`]
+    /// reads it. anyone could have written it, so it only words a line. empty for this folder's own
+    /// state, or a missing or unreadable one.
+    pub(crate) fn copied_told(&self) -> Told {
+        let is_ours = self.is_ours();
+        self.open_state()
+            .and_then(|(mut file, _)| State::read_within(&mut file, &[], &|_| false, &|_| true))
+            .ok()
+            .filter(|(state, _)| state.was_read() && !is_ours(state.folder.as_ref()))
+            .map(|(state, _)| state.told)
             .unwrap_or_default()
     }
 

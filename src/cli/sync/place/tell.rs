@@ -944,7 +944,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         );
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
-            Reason::Changed if kept.told => continue,
+            Reason::Changed | Reason::Foreign if kept.told => continue,
             Reason::Changed => match kept.dataset.as_deref() {
                 Some(dataset) if kept.earlier => (
                     format!(
@@ -974,7 +974,10 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                     "{} holds other bytes than data.lock pins, and fetchloom did not place it, so it stays",
                     kept.path
                 ),
-                format!("`{force}` replaces it"),
+                match kept.dataset.as_deref() {
+                    Some(dataset) if kept.copied_edit => keeping_edits(dataset, &force),
+                    _ => format!("`{force}` replaces it"),
+                },
             ),
             Reason::Unneeded => (
                 format!(

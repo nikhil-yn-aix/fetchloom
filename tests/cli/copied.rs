@@ -775,6 +775,35 @@ fn a_changed_file_of_a_copied_zip_folder_brings_the_zip_again() -> Result {
     Ok(())
 }
 
+/// w4: an edit sync told of, in a project then copied as `rsync -a` copies it, is a file fetchloom
+/// did not place in the copy. its first sync there tells of it with the help a kept edit gets, as
+/// the state the copy brought told of that very edit, and the next one says nothing more, as of any
+/// such file, once for each way it looks.
+#[test]
+fn a_told_edit_in_a_copied_project_is_told_once_as_an_edit() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    project(&sandbox, &server)?;
+    // a new file, as `sed -i` writes one, so the cache's copy stays as it was
+    let placed = sandbox.work().join("inputs/iris/iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, b"sepal_length,species\n5.1,setosa\n4.9,setosa\n")?;
+    let help = "  help: keep your version as a file or dataset of your own, or set copy = true for iris in data.toml to edit its files in place; `fetchloom sync --force` discards your edit\n";
+    let told = text(&sandbox.run(&["sync"])?.stderr)?;
+    assert!(told.contains(help), "{told}");
+    let (copy, _) = copied(&sandbox, "copy")?;
+    let kept = "warning: inputs/iris/iris.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays\n";
+    let first = sandbox.command_in(&copy, &["sync"]).output()?;
+    let stderr = text(&first.stderr)?;
+    assert_eq!(first.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&format!("{kept}{help}")), "{stderr}");
+    let second = sandbox.command_in(&copy, &["sync"]).output()?;
+    let stderr = text(&second.stderr)?;
+    assert_eq!(second.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains(kept), "told once: {stderr}");
+    Ok(())
+}
+
 /// a copy's tar.gz folder is checked in place as a zip's is.
 #[test]
 fn a_copied_tar_folder_is_checked_in_place_too() -> Result {

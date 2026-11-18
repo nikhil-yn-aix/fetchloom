@@ -793,7 +793,8 @@ fn a_settled_project_syncs_without_planning_and_still_finds_edits() -> Result {
     Ok(())
 }
 
-/// the next sync still tells about the file, though nothing the first one recorded changed.
+/// the next sync still finds the file left out, though nothing the first one recorded changed, and
+/// counts it without telling of it again, as the first told of it while it looked as it does now.
 #[test]
 fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     let sandbox = Sandbox::new()?;
@@ -809,18 +810,55 @@ fn a_sync_that_left_a_file_out_is_never_taken_as_settled() -> Result {
     fs::write(foreign.join("iris.csv"), V2)?;
     let kept = "data/iris/iris.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays";
 
-    for _ in 0..2 {
-        let synced = sandbox.command_in(&clone, &["sync"]).output()?;
-        let stderr = text(&synced.stderr)?;
-        assert_eq!(synced.status.code(), Some(0), "{stderr}");
-        assert!(stderr.contains(kept), "{stderr}");
-    }
+    let synced = sandbox.command_in(&clone, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(kept), "{stderr}");
+    let again = sandbox.command_in(&clone, &["sync"]).output()?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains(kept), "told once: {stderr}");
+    assert!(stderr.contains("1 file left unchanged"), "{stderr}");
     assert_eq!(fs::read(foreign.join("iris.csv"))?, V2);
     let status = sandbox.command_in(&clone, &["status"]).output()?;
     assert_eq!(
         text(&status.stdout)?,
         "  Untracked data/iris/iris.csv · holds other bytes than data.lock pins\n"
     );
+    Ok(())
+}
+
+/// a sync of another dataset keeps what an earlier sync told of a file fetchloom did not place,
+/// so the next whole sync says nothing more of it either.
+#[test]
+fn a_named_sync_keeps_what_was_told_of_a_file_fetchloom_did_not_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::support::Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(V1, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"w\n1\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    for name in ["iris", "wine"] {
+        let added = sandbox.run(&["add", &format!("{}/files/{name}.csv", routes.url)])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    fs::create_dir_all(clone.join("data/iris"))?;
+    fs::write(clone.join("data/iris/iris.csv"), V2)?;
+    let kept = "data/iris/iris.csv holds other bytes than data.lock pins, and fetchloom did not place it, so it stays\n  help: `fetchloom sync --force` replaces it\n";
+    for (args, told) in [
+        (&["sync"][..], true),
+        (&["sync", "wine"], false),
+        (&["sync"], false),
+    ] {
+        let synced = sandbox.command_in(&clone, args).output()?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(0), "{args:?}: {stderr}");
+        assert_eq!(stderr.contains(kept), told, "{args:?}: {stderr}");
+    }
     Ok(())
 }
 
