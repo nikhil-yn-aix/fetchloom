@@ -486,6 +486,43 @@ fn a_link_into_another_users_folder_is_refused() -> Result {
     Ok(())
 }
 
+/// a person's own scratch folder may hold links to references another account keeps, as
+/// `ln -s /shared/refs/hg38.fa data/raw/` makes on a cluster: such a link is an entry of theirs,
+/// whoever owns what it leads to, so the first follow takes the folder and syncs go on as anywhere.
+#[cfg(unix)]
+#[test]
+fn a_link_to_another_users_file_in_ones_own_folder_is_followed() -> Result {
+    use std::os::unix::fs::MetadataExt;
+    let sandbox = Sandbox::new()?;
+    let shared = Path::new("/etc/hosts");
+    let me = fs::metadata(sandbox.work())?.uid();
+    if fs::metadata(shared)?.uid() == me {
+        return crate::support::skipped("unprivileged", "this user owns /etc/hosts");
+    }
+    let scratch = sandbox.folder("scratch")?;
+    let target = scratch.join("project-data");
+    fs::create_dir_all(target.join("raw"))?;
+    let reference = target.join("raw").join("hosts");
+    std::os::unix::fs::symlink(shared, &reference)?;
+    link_folder(&target, &sandbox.work().join("data"))?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let synced = sandbox.run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
+    assert_eq!(fs::read_link(&reference)?, shared);
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
+    Ok(())
+}
+
 /// a teammate's clone holds the author's data link when it was committed before the line that
 /// hides it. refused as not on this machine, not listed or another user's, a link git tracks is
 /// said to have come with the clone, with the way to a plain data folder: deleting it, and
