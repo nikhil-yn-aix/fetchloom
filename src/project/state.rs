@@ -261,6 +261,19 @@ impl Folder {
         self.matches_by(here, cfg!(windows))
     }
 
+    /// whether a record written for `recorded` was written for `here`, the folder as it is now, as
+    /// [`Folder::matches`] tells it; what `untold` says when either side cannot be told.
+    pub(crate) fn written_here(
+        recorded: Option<&Folder>,
+        here: Option<&Folder>,
+        untold: Untold,
+    ) -> bool {
+        match recorded.zip(here) {
+            Some((recorded, here)) => recorded.matches(here),
+            None => untold == Untold::Here,
+        }
+    }
+
     /// [`Folder::matches`], by the number alone where both sides tell one when `numbers_first`.
     fn matches_by(&self, here: &Folder, numbers_first: bool) -> bool {
         let same =
@@ -274,6 +287,15 @@ impl Folder {
         }
         same(self.inode, here.inode) || same(self.created, here.created)
     }
+}
+
+/// what a record counts as when the folder it was written for, or this one, cannot be told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Untold {
+    /// another folder's, so a record that vouches for files here is not used.
+    Elsewhere,
+    /// this folder's, so a record that keeps others out still does.
+    Here,
 }
 
 /// the SHA-256 of data.toml and data.lock as a sync left them, and whether that sync left every

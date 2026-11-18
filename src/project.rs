@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use self::lock::Lock;
 use self::manifest::Manifest;
-use self::state::{Folder, Look, State, Synced};
+use self::state::{Folder, Look, State, Synced, Untold};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 use crate::volume::Volume;
@@ -221,12 +221,8 @@ impl Held {
                 continue;
             }
             // a record written for another folder, as a clone or a copy carries, does neither
-            let elsewhere = owner
-                .as_ref()
-                .and_then(|owner| owner.folder.as_ref())
-                .zip(self.here.as_ref())
-                .is_some_and(|(written, here)| !written.matches(here));
-            if elsewhere {
+            let written = owner.as_ref().and_then(|owner| owner.folder.as_ref());
+            if !Folder::written_here(written, self.here.as_ref(), Untold::Here) {
                 remove_stale_owner(path, &bytes, modified)?;
                 self.removed = Some(path.to_path_buf());
                 continue;
@@ -544,12 +540,11 @@ impl Project {
                 Ok((state, found.modified))
             })
             .unwrap_or_default();
-        let here = Folder::of(&self.root);
-        let ours = state
-            .folder
-            .as_ref()
-            .zip(here.as_ref())
-            .is_some_and(|(recorded, here)| recorded.matches(here));
+        let ours = Folder::written_here(
+            state.folder.as_ref(),
+            Folder::of(&self.root).as_ref(),
+            Untold::Elsewhere,
+        );
         if !state.was_read() || ours {
             return (state, written);
         }
@@ -629,10 +624,7 @@ impl Project {
             let Ok(head) = serde_json::from_str::<Pending>(head) else {
                 return false;
             };
-            let ours = head
-                .folder
-                .zip(here.as_ref())
-                .is_some_and(|(recorded, here)| recorded.matches(here));
+            let ours = Folder::written_here(head.folder.as_ref(), here.as_ref(), Untold::Elsewhere);
             ours && fs::read(self.manifest_path())
                 .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == head.manifest)
         });
@@ -1872,33 +1864,38 @@ mod tests {
 
     /// a record another folder's run left, as a clone or a copy of the project holds it, finishes
     /// nothing here though data.toml is the same: data.lock stays as committed, and the record
-    /// goes.
+    /// goes. so does one that names no folder.
     #[test]
     fn a_pending_data_lock_of_another_folder_is_never_written() {
         let manifest = "[datasets]\n# written\n";
         let old_lock = "version = 1\n";
         let (_dir, project) = project(&[("data.toml", manifest), ("data.lock", old_lock)]);
-        project
-            .write_pending(manifest.as_bytes(), "version = 1\n# another one\n")
-            .unwrap();
-        // the same record as another folder would hold it: another number and creation time,
-        // since two folders made at once on fat can share their creation time
         let path = project.own_folder().join(PENDING);
-        let record = fs::read_to_string(&path).unwrap();
-        let (head, lock) = record.split_once('\n').unwrap();
-        let mut head: serde_json::Value = serde_json::from_str(head).unwrap();
-        for number in ["inode", "created"] {
-            if let Some(value) = head["folder"][number].as_u64() {
-                head["folder"][number] = (value + 1).into();
+        // the same record as another folder would hold it: another number and creation time,
+        // since two folders made at once on fat can share their creation time; or no folder
+        for moved in [true, false] {
+            project
+                .write_pending(manifest.as_bytes(), "version = 1\n# another one\n")
+                .unwrap();
+            let record = fs::read_to_string(&path).unwrap();
+            let (head, lock) = record.split_once('\n').unwrap();
+            let mut head: serde_json::Value = serde_json::from_str(head).unwrap();
+            for number in ["inode", "created"] {
+                if let Some(value) = head["folder"][number].as_u64() {
+                    head["folder"][number] = (value + 1).into();
+                }
             }
+            if !moved {
+                head["folder"] = serde_json::Value::Null;
+            }
+            fs::write(&path, format!("{head}\n{lock}")).unwrap();
+            assert!(!project.finish_pending().unwrap(), "{head}");
+            assert_eq!(
+                fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
+                old_lock
+            );
+            assert!(!path.exists());
         }
-        fs::write(&path, format!("{head}\n{lock}")).unwrap();
-        assert!(!project.finish_pending().unwrap());
-        assert_eq!(
-            fs::read_to_string(project.root.join(lock::FILE)).unwrap(),
-            old_lock
-        );
-        assert!(!path.exists());
     }
 
     /// links `path` to the file `target`, or false where no symbolic link can be made, as on
@@ -2889,27 +2886,32 @@ mod tests {
         assert_eq!(own.id.as_deref(), Some("ab12"));
         assert_eq!(own.files.len(), 1);
         assert!(own.copied.files.is_empty() && own.copied.id.is_none());
-        // the same state as another folder holds it: another number and creation time
+        // the same state as another folder holds it: another number and creation time, or no
+        // folder at all, which says of no folder that it is this one
         let path = project.own_folder().join("state");
-        let mut moved: serde_json::Value =
-            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let ours: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let mut moved = ours.clone();
         for number in ["inode", "created"] {
             if let Some(value) = moved["folder"][number].as_u64() {
                 moved["folder"][number] = (value + 1).into();
             }
         }
-        fs::write(&path, moved.to_string()).unwrap();
-        let (copied, written) = project.state();
-        assert_eq!(written, 0);
-        assert!(copied.files.is_empty() && copied.told.is_empty());
-        assert_eq!(copied.id, None);
-        assert_eq!(copied.markers, state.markers);
-        assert_eq!(copied.copied.id.as_deref(), Some("ab12"));
-        assert_eq!(
-            copied.copied.files.into_iter().collect::<Vec<_>>(),
-            [("data/set/a".to_owned(), "set".to_owned())]
-        );
-        assert!(copied.copied.told.has(Once::Edit, "data/set/a:1:42"));
+        let mut untold = ours;
+        untold.as_object_mut().unwrap().remove("folder");
+        for elsewhere in [moved, untold] {
+            fs::write(&path, elsewhere.to_string()).unwrap();
+            let (copied, written) = project.state();
+            assert_eq!(written, 0, "{elsewhere}");
+            assert!(copied.files.is_empty() && copied.told.is_empty());
+            assert_eq!(copied.id, None);
+            assert_eq!(copied.markers, state.markers);
+            assert_eq!(copied.copied.id.as_deref(), Some("ab12"), "{elsewhere}");
+            assert_eq!(
+                copied.copied.files.into_iter().collect::<Vec<_>>(),
+                [("data/set/a".to_owned(), "set".to_owned())]
+            );
+            assert!(copied.copied.told.has(Once::Edit, "data/set/a:1:42"));
+        }
     }
 
     #[test]
