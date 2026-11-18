@@ -612,14 +612,19 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
     let refused = text(&pushed.stderr)?;
+    assert_eq!(told_of_processed(&refused), REFUSED, "{refused}");
+    // the mirror holds the files, so push refuses nothing and tells the folder as status does
+    let served = sandbox
+        .command(&["push", "--to", &mirror, "--yes"])
+        .env("FETCHLOOM_CACHE", &cache)
+        .output()?;
+    let stderr = text(&served.stderr)?;
+    assert_eq!(served.status.code(), Some(0), "{stderr}");
     assert!(
-        refused.contains("error: processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
-        "{refused}"
-    );
-    assert_eq!(
-        refused.matches("run your pipeline here").count(),
-        1,
-        "{refused}"
+        stderr.contains(&format!(
+            "warning: data/processed is gone, so push sends the files processed pins\n  help: {ways}\n"
+        )),
+        "{stderr}"
     );
     let synced = run(&["sync"])?;
     assert!(
@@ -747,24 +752,68 @@ fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
     let elsewhere = sandbox.folder("elsewhere")?;
     let (code, pushed) = run(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])?;
     assert_eq!(code, Some(10), "{pushed}");
-    assert!(
-        pushed.contains("warning: data/processed changed since processed was pinned: 1 edited file\n  help: run `fetchloom add ./data/processed --as processed` first to pin what it holds now\n"),
-        "{pushed}"
-    );
-    assert!(
-        pushed.contains(
-            "error: processed was pinned here, and this machine's cache no longer holds its files\n"
-        ),
-        "{pushed}"
-    );
+    assert_eq!(told_of_processed(&pushed), REFUSED, "{pushed}");
+    // the folder a forced sync makes for the pipeline holds none of the output's files: it is gone,
+    // and nothing offers to pin what it holds
     delete_folder(&work.join("data/processed"))?;
     let (code, forced) = run(&["sync", "--force", "processed"])?;
     assert_eq!(code, Some(0), "{forced}");
     let (_, waiting) = run(&["status"])?;
     assert!(
-        waiting.contains(&format!("2 missing files: {ways}\n")),
+        waiting.contains("hint: data/processed is gone: run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n"),
         "{waiting}"
     );
+    Ok(())
+}
+
+/// the lines of `stderr` that tell of the output processed.
+fn told_of_processed(stderr: &str) -> Vec<&str> {
+    stderr
+        .lines()
+        .filter(|line| line.contains("processed"))
+        .collect()
+}
+
+/// all a push says of processed when it refuses it, as nothing here holds its files.
+const REFUSED: [&str; 2] = [
+    "error: processed was pinned here, and this machine's cache no longer holds its files",
+    "  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`",
+];
+
+/// a push that refuses an output, as neither the target nor anything here holds its files, says
+/// nothing else of it, whether a forced sync put the capture back before the cache was lost or
+/// not, and though a forced sync made its folder anew for the pipeline.
+#[test]
+fn a_push_refusing_an_output_says_only_that() -> Result {
+    for restored in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let work = sandbox.work();
+        processed(&work)?;
+        ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+        if restored {
+            delete_folder(&work.join("data/processed"))?;
+            ok(&sandbox.run(&["sync", "--force", "processed"])?)?;
+        }
+        delete_folder(&work.join("data/processed"))?;
+        let cache = sandbox.folder("empty-cache")?;
+        let forced = sandbox
+            .command(&["sync", "--force", "processed"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        assert_eq!(forced.status.code(), Some(0), "{}", text(&forced.stderr)?);
+        let elsewhere = sandbox.folder("elsewhere")?;
+        let pushed = sandbox
+            .command(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&pushed.stderr)?;
+        assert_eq!(pushed.status.code(), Some(10), "{stderr}");
+        assert_eq!(
+            told_of_processed(&stderr),
+            REFUSED,
+            "restored {restored}: {stderr}"
+        );
+    }
     Ok(())
 }
 

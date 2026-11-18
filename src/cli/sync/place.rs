@@ -228,8 +228,9 @@ pub(crate) struct ChangedOutput {
     /// its files a run leaves as they are, at pinned paths or added, as edits are told of, so a
     /// folder moved keeping their times keeps them the person's.
     pub(crate) edits: Vec<String>,
-    /// whether nothing is at its folder, as after a move or a run that deleted it, so pinning
-    /// what it holds now pins nothing.
+    /// whether its folder holds none of the files it pins and nothing else of the output's: nothing
+    /// is at it, as after a move or a run that deleted it, or only what fetchloom made there, as a
+    /// forced sync makes it for the pipeline. pinning what it holds now would pin nothing.
     pub(crate) gone: bool,
     /// the folder of a gone output that data.toml named before and that still holds its pin, as
     /// a command names it.
@@ -294,17 +295,25 @@ impl ChangedOutput {
         }
     }
 
-    /// this output, as its folder is there or gone, and when gone, where the state of `survey`
-    /// recorded its files of `pinned`, each with its dataset, still held.
+    /// this output, as its folder is there or gone, and when nothing is at it, where the state of
+    /// `survey` recorded its files of `pinned`, each with its dataset, still held.
     pub(crate) fn looked_at<'f>(
         mut self,
         survey: &Survey,
         pinned: impl IntoIterator<Item = (&'f str, &'f LockedFile)>,
     ) -> Self {
         let root = survey.root();
-        self.gone = fs::symlink_metadata(native(root, &self.at))
+        let pinned: Vec<(&str, &LockedFile)> = pinned.into_iter().collect();
+        let pins: u64 = pinned
+            .iter()
+            .filter(|(dataset, _)| *dataset == self.name)
+            .map(|_| 1)
+            .sum();
+        let away = fs::symlink_metadata(native(root, &self.at))
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
-        if self.gone {
+        self.gone = away || (self.changed + self.added == 0 && self.removed == pins);
+        // a folder still there is where data.toml puts it, so no move is offered
+        if away {
             // `shown` is `at` as a command run here names it
             let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
             self.left = left_at(root, (&self.name, &self.at), pinned, &survey.state)

@@ -257,6 +257,15 @@ struct Planned {
 }
 
 impl Planned {
+    /// the datasets with a file neither the mirror nor anything here holds, which push refuses
+    /// unless a mirror to ask has it.
+    fn refused(&self) -> HashSet<&str> {
+        self.lacked
+            .iter()
+            .map(|at| self.needed[*at].dataset.as_str())
+            .collect()
+    }
+
     /// what a push writes of `needed`, all the mirror does not hold as it is, with what it holds
     /// at each one's name: the files, then the lists of what archives unpack to, in order.
     fn writes(&self) -> (Writes<'_>, Writes<'_>) {
@@ -302,7 +311,6 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     } else {
         super::open_cache()?
     };
-    tell_changed_outputs(context, &project, (&manifest, &lock), &cache, &datasets);
     let selected = (!args.names.is_empty()).then(|| selected(&manifest, &args.names));
     let mut planned = plan(
         context, &manifest, &lock, &cache, target, selected, datasets,
@@ -316,6 +324,9 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
         &mut planned,
         dry_run,
     )?;
+    // a refusal is all push says of a dataset it refuses
+    let told = (&planned.datasets[..], &planned.refused());
+    tell_changed_outputs(context, &project, (&manifest, &lock), &cache, told);
     if dry_run {
         let report = report(&planned, Outcome::DryRun);
         tell_dry(context, &planned, &report);
@@ -373,17 +384,19 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
 }
 
 /// warns of each output of `datasets` whose folder changed since it was pinned, as sync finds it:
-/// push sends the files data.lock pins, never what the folder holds now. a folder that cannot be
-/// read is told by the command that places it, so it warns of nothing.
+/// push sends the files data.lock pins, never what the folder holds now. an output of `refused`,
+/// which push refuses, and a folder that cannot be read, which the command that places it tells
+/// of, get no warning.
 fn tell_changed_outputs(
     context: &Context,
     project: &Project,
     (manifest, lock): (&Manifest, &Lock),
     cache: &Cache,
-    datasets: &[String],
+    (datasets, refused): (&[String], &HashSet<&str>),
 ) {
     let outputs: Vec<&String> = datasets
         .iter()
+        .filter(|name| !refused.contains(name.as_str()))
         .filter(|name| {
             manifest
                 .datasets
@@ -416,20 +429,8 @@ fn tell_changed_outputs(
     placing.note_reach(cache, !context.mirrors.mirrors.list.is_empty());
     for changed in placing.changed_outputs() {
         let name = &changed.name;
-        let lost = changed.reach == place::Reach::Lost;
-        // a gone folder whose files no cache or mirror here holds is told once, by the refusal
-        // that push has none of them to send
-        if changed.gone && lost {
-            continue;
-        }
         let said = match changed.gone_said(&changed.at) {
             Some(gone) => format!("{gone}, so push sends the files {name} pins"),
-            // no cache or mirror here holds them, so the warning promises no send
-            None if lost => format!(
-                "{} changed since {name} was pinned: {}",
-                changed.at,
-                changed.summary()
-            ),
             None => format!(
                 "{} changed since {name} was pinned: {}, so push sends the files {name} pins, not these",
                 changed.at,
