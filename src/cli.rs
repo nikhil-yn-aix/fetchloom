@@ -880,6 +880,22 @@ fn share(settings: &Settings) {
     sync::disk::set_level(settings.resources.value);
 }
 
+/// the folder whose programs a run in `here` never runs: the project it works in, else the
+/// repository around it, unless that repository is the home folder or holds it, as a dotfiles
+/// repository does, since what a person installs under their home, as in ~/.local/bin, is theirs.
+fn untrusted(
+    here: &std::path::Path,
+    home: Option<std::path::PathBuf>,
+) -> Option<std::path::PathBuf> {
+    if let Some(project) = crate::project::Project::find(here) {
+        return Some(project.root);
+    }
+    let repository = crate::project::Project::repository(here)?;
+    let real = |path: &std::path::Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let holds_home = home.is_some_and(|home| real(&home).starts_with(real(repository)));
+    (!holds_home).then(|| repository.to_path_buf())
+}
+
 pub(crate) fn run() -> ExitCode {
     let started = Instant::now();
     let _ = TYPED.set(std::env::args_os().skip(1).collect());
@@ -947,12 +963,10 @@ pub(crate) fn run() -> ExitCode {
         crate::suggested::set_directory(crate::suggested::shell_folder_path(&worked_in));
     }
     // a program the project holds never runs, whichever command reaches for one
-    if let Ok(here) = std::env::current_dir() {
-        let project = crate::project::Project::find(&here).map(|project| project.root);
-        let repository = || crate::project::Project::repository(&here).map(Into::into);
-        if let Some(folder) = project.or_else(repository) {
-            crate::machine::distrust(folder);
-        }
+    if let Ok(here) = std::env::current_dir()
+        && let Some(folder) = untrusted(&here, crate::machine::home(&crate::machine::env))
+    {
+        crate::machine::distrust(folder);
     }
     match Threads::read(&var) {
         Ok(threads) => context.threads = threads,

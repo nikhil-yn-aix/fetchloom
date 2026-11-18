@@ -298,7 +298,8 @@ fn outside(path: &OsStr, file: &str, project: &Path) -> Option<PathBuf> {
     })
 }
 
-/// the folder whose programs this run never runs: the project it works in, else the repository.
+/// the folder whose programs this run never runs: the project it works in, else the repository
+/// around it, unless that is the home folder or holds it.
 static UNTRUSTED: OnceLock<PathBuf> = OnceLock::new();
 
 /// never runs a program inside `folder`, the project the run works in. set once, at start.

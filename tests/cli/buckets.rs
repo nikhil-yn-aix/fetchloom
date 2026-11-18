@@ -1168,6 +1168,56 @@ fn an_aws_cli_inside_the_project_never_runs_and_is_named() -> Result {
     Ok(())
 }
 
+/// a home folder kept in git, as a dotfiles repository keeps it, is no project: a
+/// `credential_process` installed under it, as `pip install --user` puts one in ~/.local/bin, is
+/// found from any folder of the home, while a project inside the home still holds its own back.
+#[cfg(unix)]
+#[test]
+fn a_home_kept_in_git_holds_back_no_program_installed_under_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = sandbox.folder("home")?;
+    fs::create_dir(home.join(".git"))?;
+    let installed = home.join(".local").join("bin");
+    let project = home.join("study");
+    let planted = project.join(".venv").join("bin");
+    for folder in [&installed, &planted, &home.join("Downloads")] {
+        fs::create_dir_all(folder)?;
+    }
+    fs::write(project.join("data.toml"), "")?;
+    let config = home.join("aws-config");
+    fs::write(&config, "[default]\ncredential_process = myproc\n")?;
+    let auth = |folder: &std::path::Path, holds: &std::path::Path| -> Result<String> {
+        program(&holds.join("myproc"), &format!("printf '%s' '{PRINTED}'"))?;
+        let output = sandbox
+            .command_in(folder, &["auth"])
+            .env("AWS_CONFIG_FILE", &config)
+            .env("PATH", holds)
+            .output()?;
+        fs::remove_file(holds.join("myproc"))?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        Ok(format!(
+            "{}{}",
+            text(&output.stdout)?,
+            text(&output.stderr)?
+        ))
+    };
+    let said = auth(&home.join("Downloads"), &installed)?;
+    assert!(!said.contains("which this project holds"), "{said}");
+    assert!(
+        said.contains("Signed in to aws · the credential_process of profile default"),
+        "{said}"
+    );
+    let said = auth(&project, &planted)?;
+    assert!(
+        said.contains(&format!(
+            "fetchloom never runs {}, which this project holds",
+            planted.join("myproc").display()
+        )),
+        "{said}"
+    );
+    Ok(())
+}
+
 /// on a machine whose only keys are its role's, the AWS CLI's default chain, asked with no
 /// profile, signs a listed bucket's requests once it refused; a profile `AWS_PROFILE` chose is
 /// never passed over for it, even one without keys.
