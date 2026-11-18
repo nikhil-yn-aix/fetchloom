@@ -58,7 +58,7 @@ impl Unproven {
             "its members table placed only some of its files, which cannot prove the list of files data.lock pins for it".to_owned()
         } else {
             format!(
-                "the files in {} do not match the list of files data.lock pins for it",
+                "the files in {} cannot prove the list of files data.lock pins for it",
                 self.folder
             )
         }

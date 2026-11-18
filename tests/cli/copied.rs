@@ -426,7 +426,7 @@ fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it()
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset cannot prove the list of files data.lock pins for it, so a sync downloads it\n"
     );
     assert_eq!(fs::read(two.join(".fetchloom").join("state"))?, state);
     Ok(())
@@ -470,7 +470,7 @@ fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset cannot prove the list of files data.lock pins for it, so a sync downloads it\n"
     );
     Ok(())
 }
@@ -767,9 +767,9 @@ fn a_changed_file_of_a_copied_zip_folder_brings_the_zip_again() -> Result {
     let status = run(&["status"])?;
     assert_eq!(
         text(&status.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · the files in data/dataset do not match the list of files data.lock pins for it, so a sync downloads it\n"
+        "  Unchecked data/dataset/dataset.zip · the files in data/dataset cannot prove the list of files data.lock pins for it, so a sync downloads it\n"
     );
-    let why = "the files in data/dataset do not match the list of files data.lock pins for it";
+    let why = "the files in data/dataset cannot prove the list of files data.lock pins for it";
     let offline = run(&["--json", "--offline", "sync"])?;
     let document = json(&offline)?;
     assert_eq!(offline.status.code(), Some(20), "{document}");
@@ -1277,7 +1277,7 @@ fn a_copied_state_that_names_other_files_proves_nothing() -> Result {
         .ok_or("the state names no README.md")?;
     files.insert("data/dataset/notes.txt".to_owned(), readme);
     fs::write(&state, serde_json::to_vec(&forged)?)?;
-    let told = "warning: dataset/dataset.zip will be downloaded: the files in data/dataset do not match the list of files data.lock pins for it\n";
+    let told = "warning: dataset/dataset.zip will be downloaded: the files in data/dataset cannot prove the list of files data.lock pins for it\n";
     for (project, cache) in [(&two, &cache), (&three, &other)] {
         let synced = sandbox
             .command_in(project, &["sync"])
