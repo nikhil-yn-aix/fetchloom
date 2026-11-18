@@ -6,6 +6,7 @@ use std::ffi::{OsStr, OsString};
 #[cfg(any(target_os = "linux", test))]
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::error::{Error, Kind};
 
@@ -284,6 +285,40 @@ fn raise_open_files() -> Option<u64> {
 /// this user may run. a relative folder would be wherever fetchloom runs, so it is passed over.
 pub(crate) fn installed(path: &OsStr, file: &str) -> Option<PathBuf> {
     installed_where(path, file, |_| true)
+}
+
+/// [`installed`], passing over a program inside `project`, as a cloned repository could put one in
+/// a folder PATH names. none when `project` cannot be read.
+pub(crate) fn outside(path: &OsStr, file: &str, project: &Path) -> Option<PathBuf> {
+    let project = project.canonicalize().ok()?;
+    installed_where(path, file, |program| {
+        program
+            .canonicalize()
+            .is_ok_and(|real| !real.starts_with(&project))
+    })
+}
+
+/// the folder whose programs this run never runs: the project it works in, else the repository.
+static UNTRUSTED: OnceLock<PathBuf> = OnceLock::new();
+
+/// never runs a program inside `folder`, the project the run works in. set once, at start.
+pub(crate) fn distrust(folder: PathBuf) {
+    let _ = UNTRUSTED.set(folder);
+}
+
+/// the program `file` on the PATH `var` gives, past one inside `project`, the folder [`distrust`]
+/// names, when there is one; else the one inside it passed over, if any, for help to name.
+pub(crate) fn program(
+    var: Var<'_>,
+    file: &str,
+    project: Option<&Path>,
+) -> Result<PathBuf, Option<PathBuf>> {
+    let path = var("PATH").ok_or(None)?;
+    let found = match project.or(UNTRUSTED.get().map(PathBuf::as_path)) {
+        Some(project) => outside(&path, file, project),
+        None => installed(&path, file),
+    };
+    found.ok_or_else(|| installed(&path, file))
 }
 
 /// [`installed`], passing over each program `kept` refuses, such as one a project holds, for the

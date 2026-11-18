@@ -368,6 +368,55 @@ fn an_az_cli_a_project_holds_never_runs() -> Result {
     Ok(())
 }
 
+/// an az cli the project holds, in a folder PATH names by its full path, as a cloned project's
+/// `.venv/bin` once activated, never runs, and the login asked for by name says where it is.
+#[cfg(unix)]
+#[test]
+fn an_az_cli_inside_the_project_never_runs_and_is_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("data.toml"), "")?;
+    let server = Server::start("/", vec![unauthenticated(), unauthenticated()])?;
+    let ran = sandbox.folder("az")?.join("ran");
+    let bin = sandbox.work().join(".venv").join("bin");
+    fs::create_dir_all(&bin)?;
+    let az = bin.join("az");
+    crate::buckets::program(&az, &format!(": > '{}'", ran.display()))?;
+    let add = |asked: Option<&str>| -> Result<std::process::Output> {
+        let mut command =
+            sandbox.command(&["--json", "add", "azure:lab/raw/scans/", "--as", "scans"]);
+        command
+            .env("FETCHLOOM_TEST_HOSTS", &server.url)
+            .env("FETCHLOOM_AZURE_CONTAINERS", "azure:lab/raw")
+            .env("PATH", &bin);
+        if let Some(asked) = asked {
+            command.env("AZURE_TOKEN_CREDENTIALS", asked);
+        }
+        Ok(command.output()?)
+    };
+    let quiet = add(None)?;
+    assert!(!ran.exists(), "{} ran", az.display());
+    assert!(!quiet.status.success(), "{}", text(&quiet.stdout)?);
+    let asked = add(Some("AzureCliCredential"))?;
+    assert!(!ran.exists(), "{} ran", az.display());
+    let document: serde_json::Value = serde_json::from_slice(&asked.stdout)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["message"],
+        "AZURE_TOKEN_CREDENTIALS asks for the az cli's login, and no folder on PATH outside this project holds the az cli"
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "fetchloom never runs {}, which this project holds: install the azure cli outside it and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS",
+            az.display()
+        )
+    );
+    for head in server.requests() {
+        assert!(!head.contains("authorization"), "{head}");
+    }
+    Ok(())
+}
+
 /// with no SAS or key in the environment, `az account get-access-token` runs once from PATH, and
 /// its token goes with the listing once refused and with the blob, never shown.
 #[cfg(unix)]

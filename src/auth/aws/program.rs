@@ -76,14 +76,22 @@ impl Program {
             .parent()
             .is_some_and(|parent| parent.as_os_str().is_empty())
         {
-            installed(first, var).ok_or_else(|| {
-                Error::new(
+            installed(first, var).map_err(|passed| match passed {
+                Some(passed) => Error::new(
+                    Kind::AuthRequired,
+                    format!("{named} names {first}, which no folder on PATH outside this project holds"),
+                )
+                .help(format!(
+                    "fetchloom never runs {}, which this project holds: install {first} outside it, or give its full path in credential_process",
+                    passed.display()
+                )),
+                None => Error::new(
                     Kind::AuthRequired,
                     format!("{named} names {first}, which no folder on PATH holds"),
                 )
                 .help(format!(
                     "install {first}, or give its full path in credential_process"
-                ))
+                )),
             })?
         } else {
             return Err(Error::new(
@@ -106,30 +114,43 @@ impl Program {
     ///
     /// # Errors
     ///
-    /// `auth.required` when no folder on PATH holds the AWS CLI.
+    /// `auth.required` when no folder on PATH outside the project holds the AWS CLI.
     pub(super) fn cli(profile: &str, signs_in: bool, var: Var<'_>) -> Result<Program, Error> {
-        let Some(path) = installed("aws", var) else {
-            let (does, help) = if signs_in {
-                (
-                    "signs in to IAM identity center",
+        let path = match installed("aws", var) {
+            Ok(path) => path,
+            Err(passed) => {
+                let (does, login) = if signs_in {
+                    (
+                        "signs in to IAM identity center",
+                        format!(
+                            ", and sign in with `aws sso login --profile {}`",
+                            crate::suggested::shell_word(profile)
+                        ),
+                    )
+                } else {
+                    ("takes on a role", String::new())
+                };
+                let (holds, help) = match passed {
+                    Some(passed) => (
+                        "no folder on PATH outside this project holds the AWS CLI",
+                        format!(
+                            "fetchloom never runs {}, which this project holds: install the AWS CLI, version 2.9 or later, outside it{login}",
+                            passed.display()
+                        ),
+                    ),
+                    None => (
+                        "no folder on PATH holds the AWS CLI",
+                        format!("install the AWS CLI, version 2.9 or later{login}"),
+                    ),
+                };
+                return Err(Error::new(
+                    Kind::AuthRequired,
                     format!(
-                        "install the AWS CLI, version 2.9 or later, and sign in with `aws sso login --profile {}`",
-                        crate::suggested::shell_word(profile)
+                        "the AWS profile {profile} {does}, which fetchloom leaves to the AWS CLI, and {holds}"
                     ),
                 )
-            } else {
-                (
-                    "takes on a role",
-                    "install the AWS CLI, version 2.9 or later".to_owned(),
-                )
-            };
-            return Err(Error::new(
-                Kind::AuthRequired,
-                format!(
-                    "the AWS profile {profile} {does}, which fetchloom leaves to the AWS CLI, and no folder on PATH holds the AWS CLI"
-                ),
-            )
-            .help(help));
+                .help(help));
+            }
         };
         let args = [
             "configure",
@@ -152,7 +173,7 @@ impl Program {
     /// default chain finds: a web identity, a container's role or an instance's role. none when no
     /// folder on PATH holds the AWS CLI.
     pub(super) fn chain(var: Var<'_>) -> Option<Program> {
-        let path = installed("aws", var)?;
+        let path = installed("aws", var).ok()?;
         let args = ["configure", "export-credentials", "--format", "process"];
         Some(Program {
             path,
@@ -414,14 +435,15 @@ fn windows_words(text: &str) -> Option<Vec<String>> {
 }
 
 /// the first file named `name` this user may run, `name.exe` on windows, in a folder PATH names
-/// by its full path. a relative one such as `.` is never searched: a cloned project could fill it.
-fn installed(name: &str, var: Var<'_>) -> Option<PathBuf> {
+/// by its full path, outside the project: a cloned project could fill a relative one such as `.`,
+/// or one inside it. else the one inside the project passed over, if any.
+fn installed(name: &str, var: Var<'_>) -> Result<PathBuf, Option<PathBuf>> {
     let file = if cfg!(windows) && Path::new(name).extension().is_none() {
         format!("{name}.exe")
     } else {
         name.to_owned()
     };
-    crate::machine::installed(&var("PATH")?, &file)
+    crate::machine::program(var, &file, None)
 }
 
 #[cfg(test)]

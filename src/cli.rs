@@ -947,6 +947,14 @@ pub(crate) fn run() -> ExitCode {
         let worked_in = std::env::current_dir().unwrap_or_else(|_| folder.clone());
         crate::suggested::set_directory(crate::suggested::shell_folder_path(&worked_in));
     }
+    // a program the project holds never runs, whichever command reaches for one
+    if let Ok(here) = std::env::current_dir() {
+        let project = crate::project::Project::find(&here).map(|project| project.root);
+        let repository = || crate::project::Project::repository(&here).map(Into::into);
+        if let Some(folder) = project.or_else(repository) {
+            crate::machine::distrust(folder);
+        }
+    }
     match Threads::read(&var) {
         Ok(threads) => context.threads = threads,
         Err(error) => return finish::<()>(&context, name, Err(error), started),

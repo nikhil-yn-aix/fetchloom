@@ -1117,6 +1117,57 @@ fn a_profile_that_signs_in_without_the_aws_cli_says_to_install_it() -> Result {
     Ok(())
 }
 
+/// an AWS CLI the project holds, in a folder PATH names by its full path, as a cloned project's
+/// `.venv/bin` once activated, never runs: the default chain passes it over, and a profile that
+/// signs in is told where the one passed over is.
+#[cfg(unix)]
+#[test]
+fn an_aws_cli_inside_the_project_never_runs_and_is_named() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(sandbox.work().join("data.toml"), "")?;
+    let routes = refusing()?;
+    let ran = sandbox.folder("ran")?.join("aws");
+    let bin = sandbox.work().join(".venv").join("bin");
+    fs::create_dir_all(&bin)?;
+    let aws = bin.join("aws");
+    program(
+        &aws,
+        &format!(": > '{}'\nprintf '%s' '{PRINTED}'", ran.display()),
+    )?;
+    let args = ["--json", "add", "s3://private-lab/"];
+    let chain = sandbox
+        .command(&args)
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("PATH", &bin)
+        .output()?;
+    assert!(!ran.exists(), "the default chain ran {}", aws.display());
+    assert_eq!(chain.status.code(), Some(40), "{}", text(&chain.stderr)?);
+    let config = sandbox.folder("aws")?.join("config");
+    fs::write(
+        &config,
+        "[profile lab]\nsso_session = lab\nsso_account_id = 123456789012\nsso_role_name = reader\n",
+    )?;
+    let output = profile_command(&sandbox, &routes.url, &config, &args)
+        .env("PATH", &bin)
+        .output()?;
+    assert!(!ran.exists(), "the profile ran {}", aws.display());
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "the AWS profile lab signs in to IAM identity center, which fetchloom leaves to the AWS CLI, and no folder on PATH outside this project holds the AWS CLI"
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "fetchloom never runs {}, which this project holds: install the AWS CLI, version 2.9 or later, outside it, and sign in with `aws sso login --profile lab`",
+            aws.display()
+        )
+    );
+    Ok(())
+}
+
 /// on a machine whose only keys are its role's, the AWS CLI's default chain, asked with no
 /// profile, signs a listed bucket's requests once it refused; a profile `AWS_PROFILE` chose is
 /// never passed over for it, even one without keys.

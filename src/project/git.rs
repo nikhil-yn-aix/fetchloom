@@ -44,12 +44,7 @@ pub(crate) fn on_path(project: &Path) -> Option<PathBuf> {
 /// repository could have put one inside, in a folder PATH names.
 pub(crate) fn find(path: Option<&OsStr>, project: &Path) -> Option<PathBuf> {
     let name = if cfg!(windows) { "git.exe" } else { "git" };
-    let project = project.canonicalize().ok()?;
-    crate::machine::installed_where(path?, name, |program| {
-        program
-            .canonicalize()
-            .is_ok_and(|real| !real.starts_with(&project))
-    })
+    crate::machine::outside(path?, name, project)
 }
 
 /// a file as each side of an unfinished merge has it, and as their merge base had it.

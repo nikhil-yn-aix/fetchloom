@@ -190,10 +190,7 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
 fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
     let written = set(var, "AZURE_TOKEN_CREDENTIALS");
     let asked = written.as_deref().map(str::to_ascii_lowercase);
-    let cli = var("PATH").and_then(|path| {
-        let file = if cfg!(windows) { "az.cmd" } else { "az" };
-        crate::machine::installed(&path, file)
-    });
+    let cli = crate::machine::program(var, if cfg!(windows) { "az.cmd" } else { "az" }, None);
     let managed = || {
         let client_id = set(var, "AZURE_CLIENT_ID")
             .map(|id| {
@@ -212,12 +209,20 @@ fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
     };
     match asked.as_deref() {
         None => Ok(cli.map_or(SignIn::None, SignIn::Cli)),
-        Some("azureclicredential" | "dev") => cli.map(SignIn::Cli).ok_or_else(|| {
-            Error::new(
-                Kind::AuthRequired,
-                "AZURE_TOKEN_CREDENTIALS asks for the az cli's login, and no folder on PATH holds the az cli",
-            )
-            .help("install the azure cli and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS")
+        Some("azureclicredential" | "dev") => cli.map(SignIn::Cli).map_err(|passed| {
+            let error = |holds: &str| {
+                Error::new(
+                    Kind::AuthRequired,
+                    format!("AZURE_TOKEN_CREDENTIALS asks for the az cli's login, and no folder on PATH {holds} the az cli"),
+                )
+            };
+            match passed {
+                Some(passed) => error("outside this project holds").help(format!(
+                    "fetchloom never runs {}, which this project holds: install the azure cli outside it and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS",
+                    passed.display()
+                )),
+                None => error("holds").help("install the azure cli and sign in with `az login`, or unset AZURE_TOKEN_CREDENTIALS"),
+            }
         }),
         Some("managedidentitycredential") => managed(),
         Some("prod") => {
