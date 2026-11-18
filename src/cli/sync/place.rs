@@ -370,6 +370,9 @@ pub(crate) struct Outputs {
     named: HashSet<String>,
     /// the outputs a sync leaves whole, by name.
     left: HashSet<String>,
+    /// files in forced outputs' folders that `--force` leaves as they are, as git tracks them, each
+    /// with its output.
+    tracked: Vec<(String, String)>,
 }
 
 impl Outputs {
@@ -382,6 +385,7 @@ impl Outputs {
                 .map(|(name, _)| name.clone())
                 .collect(),
             left: HashSet::new(),
+            tracked: Vec::new(),
         }
     }
 }
@@ -1030,7 +1034,14 @@ impl<'a> Placing<'a> {
                 }
             }
         }
-        let extras = if force { extras } else { Vec::new() };
+        let mut extras = if force { extras } else { Vec::new() };
+        if force {
+            outputs.tracked = keep_tracked(
+                (&project.root, manifest),
+                (&plan.targets, &mut actions),
+                &mut extras,
+            );
+        }
         Ok(Placing {
             project,
             manifest,
@@ -1495,12 +1506,8 @@ impl<'a> Placing<'a> {
     /// files in its folder that its pin does not hold.
     fn preview_outputs(&self, preview: &mut Preview) {
         preview.placement.changed_outputs.clone_from(&self.changed);
-        let tracked = git_tracked(&self.project.root, self.manifest, &self.extras);
+        preview.placement.tracked.clone_from(&self.outputs.tracked);
         for (path, name) in &self.extras {
-            if tracked.contains(path.as_str()) {
-                preview.placement.tracked.push((path.clone(), name.clone()));
-                continue;
-            }
             preview.placement.removed += 1;
             preview
                 .placement
@@ -1701,13 +1708,8 @@ impl<'a> Placing<'a> {
             (&scope, &outputs),
             &mut placement,
         )?;
-        let cleared = clear_extras(
-            (project, manifest),
-            &mut placer,
-            &survey,
-            &extras,
-            &mut placement,
-        )?;
+        placement.tracked.clone_from(&outputs.tracked);
+        let cleared = clear_extras(project, &mut placer, &survey, &extras, &mut placement)?;
         // told at once, since the state no longer records those files once this run writes it
         tell::left_behind(output, manifest, placement.left_behind.as_ref());
         // after the files went, so the folders they leave go with the markers
@@ -3514,19 +3516,14 @@ pub(crate) fn changed_outputs(
 /// each holds its pinned tree whole again, unless one changed since the survey. says whether any
 /// went.
 fn clear_extras(
-    (project, manifest): (&Project, &Manifest),
+    project: &Project,
     placer: &mut Placer,
     survey: &Survey,
     extras: &[(String, String)],
     placement: &mut Placement,
 ) -> Result<bool, Error> {
-    let tracked = git_tracked(&project.root, manifest, extras);
     for (path, name) in extras {
         placer.stop().check()?;
-        if tracked.contains(path.as_str()) {
-            placement.tracked.push((path.clone(), name.clone()));
-            continue;
-        }
         let file = native(&project.root, path);
         if now(&file).is_none_or(|look| survey.disk.get(path) != Some(&look)) {
             continue;
@@ -3540,35 +3537,58 @@ fn clear_extras(
     Ok(!placement.cleared_outputs.is_empty())
 }
 
-/// the files of `extras`, each with its output's name, that git tracks in the project at `root`,
-/// which `sync --force` never deletes, as data.toml may name a folder of code as an output's: one
-/// git run for each output's folder, none outside a repository or without git.
-fn git_tracked<'e>(
-    root: &Path,
-    manifest: &Manifest,
-    extras: &'e [(String, String)],
-) -> HashSet<&'e str> {
-    let mut tracked = HashSet::new();
-    if extras.is_empty() || Project::repository(root).is_none() {
-        return tracked;
-    }
-    let outputs: BTreeSet<&str> = extras.iter().map(|(_, name)| name.as_str()).collect();
-    for name in outputs {
-        let listed = manifest
+/// takes out of what `sync --force` does to outputs' folders the files git tracks, which stay as
+/// they are: those of `extras`, which it deletes, and those of `targets` it overwrites or replaces,
+/// as `actions` decide them, as data.toml may name a folder of code as an output's and a tracked
+/// file may hold edits not committed. one git run for each output's folder holding one. the files
+/// that stay, each with its output's name.
+fn keep_tracked(
+    (root, manifest): (&Path, &Manifest),
+    (targets, actions): (&[Target], &mut [Action]),
+    extras: &mut Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let replaced = |target: &Target, action: &Action| {
+        matches!(action, Action::Overwrite(_) | Action::Replace(_))
+            && manifest
+                .datasets
+                .get(target.dataset)
+                .is_some_and(manifest::Entry::is_output)
+    };
+    let tracked = {
+        let outputs: Vec<&str> = manifest
             .datasets
-            .get(name)
-            .and_then(|entry| entry.at.as_deref())
-            .and_then(|at| crate::project::git::tracked(root, at));
-        if let Some(listed) = listed {
-            tracked.extend(
-                extras
+            .values()
+            .filter_map(|entry| entry.at.as_deref())
+            .collect();
+        let paths: Vec<&str> = extras
+            .iter()
+            .map(|(path, _)| path.as_str())
+            .chain(
+                targets
                     .iter()
-                    .filter(|(path, _)| listed.contains(path))
-                    .map(|(path, _)| path.as_str()),
-            );
+                    .zip(actions.iter())
+                    .filter(|(target, action)| replaced(target, action))
+                    .map(|(target, _)| target.path.as_str()),
+            )
+            .collect();
+        crate::project::git::tracked_among(root, &outputs, &paths)
+    };
+    let mut stay = Vec::new();
+    extras.retain(|(path, name)| {
+        let kept = tracked.contains(path);
+        if kept {
+            stay.push((path.clone(), name.clone()));
+        }
+        !kept
+    });
+    for (target, action) in targets.iter().zip(actions.iter_mut()) {
+        if tracked.contains(&target.path) && replaced(target, action) {
+            *action = Action::Unselected;
+            stay.push((target.path.clone(), target.dataset.to_owned()));
         }
     }
-    tracked
+    stay.sort_unstable();
+    stay
 }
 
 /// marks the records of the files `targets` place for outputs as an output's, so they are never

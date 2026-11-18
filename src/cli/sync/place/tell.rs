@@ -595,10 +595,10 @@ fn warn_tracked(output: &Output, placement: &Placement) {
         let said = match paths.as_slice() {
             [] => continue,
             [only] => format!(
-                "{only} stays, as git tracks it, and `sync --force` never deletes a file git tracks"
+                "{only} stays, as git tracks it, and `sync --force` never deletes or overwrites a file git tracks"
             ),
             [first, ..] => format!(
-                "{} files git tracks stay in {name}'s folder, such as {first}, as `sync --force` never deletes a file git tracks",
+                "{} files git tracks stay in {name}'s folder, such as {first}, as `sync --force` never deletes or overwrites a file git tracks",
                 paths.len()
             ),
         };

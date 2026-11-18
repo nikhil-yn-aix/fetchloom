@@ -304,6 +304,34 @@ fn is_object(name: &str) -> bool {
     [40, 64].contains(&name.len()) && name.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// those of `paths`, files of the work tree at `root`, that git has, tracked or staged, as
+/// [`tracked`] lists them for each of `folders` that holds one: one run of git a folder, and none
+/// outside a repository or without git.
+pub(crate) fn tracked_among(root: &Path, folders: &[&str], paths: &[&str]) -> HashSet<String> {
+    let below = |path: &str, folder: &str| {
+        path.strip_prefix(folder)
+            .is_some_and(|rest| rest.starts_with('/'))
+    };
+    let holding: Vec<&str> = folders
+        .iter()
+        .copied()
+        .filter(|folder| paths.iter().any(|path| below(path, folder)))
+        .collect();
+    if holding.is_empty() || super::Project::repository(root).is_none() {
+        return HashSet::new();
+    }
+    let known: HashSet<String> = holding
+        .into_iter()
+        .filter_map(|folder| tracked(root, folder))
+        .flatten()
+        .collect();
+    paths
+        .iter()
+        .filter(|path| known.contains(**path))
+        .map(|path| (*path).to_owned())
+        .collect()
+}
+
 /// the files git has, tracked or staged, below `folder` in the work tree at `root`, by their paths
 /// from `root`, the folder taken as written, never as a pattern. it reads only git's index, with
 /// the git [`on_path`] finds. none when there is none or it cannot tell, as outside a repository.

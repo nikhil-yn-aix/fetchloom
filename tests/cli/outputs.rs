@@ -2210,7 +2210,8 @@ fn audit_and_diff_say_what_an_output_is() -> Result {
 
 /// data.toml comes with a clone, so an output's `at` may name a folder of code: sync and status
 /// offer no `--force` while nothing there is a file this machine placed, and `--force` never
-/// deletes a file git tracks, though it deletes the rest its pin lacks.
+/// deletes or overwrites a file git tracks, as one at a pinned path holding edits not committed,
+/// though it deletes the rest its pin lacks; status says such a file stays.
 #[test]
 fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -2220,8 +2221,10 @@ fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
     let work = sandbox.work();
     fs::create_dir_all(work.join("src"))?;
     fs::write(work.join("src/main.py"), b"print(1)\n")?;
-    crate::merge::ok(&sandbox, &["add", "src/main.py"])?;
+    fs::write(work.join("src/iris.csv"), b"mine\n")?;
+    crate::merge::ok(&sandbox, &["add", "src"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "code"])?;
+    fs::write(work.join("src/iris.csv"), b"mine, edited\n")?;
     fs::create_dir_all(work.join("tmpout"))?;
     fs::write(work.join("tmpout/iris.csv"), CLEAN)?;
     ok(&sandbox.run(&["add", "tmpout", "--as", "derived"])?)?;
@@ -2250,21 +2253,26 @@ fn force_never_deletes_what_git_tracks_in_an_outputs_folder() -> Result {
         );
         assert!(!stderr.contains("--force"), "{args:?}: {stderr}");
     }
-    let said =
-        "src/main.py stays, as git tracks it, and `sync --force` never deletes a file git tracks";
+    let said = "2 files git tracks stay in derived's folder, such as src/iris.csv, as `sync --force` never deletes or overwrites a file git tracks";
     let dry = sandbox.run(&["sync", "--force", "derived", "--dry-run"])?;
     let stderr = text(&dry.stderr)?;
     assert_eq!(dry.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains(said), "{stderr}");
     assert!(!stderr.contains("Would remove src/main.py"), "{stderr}");
+    assert!(!stderr.contains("src/iris.csv ·"), "{stderr}");
     assert!(stderr.contains("Would remove src/wip.py"), "{stderr}");
     let forced = sandbox.run(&["sync", "--force", "derived"])?;
     let stderr = text(&forced.stderr)?;
     assert_eq!(forced.status.code(), Some(0), "{stderr}");
     assert!(stderr.contains(said), "{stderr}");
     assert_eq!(fs::read(work.join("src/main.py"))?, b"print(1)\n");
+    assert_eq!(fs::read(work.join("src/iris.csv"))?, b"mine, edited\n");
     assert!(!work.join("src/wip.py").exists(), "{stderr}");
-    assert_eq!(fs::read(work.join("src/iris.csv"))?, CLEAN);
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        status.contains("Committed src/iris.csv · git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never replaces a file git tracks"),
+        "{status}"
+    );
     Ok(())
 }
 

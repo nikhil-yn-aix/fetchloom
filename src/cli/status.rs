@@ -754,25 +754,13 @@ fn check(
 /// the files of `untracked` in outputs' folders that git tracks: one git run for each such folder,
 /// and none without such a file, a repository or git.
 fn committed(root: &std::path::Path, manifest: &Manifest, untracked: &[String]) -> HashSet<String> {
-    let folders: Vec<&str> = manifest
+    let outputs: Vec<&str> = manifest
         .datasets
         .values()
         .filter_map(|entry| entry.at.as_deref())
-        .filter(|at| untracked.iter().any(|path| disk::is_inside(path, at)))
         .collect();
-    if folders.is_empty() || Project::repository(root).is_none() {
-        return HashSet::new();
-    }
-    let tracked: HashSet<String> = folders
-        .into_iter()
-        .filter_map(|at| git::tracked(root, at))
-        .flatten()
-        .collect();
-    untracked
-        .iter()
-        .filter(|path| tracked.contains(*path))
-        .cloned()
-        .collect()
+    let paths: Vec<&str> = untracked.iter().map(String::as_str).collect();
+    git::tracked_among(root, &outputs, &paths)
 }
 
 /// the folder of each output of `manifest`, by name, as a command run here names it.
@@ -1222,7 +1210,10 @@ impl Status {
             (
                 "Committed",
                 committed,
-                Some("git's copy holds other bytes than data.lock pins".to_owned()),
+                Some(
+                    "git's copy holds other bytes than data.lock pins, and it stays, as `sync --force` never replaces a file git tracks"
+                        .to_owned(),
+                ),
             ),
             (
                 "Unreadable",
