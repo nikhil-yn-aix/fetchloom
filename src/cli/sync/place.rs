@@ -1410,7 +1410,7 @@ impl<'a> Placing<'a> {
     /// notes in `placement` the dataset folders a run would keep out of git, and those whose own
     /// .gitignore it would place.
     fn preview_marks(&self, placement: &mut Placement) {
-        let wanted = mark::wanted(self.manifest, &self.targets, &self.actions);
+        let wanted = mark::wanted(self.manifest, &self.targets, &self.actions, &self.elsewhere);
         let contents = mark::contents(
             self.manifest,
             &self.targets,
@@ -1612,7 +1612,7 @@ impl<'a> Placing<'a> {
         // the state written ahead must not vouch for the size and time an edit kept
         survey.smudge_edited();
         let contents = mark::contents(manifest, &targets, (&survey, (&unknown, &waiting)));
-        let wanted_marks = mark::wanted(manifest, &targets, &actions);
+        let wanted_marks = mark::wanted(manifest, &targets, &actions, &placement.elsewhere);
         placement.unnamed = untold_unnamed(&survey.state, &wanted_marks, &contents);
         let (to_mark, marking) = mark::to_write(&mut survey, &wanted_marks, &contents);
         placement.unmarkable = mark::unmarkable(&project.root, manifest, &targets, &actions);
@@ -1646,6 +1646,7 @@ impl<'a> Placing<'a> {
             &to_mark.write,
             &contents,
         );
+        make_waiting(&project.root, manifest, &mut placer, &placement.elsewhere);
         placement.marked = mark::untold(&survey.state, &made);
         placement.kept_in_git = survey
             .git_keeps
@@ -1994,6 +1995,20 @@ pub(crate) fn untouched(
         unchanged: unchanged as u64,
         ..Placement::default()
     }))
+}
+
+/// makes the folder of each output of `elsewhere`, whose files this machine lacks, as a placed
+/// output's is made, so the pipeline run here writes into it and `path` names a folder that is
+/// there. one that cannot be made is left to that run.
+fn make_waiting(root: &Path, manifest: &Manifest, placer: &mut Placer, elsewhere: &[Elsewhere]) {
+    for left in elsewhere {
+        let folder = plan::folder(manifest, &left.name);
+        // the placer makes the folders above a path, so the marker's path stands for the folder
+        let inside = native(root, &super::disk::marker(&folder));
+        if let Err(err) = placer.check_folders(&inside, true) {
+            tracing::debug!(%folder, %err, "could not make the folder of an output made elsewhere");
+        }
+    }
 }
 
 /// whether the folder of an output holds a file no record names that the output would take in, as

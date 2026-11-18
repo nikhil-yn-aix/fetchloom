@@ -12,7 +12,7 @@ use std::io::{self, Read as _, Write as _};
 use std::path::Path;
 
 use super::super::disk::{self, Mark, Survey};
-use super::{Action, Placement, Scope, Unsure};
+use super::{Action, Elsewhere, Placement, Scope, Unsure};
 use crate::digest;
 use crate::output::{Output, Warning};
 use crate::place::{self, Placer};
@@ -253,14 +253,18 @@ fn folders_of(
         .collect()
 }
 
-/// the dataset folders of the run's datasets, as `actions` select them, whose markers it makes.
+/// the dataset folders of the run's datasets, as `actions` select them, whose markers it makes,
+/// and those of the outputs it leaves out as made `elsewhere`, which a pipeline run here writes
+/// into, as a placed output's folder is made.
 pub(super) fn wanted(
     manifest: &Manifest,
     targets: &[Target],
     actions: &[Action],
+    elsewhere: &[Elsewhere],
 ) -> BTreeSet<String> {
+    let waiting: HashSet<&str> = elsewhere.iter().map(|left| left.name.as_str()).collect();
     folders_of(manifest, targets, |index| {
-        !matches!(actions[index], Action::Unselected)
+        !matches!(actions[index], Action::Unselected) || waiting.contains(targets[index].dataset)
     })
 }
 

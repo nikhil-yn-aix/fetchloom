@@ -290,8 +290,10 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
 
 /// git carries data.lock, never an output's bytes: a teammate whose cache and mirrors lack them
 /// still gets every other dataset, and the run names the output once, as made on another machine,
-/// with both ways on, and ends well, so a pipeline run after it can make the output. `path` names
-/// its folder, and only a strict sync or a status check calls the data not ready.
+/// with both ways on, and ends well, so a pipeline run after it can make the output. the output's
+/// folder is made with fetchloom's marker, as a placed output's is, so that run writes out of
+/// git's sight, and `path` names a folder that is there. only a strict sync or a status check calls
+/// the data not ready, and a dry run makes nothing.
 #[test]
 fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Result {
     let sandbox = Sandbox::new()?;
@@ -315,6 +317,10 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     };
     let said = "processed was made on another machine, and its files are in no mirror this machine reaches";
     let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add data/processed --as processed`";
+    let folder = teammate.join("data").join("processed");
+    let dry = sync(&["sync", "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr)?);
+    assert!(!teammate.join("data").exists(), "{}", text(&dry.stderr)?);
     let synced = sync(&["--json", "sync"])?;
     let document = json(&synced)?;
     assert_eq!(synced.status.code(), Some(0), "{document}");
@@ -322,7 +328,9 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
     assert_eq!(elsewhere["message"], said, "{document}");
     assert_eq!(elsewhere["help"], ways, "{document}");
     assert_eq!(fs::read(teammate.join("data/iris/iris.csv"))?, IRIS);
-    assert!(!teammate.join("data/processed").exists(), "{document}");
+    let marker = fs::read(folder.join(".gitignore")).ok();
+    assert_eq!(marker, Some(b"*\n".to_vec()), "{document}");
+    assert_eq!(fs::read_dir(&folder)?.count(), 1, "{document}");
     let synced = sync(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
@@ -349,7 +357,6 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
             "{args:?}: {document}"
         );
     }
-    let folder = teammate.join("data").join("processed");
     let path = sync(&["path", "processed"])?;
     let stderr = text(&path.stderr)?;
     assert_eq!(path.status.code(), Some(0), "{stderr}");
@@ -382,11 +389,43 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
         said,
         "{document}"
     );
-    assert!(!teammate.join("data/processed").exists(), "{document}");
+    assert_eq!(fs::read_dir(&folder)?.count(), 1, "{document}");
     let mirror = sandbox.folder("mirror")?;
     let mirror = mirror.to_string_lossy();
     let pushed = json(&sync(&["--json", "push", "--to", &mirror, "--yes"])?)?;
     assert_eq!(pushed["errors"][0]["message"], said, "{pushed}");
+    Ok(())
+}
+
+/// a teammate's waiting output that pins a .gitignore of the author's own, as dvc writes beside
+/// what it makes, gets its folder with no marker of fetchloom's, since that file goes there once
+/// the bytes come; `path` names the folder, which is there.
+#[test]
+fn a_waiting_output_with_its_own_gitignore_gets_its_folder_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    fs::write(work.join("data/processed/.gitignore"), "/iris_clean.csv\n")?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let folder = teammate.join("data").join("processed");
+    assert!(folder.is_dir(), "{stderr}");
+    assert_eq!(fs::read_dir(&folder)?.count(), 0, "{stderr}");
+    let path = run(&["path", "processed"])?;
+    assert_eq!(text(&path.stdout)?, format!("{}\n", folder.display()));
     Ok(())
 }
 
