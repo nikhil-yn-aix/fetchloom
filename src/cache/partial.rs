@@ -661,7 +661,7 @@ fn alone(metadata: &Metadata) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;
-        if metadata.uid() != rustix::process::geteuid().as_raw() || metadata.nlink() != 1 {
+        if metadata.uid() != super::made_as() || metadata.nlink() != 1 {
             return false;
         }
     }

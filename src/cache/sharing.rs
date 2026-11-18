@@ -37,7 +37,7 @@ impl Sharing {
         #[cfg(unix)]
         {
             use std::os::unix::fs::MetadataExt;
-            let user = rustix::process::geteuid().as_raw();
+            let user = super::made_as();
             let group = std::fs::metadata(root)
                 .ok()
                 .and_then(|found| shared_with(found.mode(), found.gid(), &in_group))
@@ -117,12 +117,18 @@ impl Sharing {
     }
 }
 
+/// whether a group shares the cache whose root has `mode`: the root is setgid and its group may
+/// write it, as the clusters guide makes a lab's cache.
+#[cfg(unix)]
+pub(super) fn group_shares(mode: u32) -> bool {
+    mode & 0o2020 == 0o2020
+}
+
 /// the group a cache's root of `mode` and group `id` shares the cache with, and the root's bits
-/// for it, when the root is setgid and that group may write it, and `member` says this user is in
-/// it.
+/// for it, when [`group_shares`] says a group does and `member` says this user is in it.
 #[cfg(unix)]
 pub(super) fn shared_with(mode: u32, id: u32, member: &dyn Fn(u32) -> bool) -> Option<(u32, u32)> {
-    (mode & 0o2020 == 0o2020 && member(id)).then_some((id, mode & 0o070))
+    (group_shares(mode) && member(id)).then_some((id, mode & 0o070))
 }
 
 /// `mode` with the group given each bit its owner has, as far as `bits`, the root's bits for the

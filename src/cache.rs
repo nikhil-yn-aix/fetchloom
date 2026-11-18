@@ -250,12 +250,7 @@ pub(crate) fn absent(root: &Path) -> bool {
 pub(crate) fn exposed(root: &Path) -> Option<String> {
     #[cfg(unix)]
     {
-        let user = rustix::process::geteuid().as_raw();
-        let groups = rustix::process::getgroups().unwrap_or_default();
-        let group = rustix::process::getegid();
-        exposed_as(root, user, &|gid| {
-            group.as_raw() == gid || groups.iter().any(|member| member.as_raw() == gid)
-        })
+        exposed_as(root, run_as(), &sharing::in_group)
     }
     #[cfg(not(unix))]
     exposed_on(root)
@@ -266,9 +261,9 @@ pub(crate) fn exposed(root: &Path) -> Option<String> {
 fn exposed_as(root: &Path, user: u32, member: &dyn Fn(u32) -> bool) -> Option<String> {
     {
         use std::os::unix::fs::MetadataExt;
-        // a folder a group shares on purpose, as the clusters guide makes a lab's cache: setgid,
-        // writable by its group, which this user is in, and by no one else
-        let shared = |found: &fs::Metadata| found.mode() & 0o2022 == 0o2020 && member(found.gid());
+        let shared = |found: &fs::Metadata| {
+            sharing::shared_with(found.mode(), found.gid(), member).is_some()
+        };
         let found = fs::metadata(root).ok()?;
         if let Some(what) = exposure(found.uid(), found.mode(), user, shared(&found)) {
             return Some(format!(
@@ -341,7 +336,7 @@ fn exposed_on(root: &Path) -> Option<String> {
 /// user's or one they may write.
 #[cfg(unix)]
 fn others_write(root: &Path) -> bool {
-    others_write_as(root, rustix::process::geteuid().as_raw())
+    others_write_as(root, run_as())
 }
 
 /// [`others_write`] as the user `user` sees it.
@@ -379,7 +374,7 @@ fn others_write(_root: &Path) -> bool {
 #[cfg(unix)]
 pub(crate) fn unshared(root: &Path) -> Option<String> {
     use std::os::unix::fs::MetadataExt;
-    if fs::metadata(root).ok()?.mode() & 0o2020 != 0o2020 {
+    if !sharing::group_shares(fs::metadata(root).ok()?.mode()) {
         return None;
     }
     let mut fans: Vec<PathBuf> = ["objects", "keyed"]
@@ -428,6 +423,13 @@ fn exposure(owner: u32, mode: u32, user: u32, shared: bool) -> Option<&'static s
 pub(crate) fn owner_of(path: &Path) -> Option<u32> {
     use std::os::unix::fs::MetadataExt;
     fs::metadata(path).ok().map(|found| found.uid())
+}
+
+/// who owns the entry at `path`, itself and never what a link there leads to, by user id.
+#[cfg(unix)]
+pub(crate) fn entry_owner(path: &Path) -> Option<u32> {
+    use std::os::unix::fs::MetadataExt;
+    fs::symlink_metadata(path).ok().map(|found| found.uid())
 }
 
 /// the user `id` in words: its name, else root by name and any other by the number `id -u` gives,
@@ -482,7 +484,14 @@ pub(crate) fn root_refusal(root: &Path) -> Option<String> {
 pub(crate) fn run_as() -> u32 {
     crate::machine::pretended("FETCHLOOM_TEST_EUID")
         .and_then(|id| u32::try_from(id).ok())
-        .unwrap_or_else(|| rustix::process::geteuid().as_raw())
+        .unwrap_or_else(made_as)
+}
+
+/// the user the system gives what this process makes, which [`run_as`] leaves as it is: what a
+/// run finds of its own making, it compares with this.
+#[cfg(unix)]
+pub(crate) fn made_as() -> u32 {
+    rustix::process::geteuid().as_raw()
 }
 
 /// [`root_refusal`] for a run as `user`, in the groups `member` says.

@@ -228,7 +228,12 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
     let length = body.len().to_string();
     let rest = (body.len() - cut).to_string();
     let range = format!("bytes {cut}-{}/{}", body.len() - 1, body.len());
-    for (options, placed) in [(&[][..], "big/big.bin"), (&["-o", "big.bin"], "big.bin")] {
+    // a debug build told it runs as another user still goes on with the bytes it brought itself
+    for (options, placed, euid) in [
+        (&[][..], "big/big.bin", None),
+        (&["-o", "big.bin"], "big.bin", None),
+        (&[][..], "big/big.bin", Some("3999999999")),
+    ] {
         let sandbox = Sandbox::new()?;
         let server = Server::start(
             "/big.bin",
@@ -249,7 +254,11 @@ fn a_dropped_connection_resumes_where_it_stopped() -> Result {
                 ),
             ],
         )?;
-        let output = sandbox.run(&[&["--json", "get", &server.url][..], options].concat())?;
+        let mut command = sandbox.command(&[&["--json", "get", &server.url][..], options].concat());
+        if let Some(euid) = euid {
+            command.env("FETCHLOOM_TEST_EUID", euid);
+        }
+        let output = command.output()?;
         assert_eq!(output.status.code(), Some(0), "{}", text(&output.stdout)?);
         let work = &json(&output)?["work"];
         assert_eq!(work["requests"], 2, "{placed}");

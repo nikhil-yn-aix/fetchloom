@@ -296,12 +296,14 @@ fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
 /// a lab's cache is a setgid folder its group may write. what a run makes there with the usual
 /// `umask 022` lets the group's other members add to each folder, as `umask 002` would, and with
 /// `umask 077` read each file too; nothing becomes writable by every user, and an object stays
-/// read-only for everyone.
+/// read-only for everyone. a run as root in the group, as a lab's container may be, gives the
+/// group the same, though only what it makes is root's.
 #[cfg(unix)]
 #[test]
 fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
     use std::os::unix::fs::{MetadataExt, PermissionsExt};
-    for umask in ["022", "077"] {
+    // no test runs as root, so a debug build is told it does, and what it makes stays this user's
+    for (umask, euid) in [("022", None), ("077", None), ("022", Some("0"))] {
         let sandbox = Sandbox::new()?;
         let cache = sandbox.cache();
         fs::create_dir_all(&cache)?;
@@ -320,14 +322,18 @@ fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
             ["--json", "add", server.url.as_str(), "--as", "iris"],
             ["--json", "add", archive.url.as_str(), "--as", "notes"],
         ] {
-            let output = sandbox.command(&args).with_umask(umask).output()?;
+            let mut command = sandbox.command(&args);
+            if let Some(euid) = euid {
+                command.env("FETCHLOOM_TEST_EUID", euid);
+            }
+            let output = command.with_umask(umask).output()?;
             assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
             // the umask no longer matters to what the group may do in the cache
             let document = json(&output)?;
             let kinds = crate::support::kinds(&document);
             assert!(
                 !kinds.contains(&"cache.unshared"),
-                "umask {umask}: {document}"
+                "umask {umask} {euid:?}: {document}"
             );
         }
 
@@ -355,7 +361,11 @@ fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
                 wrong.push(format!("an object may be written {shown}"));
             }
         }
-        assert!(wrong.is_empty(), "umask {umask}:\n{}", wrong.join("\n"));
+        assert!(
+            wrong.is_empty(),
+            "umask {umask} {euid:?}:\n{}",
+            wrong.join("\n")
+        );
     }
     Ok(())
 }
@@ -703,7 +713,8 @@ fn a_cache_folder_that_refuses_a_write_is_named() -> Result {
 /// a run as root takes no cache another user owns, as a person's own cache mounted into a
 /// container run as root is: what it made there would be root's, which the person's later runs
 /// could not change. it stops before writing anything, naming the folder, its owner and how to run
-/// as them, and a command that only reads, as status, goes on.
+/// as them, and a command that only reads, as status, goes on, warning that the cache is another
+/// user's.
 #[cfg(all(unix, debug_assertions))]
 #[test]
 fn root_takes_no_cache_another_user_owns() -> Result {
@@ -740,7 +751,44 @@ fn root_takes_no_cache_another_user_owns() -> Result {
     );
     assert_eq!(entries(&cache)?, before);
     let status = as_root(&["--offline", "status"])?;
-    assert_eq!(status.status.code(), Some(0), "{}", text(&status.stderr)?);
+    let said = text(&status.stderr)?;
+    assert_eq!(status.status.code(), Some(0), "{said}");
+    // the run is root for every check, so the cache is another user's to its exposure check too
+    assert!(
+        said.contains(&format!(
+            "warning: the cache folder {} belongs to another user, so they can change the files projects place from it\n",
+            cache.display()
+        )),
+        "{said}"
+    );
+    Ok(())
+}
+
+/// a link's record in a cache another user owns stands for no bytes a run has not pinned, as they
+/// may have written it: every check asks of the run's own user, so a run as another user pins
+/// nothing from it offline, where the cache's owner does.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_links_record_in_another_users_cache_pins_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    ok(&sandbox.run(&["get", &server.url])?)?;
+    let another = sandbox
+        .command(&["--offline", "add", &server.url])
+        .env("FETCHLOOM_TEST_EUID", "3999999999")
+        .output()?;
+    let stderr = text(&another.stderr)?;
+    assert_eq!(another.status.code(), Some(20), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "error: offline, and {} is not in the cache\n",
+            server.url
+        )),
+        "{stderr}"
+    );
+    let owner = sandbox.run(&["--offline", "add", &server.url])?;
+    assert_eq!(owner.status.code(), Some(0), "{}", text(&owner.stderr)?);
+    assert_eq!(server.requests().len(), 1, "only get downloads");
     Ok(())
 }
 

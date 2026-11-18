@@ -38,7 +38,7 @@ pub(super) fn refuse_harm(
         survey,
         link,
         crate::cache::run_as(),
-        &owner_of,
+        &crate::cache::entry_owner,
     ) {
         return Err(theirs(project, link, entry, owner));
     }
@@ -396,15 +396,6 @@ fn not_owned<'s>(
         let owner = theirs(&native(root, path))?;
         Some((path.get(link.path.len() + 1..), owner))
     })
-}
-
-/// who owns the entry at `path`, itself and never what a link there leads to, by user id.
-#[cfg(unix)]
-fn owner_of(path: &Path) -> Option<u32> {
-    use std::os::unix::fs::MetadataExt;
-    std::fs::symlink_metadata(path)
-        .ok()
-        .map(|found| found.uid())
 }
 
 /// the refusal of the first follow of `link` into a folder of the user `owner`, or one holding
