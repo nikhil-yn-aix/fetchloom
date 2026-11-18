@@ -49,9 +49,9 @@ pub(crate) fn git(root: &std::path::Path, words: &str) -> String {
     }
 }
 
-/// `mv` of `from` to `to`, each as a command run here names it, after a `mkdir -p` of the folder
-/// `to` goes in when it is not there, as `mv` makes none: after a run given `-C`, the paths go
-/// whole, so the move finds them from the folder the person ran in.
+/// the move of `from` to `to`, each as a command run here names it, between backticks, after
+/// making the folder `to` goes in when it is not there, as no move makes one: after a run given
+/// `-C`, the paths go whole, so the move finds them from the folder the person ran in.
 pub(crate) fn moving(from: &str, to: &str) -> String {
     let named = |path: &str| {
         if ran_elsewhere() {
@@ -62,13 +62,35 @@ pub(crate) fn moving(from: &str, to: &str) -> String {
         }
     };
     let (from, to) = (named(from), named(to));
-    let moved = format!("mv {} {}", shell_word(&from), shell_word(&to));
-    match std::path::Path::new(&to).parent() {
-        Some(parent) if !parent.as_os_str().is_empty() && !parent.exists() => format!(
-            "mkdir -p {} && {moved}",
-            shell_word(&parent.to_string_lossy())
-        ),
-        _ => moved,
+    let parent = std::path::Path::new(&to)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty() && !parent.exists())
+        .map(|parent| parent.to_string_lossy().into_owned());
+    moving_for(&from, &to, parent.as_deref(), cfg!(windows))
+}
+
+/// [`moving`] of `from` to `to` after making the folder `parent`, when it is missing: for bash,
+/// zsh and fish, `mkdir -p` and `mv` in one line; on windows `mkdir` and `move`, which cmd and
+/// powershell 5.1 both run, as two commands, since neither `&&` nor `;` joins two in both.
+fn moving_for(from: &str, to: &str, parent: Option<&str>, windows: bool) -> String {
+    let word = |path: &str| {
+        if windows {
+            shell_word_for(&path.replace('/', "\\"), true).into_owned()
+        } else {
+            shell_word_for(path, false).into_owned()
+        }
+    };
+    if windows {
+        let moved = format!("`move {} {}`", word(from), word(to));
+        return match parent {
+            Some(parent) => format!("`mkdir {}`, then {moved}", word(parent)),
+            None => moved,
+        };
+    }
+    let moved = format!("mv {} {}", word(from), word(to));
+    match parent {
+        Some(parent) => format!("`mkdir -p {} && {moved}`", word(parent)),
+        None => format!("`{moved}`"),
     }
 }
 
@@ -455,6 +477,38 @@ fn is_single_quote(c: char) -> bool {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// a move names each platform's own commands: `mkdir -p` and `mv` in one line for bash, zsh and
+    /// fish, and on windows `mkdir` and `move`, which cmd and powershell 5.1 both run, as two
+    /// commands, since no one line runs two in both; each reads back as the words it shows.
+    #[test]
+    fn a_move_is_written_for_the_shells_of_each_platform() {
+        for (to, parent, posix, windows) in [
+            (
+                "results/processed",
+                None,
+                "`mv data/processed results/processed`",
+                "`move \"data\\processed\" \"results\\processed\"`",
+            ),
+            (
+                "results/final/processed",
+                Some("results/final"),
+                "`mkdir -p results/final && mv data/processed results/final/processed`",
+                "`mkdir \"results\\final\"`, then `move \"data\\processed\" \"results\\final\\processed\"`",
+            ),
+        ] {
+            assert_eq!(moving_for("data/processed", to, parent, false), posix);
+            assert_eq!(moving_for("data/processed", to, parent, true), windows);
+        }
+        assert_eq!(
+            command_words(r#"move "data\processed" "results\final\processed""#, true),
+            Some(vec![
+                "move".to_owned(),
+                r"data\processed".to_owned(),
+                r"results\final\processed".to_owned(),
+            ])
+        );
+    }
 
     #[test]
     fn a_word_a_shell_would_split_or_expand_is_quoted() {

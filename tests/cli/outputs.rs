@@ -522,7 +522,14 @@ fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
     let moved = table.replace("at = \"data/processed\"", "at = \"data/proc2\"");
     assert_ne!(moved, table);
     fs::write(&manifest, moved)?;
-    let ways = "`mv data/processed data/proc2` moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins";
+    let moved = if cfg!(windows) {
+        r#"`move "data\processed" "data\proc2"`"#
+    } else {
+        "`mv data/processed data/proc2`"
+    };
+    let ways = format!(
+        "{moved} moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins"
+    );
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(
         status.contains(&format!("hint: data/proc2 is gone: {ways}\n")),
@@ -661,9 +668,16 @@ fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
     let moved = table.replace("at = \"data/processed\"", "at = \"results/processed\"");
     assert_ne!(moved, table);
     fs::write(&manifest, moved)?;
+    let moved = if cfg!(windows) {
+        r#"`mkdir results`, then `move "data\processed" "results\processed"`"#
+    } else {
+        "`mkdir -p results && mv data/processed results/processed`"
+    };
     let (_, status) = run(&["status"])?;
     assert!(
-        status.contains("hint: results/processed is gone: `mkdir -p results && mv data/processed results/processed` moves it where data.toml puts it now\n"),
+        status.contains(&format!(
+            "hint: results/processed is gone: {moved} moves it where data.toml puts it now\n"
+        )),
         "{status}"
     );
     fs::write(&manifest, &table)?;
@@ -767,9 +781,14 @@ fn a_move_into_a_missing_folder_makes_it_first() -> Result {
     );
     assert_ne!(moved, table);
     fs::write(&manifest, moved)?;
+    let moved = if cfg!(windows) {
+        r#"`mkdir "results\final"`, then `move "data\processed" "results\final\processed"`"#
+    } else {
+        "`mkdir -p results/final && mv data/processed results/final/processed`"
+    };
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(
-        status.contains("hint: results/final/processed is gone: `mkdir -p results/final && mv data/processed results/final/processed` moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins\n"),
+        status.contains(&format!("hint: results/final/processed is gone: {moved} moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins\n")),
         "{status}"
     );
     assert!(

@@ -998,7 +998,7 @@ fn in_data_folder(
         format!(" --as {name}")
     };
     error.help(format!(
-        "move it out first, with `{}`, then run `{}` to place its files in {up}{data_dir}/{name}, or {keep}",
+        "move it out first, with {}, then run `{}` to place its files in {up}{data_dir}/{name}, or {keep}",
         crate::suggested::moving(shown.trim(), moved.strip_prefix("./").unwrap_or(&moved)),
         super::project::command(&format!("add {}{renamed}", super::shell_word(&moved)))
     ))

@@ -612,9 +612,16 @@ fn a_path_a_dataset_holds_already_is_not_added_again() -> Result {
         "pin a folder that holds only what your pipeline writes, such as data/processed"
     );
     fs::write(inside.join("flowers.csv"), b"mine\n")?;
+    let moved = if cfg!(windows) {
+        r#"`move ".\flowers.csv" "..\..\flowers.csv"`"#
+    } else {
+        "`mv ./flowers.csv ../../flowers.csv`"
+    };
     assert_eq!(
         refused(&inside, "./flowers.csv")?,
-        "move it out first, with `mv ./flowers.csv ../../flowers.csv`, then run `fetchloom add ../../flowers.csv --as flowers-2` to place its files in ../../data/flowers-2, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
+        format!(
+            "move it out first, with {moved}, then run `fetchloom add ../../flowers.csv --as flowers-2` to place its files in ../../data/flowers-2, or keep data/ as it is by setting data_dir under [project] in data.toml to another folder"
+        )
     );
     Ok(())
 }

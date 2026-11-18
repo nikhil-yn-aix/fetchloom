@@ -122,7 +122,7 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
         ),
         Since::Left { from, lost } => {
             let moved = format!(
-                "`{}` moves it where data.toml puts it now",
+                "{} moves it where data.toml puts it now",
                 crate::suggested::moving(from, shown)
             );
             if lost {
