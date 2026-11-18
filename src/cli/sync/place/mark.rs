@@ -483,6 +483,21 @@ pub(super) fn note_said(told: &mut Told, said: &[(String, bool)]) -> bool {
     changed
 }
 
+/// forgets the lines said of folders no dataset of `manifest` has now, so a dataset that lands
+/// there later is told of its marker again. says whether the record changed.
+pub(super) fn forget_left(told: &mut Told, manifest: &Manifest) -> bool {
+    let folders: HashSet<String> = manifest
+        .datasets
+        .keys()
+        .map(|name| plan::folder(manifest, name))
+        .collect();
+    let mut changed = false;
+    for said in [Once::Hidden, Once::Named] {
+        changed |= told.retain(said, |folder| folders.contains(folder));
+    }
+    changed
+}
+
 /// the kind a marker's line is said once as.
 fn said_as(named: bool) -> Once {
     if named { Once::Named } else { Once::Hidden }

@@ -1093,3 +1093,49 @@ fn a_remove_says_no_marker_line_the_person_heard() -> Result {
     assert_eq!(fs::read(marker)?, b"*\n");
     Ok(())
 }
+
+/// iris added, then taken out of the project as `leave` does, and added again: the second add
+/// tells data/iris's marker line again, since the folder had no dataset meanwhile.
+fn told_again_after(leave: impl Fn(&Sandbox) -> Result) -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = iris_server()?;
+    let link = format!("{}{PATH}", server.url);
+    sandbox.allow(&link);
+    let added = sandbox.run(&["add", &link])?;
+    let stderr = text(&added.stderr)?;
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    leave(&sandbox)?;
+    let again = sandbox.run(&["add", &link])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&ignored_line("data/iris")), "{stderr}");
+    Ok(())
+}
+
+/// a folder no dataset has any more forgets its marker line by the remove that leaves it so.
+#[test]
+fn a_folder_its_dataset_left_hears_its_marker_line_again() -> Result {
+    told_again_after(|sandbox| ok(&sandbox.run(&["remove", "iris"])?))
+}
+
+/// a sync after the remove, which finds nothing to place, leaves the folder forgotten too.
+#[test]
+fn a_sync_between_keeps_the_left_folder_forgotten() -> Result {
+    told_again_after(|sandbox| {
+        ok(&sandbox.run(&["remove", "iris"])?)?;
+        ok(&sandbox.run(&["sync"])?)
+    })
+}
+
+/// a dataset taken out of data.toml by hand leaves its folder forgotten by the sync that removes
+/// its files.
+#[test]
+fn a_sync_forgets_the_folder_of_a_dataset_data_toml_dropped() -> Result {
+    told_again_after(|sandbox| {
+        fs::write(sandbox.work().join("data.toml"), "")?;
+        ok(&sandbox.run(&["sync"])?)
+    })
+}

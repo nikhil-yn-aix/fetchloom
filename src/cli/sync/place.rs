@@ -499,7 +499,7 @@ fn edited_path(edit: &str) -> &str {
 /// each folder told it is too full to name, why files were copied on the data folder's disk, the
 /// lines of the markers made, and whether git keeps the folder of an output pinned now, as
 /// `git_keeps` reads it. forgets the edits and output changes of `scope` this run found no more,
-/// and the folders no dataset has now. says whether the state changed.
+/// and the folders, and their markers' lines, no dataset has now. says whether the state changed.
 fn note_told(
     state: &mut State,
     manifest: &Manifest,
@@ -564,6 +564,7 @@ fn note_told(
     if placement.in_git {
         changed |= mark::note_said(told, &placement.marked);
     }
+    changed |= mark::forget_left(told, manifest);
     match git_keeps {
         // a folder git lets go of later is told of again with the marker it gets then
         Some((at, true)) => {
@@ -1743,7 +1744,9 @@ impl<'a> Placing<'a> {
         let (_, moved_away) = track_aside(&project.root, &mut survey.state, Vec::new());
         let forgot = survey.state.synced.take().is_some();
         let dropped = survey.state.forget_removed(manifest) || moved_away;
-        if removed || forgot || dropped || unmarked || rewritten || said || survey.needs_writing {
+        let left = mark::forget_left(&mut survey.state.told, manifest);
+        let marks = unmarked || rewritten || said || left;
+        if removed || forgot || dropped || marks || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
         // a person's file kept aside may be what keeps a folder, so it is named as sync names it
