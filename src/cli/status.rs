@@ -928,9 +928,10 @@ fn compare(
     let mut actions = Vec::with_capacity(targets.len());
     for target in targets {
         let file = native(&project.root, &target.path);
-        let record = survey.state.files.get(&target.path);
         // sync's own decision for the file, without --force, listed by what a sync does with it
         let mut action = place::decide(target, survey, false, &file)?;
+        // asked of the few files a list needs it for, as each lookup walks the records again
+        let record = || survey.state.files.get(&target.path);
         let list = match &action {
             Action::Place => Some(&mut status.missing),
             // what sync removes before it places anything stands in no file's way
@@ -954,7 +955,7 @@ fn compare(
             }
             Action::Adopt(_) => {
                 status.holding.insert(target.sha256);
-                record.is_none().then_some(&mut status.adoptable)
+                record().is_none().then_some(&mut status.adoptable)
             }
             Action::Replace(Stale::Damaged { linked }) => {
                 if *linked {
@@ -964,7 +965,7 @@ fn compare(
             }
             Action::Replace(Stale::Outdated) => {
                 // a link to the cache's copy, unless someone made it writable
-                if record.is_some_and(|record| {
+                if record().is_some_and(|record| {
                     !target.copy
                         && record.method == crate::place::Method::Hardlink
                         && record.sha256 == target.sha256
