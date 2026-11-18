@@ -1016,20 +1016,22 @@ fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
     crate::merge::ok(&sandbox, &["add", "figures/.gitkeep"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "folders"])?;
     let marker = sandbox.work().join("figures/.gitignore");
-    let pin = |expected: &str| -> Result {
+    // each pin says one of the two lines, as git keeps the folder or not
+    let pin = |kept: bool| -> Result {
         let pinned = sandbox.run(&["add", "figures", "--as", "figures", "--yes"])?;
         let stderr = text(&pinned.stderr)?;
         assert_eq!(pinned.status.code(), Some(0), "{stderr}");
-        assert!(stderr.contains(expected), "{stderr}");
+        assert_eq!(stderr.contains(&kept_line("figures")), kept, "{stderr}");
+        assert_eq!(stderr.contains(&ignored_line("figures")), !kept, "{stderr}");
         Ok(())
     };
-    pin(&ignored_line("figures"))?;
+    pin(false)?;
     assert_eq!(fs::read(&marker)?, b"*\n");
     fs::remove_file(&marker)?;
     crate::merge::ok(&sandbox, &["add", "figures/fig1.png"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "a figure"])?;
     write_all(&sandbox, &[("figures/fig2.png", "png 2\n")])?;
-    pin(&kept_line("figures"))?;
+    pin(true)?;
     assert!(!marker.exists());
     assert_eq!(
         untracked(&sandbox)?.ok_or("git went away")?,
@@ -1040,12 +1042,54 @@ fn every_pin_reads_whether_git_keeps_an_outputs_folder() -> Result {
     assert_eq!(again.status.code(), Some(0), "{stderr}");
     assert!(!stderr.contains("in git"), "said once: {stderr}");
     crate::merge::ok(&sandbox, &["rm", "-q", "--cached", "figures/fig1.png"])?;
-    pin(&ignored_line("figures"))?;
+    pin(false)?;
     assert_eq!(fs::read(&marker)?, b"*\n");
     // the syncs after, which read no git, keep what the pin found: a marker that goes comes back
     fs::remove_file(&marker)?;
     synced(&sandbox)?;
     let back = fs::read(&marker).ok();
     assert_eq!(back.as_deref(), Some(&b"*\n"[..]));
+    Ok(())
+}
+
+/// a remove that turns a folder's marker back to the kind the person was last told of says
+/// nothing again: data/nested was told of in git as hidden, became a list while the project was
+/// out of git, as between `rm -rf .git` and a new `git init`, where no line is said, and turns
+/// back once inner goes.
+#[test]
+fn a_remove_says_no_marker_line_the_person_heard() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let server = Routes::start(vec![
+        ("/files/nested.csv".to_owned(), file(b"n\n1\n", "\"n1\"")),
+        ("/files/inner.csv".to_owned(), file(b"i\n1\n", "\"i1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let manifest = sandbox.work().join("data.toml");
+    let nested = format!(
+        "[datasets.nested]\nref = \"{}/files/nested.csv\"\npath = \"nested\"\n",
+        server.url
+    );
+    fs::write(&manifest, &nested)?;
+    let stderr = synced(&sandbox)?;
+    assert!(stderr.contains(&ignored_line("data/nested")), "{stderr}");
+    crate::support::delete_folder(&sandbox.work().join(".git"))?;
+    fs::write(
+        &manifest,
+        format!(
+            "{nested}\n[datasets.inner]\nref = \"{}/files/inner.csv\"\npath = \"nested/inner\"\n",
+            server.url
+        ),
+    )?;
+    synced(&sandbox)?;
+    crate::merge::ok(&sandbox, &["init", "-q"])?;
+    let removed = sandbox.run(&["remove", "inner"])?;
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Ignored"), "{stderr}");
+    let marker = sandbox.work().join("data/nested/.gitignore");
+    assert_eq!(fs::read(marker)?, b"*\n");
     Ok(())
 }
