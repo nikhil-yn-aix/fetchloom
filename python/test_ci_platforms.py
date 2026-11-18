@@ -12,7 +12,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE_COMMAND = r'''
-import json, os, plistlib, signal, sys
+import json, os, plistlib, re, signal, sys
 from pathlib import Path
 root = Path(os.environ['CI_TEST_ROOT'])
 settings = json.loads((root / 'settings.json').read_text())
@@ -29,6 +29,14 @@ if name == 'sudo':
     if args[0] == 'tee':
         assert args[1:] == ['/etc/resolv.conf']
         (root / 'resolver.txt').write_text(sys.stdin.read())
+        sys.exit(0)
+    if args[0] == 'sed':
+        # gnu sed's delete in place, as the runner has it and macos's sed spells otherwise
+        assert args[1] == '-i' and args[3] == os.environ['CI_APT_MIRRORS'], args
+        assert args[2].startswith('/') and args[2].endswith('/d'), args
+        listed = Path(args[3])
+        lines = listed.read_text().splitlines(keepends=True)
+        listed.write_text(''.join(line for line in lines if not re.search(args[2][1:-2], line)))
         sys.exit(0)
     assert args[0] in ('apt-get', 'timeout', 'mdutil')
     os.execv(str(root / 'bin' / args[0]), args)
@@ -95,8 +103,11 @@ class PlatformScripts(unittest.TestCase):
             path = root / 'bin' / name
             path.write_text(f'#!{sys.executable}\n' + FAKE_COMMAND, encoding='utf-8')
             path.chmod(0o755)
+        if 'mirrors' in settings:
+            (root / 'apt-mirrors.txt').write_text(settings['mirrors'], encoding='utf-8')
         env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
-                   CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT=attempt)
+                   CI_TEST_ROOT=str(root), RUNNER_TEMP=str(root / 'runner'), CI_APT_ATTEMPT_TIMEOUT=attempt,
+                   CI_APT_MIRRORS=str(root / 'apt-mirrors.txt'))
         process = subprocess.Popen(['bash', str(ROOT / '.github/scripts' / script), *arguments],
                                    cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, start_new_session=True)
@@ -146,6 +157,15 @@ class PlatformScripts(unittest.TestCase):
         self.assertIn('DPkg::Lock::Timeout=5', update)
         self.assertIn('DPkg::Lock::Timeout=3', install)
         self.assertEqual([call[4] for call in calls if call[0] == 'timeout'], ['5s'])
+
+    def test_the_retry_takes_the_mirrors_after_azures(self):
+        # azure's mirror can crawl for minutes, which no apt setting fails over
+        mirrors = 'http://azure.archive.ubuntu.com/ubuntu/\tpriority:1\nhttps://archive.ubuntu.com/ubuntu/\tpriority:2\n'
+        for mode, kept in [('success', mirrors), ('failure_once', 'https://archive.ubuntu.com/ubuntu/\tpriority:2\n')]:
+            with self.subTest(mode=mode):
+                code, output, _, root = self.run_script('apt-install.sh', apt=mode, mirrors=mirrors)
+                self.assertEqual(code, 0, output)
+                self.assertEqual((root / 'apt-mirrors.txt').read_text(encoding='utf-8'), kept)
 
     def test_hfs_cleanup_uses_the_device_and_preserves_failures(self):
         for busy, test_exit, force_exit, expected in [(0, 0, 0, 0), (2, 0, 0, 0),

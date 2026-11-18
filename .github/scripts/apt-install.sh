@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # installs ubuntu packages with apt. when the runner's own resolver cannot find ubuntu's archive,
-# as azure's could not on 2026-11-11, it asks public resolvers instead. apt verifies the archive's
-# signed package lists and each package's hash, so a resolver cannot change what installs. a lock
-# of apt's or dpkg's that another process holds, as the dpkg an attempt cut short leaves running
-# does, is waited for within the attempt rather than failed on, and the wait is told.
+# as azure's could not on 2026-11-11, or azure's mirror serves its packages at a crawl, it asks
+# public resolvers and the mirrors after azure's instead. apt verifies the archive's signed package
+# lists and each package's hash, so neither a resolver nor a mirror can change what installs. a
+# lock of apt's or dpkg's that another process holds, as the dpkg an attempt cut short leaves
+# running does, is waited for within the attempt rather than failed on, and the wait is told.
 set -euo pipefail
 
 # each attempt's bound, which covers its waits for locks as well as its work
@@ -12,6 +13,8 @@ if [[ ! "$attempt_limit" =~ ^[1-9][0-9]*s$ ]]; then
   echo "::error::CI_APT_ATTEMPT_TIMEOUT must be a positive number of seconds ending in s"
   exit 2
 fi
+# the mirrors apt takes the archive from, in order, as the runner image lists them
+mirrors=${CI_APT_MIRRORS:-/etc/apt/apt-mirrors.txt}
 
 # waits while another process holds one of the lock files named, for as many seconds as `left`
 # has, which it counts down, and says whose lock it waited for and how long. apt-get update never
@@ -70,7 +73,12 @@ install() {
 }
 
 if ! install runner "$@"; then
-  echo "::warning::apt failed with the runner's resolver; trying public resolvers"
+  echo "::warning::apt failed with the runner's resolver and mirror; trying public resolvers and the mirrors after azure's"
   printf 'nameserver 1.1.1.1\nnameserver 8.8.8.8\n' | sudo tee /etc/resolv.conf > /dev/null
+  # no apt setting fails a transfer over for being slow, only for stalling, and azure's mirror can
+  # crawl for many minutes (actions/runner-images#14823)
+  if [[ -f $mirrors ]]; then
+    sudo sed -i '/azure\.archive\.ubuntu\.com/d' "$mirrors"
+  fi
   install public "$@"
 fi
