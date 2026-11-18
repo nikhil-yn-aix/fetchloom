@@ -220,7 +220,8 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
 /// old name: still the marker writer's own by its text, it is never taken into the output, by a
 /// pin again or its dry run, and never a change, so nothing asks for a yes or tells of an
 /// addition. a .gitignore of the author's own stays the output's, even one that begins as the
-/// marker does.
+/// marker does, and so does a file of another name holding the marker's text: pinned, and a change
+/// when a new one comes.
 #[test]
 fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
     let sandbox = Sandbox::new()?;
@@ -231,7 +232,10 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
         work.join("data/processed/figures/.gitignore"),
         "*\n!keep.csv\n",
     )?;
+    fs::write(work.join("data/processed/patterns.txt"), "*\n")?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(lock.contains("path = \"patterns.txt\""), "{lock}");
     fs::rename(work.join("data/processed"), work.join("data/features"))?;
     assert_eq!(fs::read(work.join("data/features/.gitignore"))?, b"*\n");
     let manifest = fs::read_to_string(work.join("data.toml"))?;
@@ -273,6 +277,13 @@ fn a_renamed_outputs_folder_never_takes_its_marker_in() -> Result {
     assert!(
         stderr.contains("Ok all pinned files are in place by size and time, nothing to do"),
         "{stderr}"
+    );
+    fs::write(work.join("data/features/globs.txt"), "*\n")?;
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    assert_eq!(
+        listed(&document, "extra"),
+        ["data/features/globs.txt"],
+        "{document}"
     );
     Ok(())
 }
