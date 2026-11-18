@@ -133,7 +133,7 @@ pub(crate) fn unpinned(name: &str, at: Option<&str>) -> Error {
 pub(crate) fn no_newer(name: &str, at: Option<&str>) -> Error {
     if let Some(at) = at {
         return Error::new(
-            Kind::ReferenceUnresolved,
+            Kind::Usage,
             format!("{name} is an output, so no source has a newer version of it"),
         )
         .help(format!(
@@ -142,7 +142,7 @@ pub(crate) fn no_newer(name: &str, at: Option<&str>) -> Error {
         ));
     }
     Error::new(
-        Kind::ReferenceUnresolved,
+        Kind::Usage,
         format!("{name} was imported from files, and no source has a newer version of them"),
     )
     .help(format!(

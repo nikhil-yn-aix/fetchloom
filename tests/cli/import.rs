@@ -352,11 +352,13 @@ fn an_import_is_never_resolved_again() -> Result {
     let lock = fs::read(work.join("data.lock"))?;
 
     let one = sandbox.run(&["--json", "lock", "--upgrade", "flowers"])?;
-    assert_eq!(one.status.code(), Some(10), "{}", text(&one.stdout)?);
+    assert_eq!(one.status.code(), Some(2), "{}", text(&one.stdout)?);
+    let error = &json(&one)?["errors"][0];
     assert_eq!(
-        json(&one)?["errors"][0]["message"],
+        error["message"],
         "flowers was imported from files, and no source has a newer version of them"
     );
+    assert_eq!(error["kind"], "usage");
     let all = sandbox.run(&["lock", "--upgrade"])?;
     let stderr = text(&all.stderr)?;
     assert_eq!(all.status.code(), Some(0), "{stderr}");

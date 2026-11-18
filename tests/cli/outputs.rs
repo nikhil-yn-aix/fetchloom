@@ -1373,8 +1373,9 @@ fn lock_upgrade_names_the_add_that_pins_an_output_again() -> Result {
     rerun(&work)?;
     let refused = sandbox.run(&["--json", "lock", "--upgrade", "processed"])?;
     let document = json(&refused)?;
-    assert_eq!(refused.status.code(), Some(10), "{document}");
+    assert_eq!(refused.status.code(), Some(2), "{document}");
     let error = &document["errors"][0];
+    assert_eq!(error["kind"], "usage", "{document}");
     assert_eq!(
         error["message"], "processed is an output, so no source has a newer version of it",
         "{document}"
