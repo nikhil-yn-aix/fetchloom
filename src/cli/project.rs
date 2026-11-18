@@ -1081,6 +1081,8 @@ async fn preview_lock(
 ) -> Result<Report, Error> {
     let work = Loop::new(context, project, Arc::new(context.net()), peek_cache()?);
     let dry = work.relock_dry(manifest, old, upgrade, Vec::new()).await?;
+    // a link the run itself would refuse is refused here too, before anything says it would pin
+    work.refuse_unasked(dry.jobs.iter().map(|job| &job.fetch.from))?;
     let output = &context.output;
     tell_waiting(output, &waiting_in(&dry.lock), &Scope::All);
     let changed = !dry.before.holds(&dry.lock);

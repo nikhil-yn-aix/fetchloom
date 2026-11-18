@@ -31,6 +31,39 @@ fn tree(root: &Path) -> Result<BTreeMap<PathBuf, Option<Vec<u8>>>> {
     Ok(found)
 }
 
+/// a dry run of lock refuses a link at a private address as lock and sync's dry run do, before
+/// saying it would pin it.
+#[test]
+fn lock_dry_run_refuses_a_private_address_as_lock_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    fs::write(
+        sandbox.work().join("data.toml"),
+        "[datasets.x]\nref = \"http://10.0.0.7/iris.csv\"\n",
+    )?;
+    for args in [
+        &["--json", "lock", "--dry-run"][..],
+        &["--json", "sync", "--dry-run"],
+        &["--json", "lock"],
+    ] {
+        let output = sandbox.run(args)?;
+        assert_eq!(
+            output.status.code(),
+            Some(10),
+            "{args:?}: {}",
+            text(&output.stderr)?
+        );
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "network.refused", "{args:?}");
+        assert_eq!(
+            error["message"],
+            "fetchloom will not follow http://10.0.0.7/iris.csv: it points at the private address 10.0.0.7",
+            "{args:?}"
+        );
+    }
+    assert!(!sandbox.work().join("data.lock").exists());
+    Ok(())
+}
+
 #[test]
 fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
     let sandbox = Sandbox::new()?;

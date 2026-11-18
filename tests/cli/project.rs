@@ -2672,6 +2672,7 @@ fn lock_dry_run_tells_what_would_change_and_writes_nothing() -> Result {
     let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
     added(&sandbox, &server)?;
     let cows = Server::start("/files/cows.csv", vec![file(b"cow\n", "\"c\"")])?;
+    sandbox.allow(&cows.url);
     let manifest = sandbox.work().join("data.toml");
     let updated = format!(
         "{}\n[datasets.cows]\nref = \"{}\"\n",

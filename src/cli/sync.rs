@@ -2045,7 +2045,10 @@ impl<'a> Loop<'a> {
 
     /// refuses the first of `links` a request would be refused before it is sent, as a private
     /// address `allowed_origins` does not list, so no line says it downloads.
-    fn refuse_unasked<'u>(&self, links: impl IntoIterator<Item = &'u Url>) -> Result<(), Error> {
+    pub(super) fn refuse_unasked<'u>(
+        &self,
+        links: impl IntoIterator<Item = &'u Url>,
+    ) -> Result<(), Error> {
         match links.into_iter().find_map(|link| self.net.refusal(link)) {
             Some(refusal) => Err(refusal),
             None => Ok(()),
