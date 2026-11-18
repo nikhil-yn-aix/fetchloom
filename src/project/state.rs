@@ -262,19 +262,29 @@ impl Folder {
     }
 
     /// whether a record written for `recorded` was written for `here`, the folder as it is now, as
-    /// [`Folder::matches`] tells it. a record that names no folder was written for another, since
-    /// every one this build writes names its folder wherever the folder can be told; `untold` says
-    /// what a record is when this folder cannot be told.
+    /// `same` compares the two. a record that names no folder was written for another, since every
+    /// one this build writes names its folder wherever the folder can be told; `untold` says what
+    /// a record is when this folder cannot be told.
     pub(crate) fn written_here(
         recorded: Option<&Folder>,
         here: Option<&Folder>,
+        same: fn(&Folder, &Folder) -> bool,
         untold: Untold,
     ) -> bool {
         match (recorded, here) {
-            (Some(recorded), Some(here)) => recorded.matches(here),
+            (Some(recorded), Some(here)) => same(recorded, here),
             (None, Some(_)) => false,
             (_, None) => untold == Untold::Here,
         }
+    }
+
+    /// whether a folder another system recorded is `here`, by its creation time alone: windows and
+    /// wsl read one ntfs folder's creation time alike, while wsl may make up its number. a side
+    /// that keeps no creation time tells nothing, so the folder counts as this one.
+    pub(crate) fn created_alike(&self, here: &Folder) -> bool {
+        self.created
+            .zip(here.created)
+            .is_none_or(|(recorded, found)| recorded == found)
     }
 
     /// [`Folder::matches`], by the number alone where both sides tell one when `numbers_first`.

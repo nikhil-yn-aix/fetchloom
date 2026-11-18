@@ -223,7 +223,17 @@ impl Held {
             // a record written for another folder, as a clone or a copy carries, or naming none, as
             // one written by hand, does neither
             let elsewhere = owner.as_ref().is_some_and(|owner| {
-                !Folder::written_here(owner.folder.as_ref(), self.here.as_ref(), Untold::Here)
+                let same: fn(&Folder, &Folder) -> bool = if owner.os == std::env::consts::OS {
+                    Folder::matches
+                } else {
+                    Folder::created_alike
+                };
+                !Folder::written_here(
+                    owner.folder.as_ref(),
+                    self.here.as_ref(),
+                    same,
+                    Untold::Here,
+                )
             });
             if elsewhere {
                 remove_stale_owner(path, &bytes, modified)?;
@@ -546,6 +556,7 @@ impl Project {
         let ours = Folder::written_here(
             state.folder.as_ref(),
             Folder::of(&self.root).as_ref(),
+            Folder::matches,
             Untold::Elsewhere,
         );
         if !state.was_read() || ours {
@@ -627,7 +638,12 @@ impl Project {
             let Ok(head) = serde_json::from_str::<Pending>(head) else {
                 return false;
             };
-            let ours = Folder::written_here(head.folder.as_ref(), here.as_ref(), Untold::Elsewhere);
+            let ours = Folder::written_here(
+                head.folder.as_ref(),
+                here.as_ref(),
+                Folder::matches,
+                Untold::Elsewhere,
+            );
             ours && fs::read(self.manifest_path())
                 .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == head.manifest)
         });
@@ -2090,6 +2106,83 @@ mod tests {
         }
     }
 
+    /// windows and wsl read one ntfs folder's creation time alike, while wsl may make up its
+    /// number, so a record another system wrote is this folder's by its creation time alone: the
+    /// same time holds, another time is a clone's, and no time on either side tells nothing, so
+    /// it holds. a record of this system's own still goes by the folder's number first.
+    #[test]
+    fn another_systems_owner_record_is_this_folders_by_its_creation_time() {
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        let folder =
+            |value: serde_json::Value| -> Folder { serde_json::from_value(value).unwrap() };
+        let timed = || folder(serde_json::json!({ "inode": 5, "created": 7 }));
+        for (os, here, written, holds) in [
+            // another number, the same time
+            (
+                other,
+                timed(),
+                serde_json::json!({ "inode": 6, "created": 7 }),
+                true,
+            ),
+            // the same number, another time
+            (
+                other,
+                timed(),
+                serde_json::json!({ "inode": 5, "created": 8 }),
+                false,
+            ),
+            // no time in the record, or none here
+            (other, timed(), serde_json::json!({ "inode": 6 }), true),
+            (
+                other,
+                folder(serde_json::json!({ "inode": 5 })),
+                serde_json::json!({ "inode": 6, "created": 7 }),
+                true,
+            ),
+            // this system's own record of the same number
+            (
+                std::env::consts::OS,
+                timed(),
+                serde_json::json!({ "inode": 5, "created": 8 }),
+                true,
+            ),
+        ] {
+            let (_dir, project) = project(&[(".fetchloom/owner", "")]);
+            let path = project.own_folder().join("owner");
+            let record = serde_json::to_vec(&serde_json::json!({
+                "os": os,
+                "pid": 42,
+                "started": "2026-10-30T12:00:00Z",
+                "command": "sync",
+                "folder": written,
+            }))
+            .unwrap();
+            fs::write(&path, &record).unwrap();
+            let claimed = Held {
+                lock: None,
+                owner: None,
+                removed: None,
+                here: Some(here),
+            }
+            .claim(&path, "remove", SystemTime::now())
+            .unwrap();
+            if holds {
+                assert!(
+                    matches!(claimed, Hold::Owner(_)),
+                    "a record another system wrote for this folder was removed: {written}"
+                );
+                assert_eq!(fs::read(&path).unwrap(), record, "{written}");
+            } else {
+                let Hold::Held(mut held) = claimed else {
+                    panic!(
+                        "a record another system wrote for another folder holds this one: {written}"
+                    )
+                };
+                assert_eq!(held.removed_unread(), Some(path.clone()));
+            }
+        }
+    }
+
     #[test]
     fn another_os_owner_waits() {
         let (_dir, project) = project(&[(".fetchloom/owner", "")]);
@@ -2114,15 +2207,17 @@ mod tests {
         assert!(!path.exists());
     }
 
-    /// an owner record a fetchloom wrote for another folder, as a clone or a copy of a project
-    /// carries, holds nobody out, whatever system it names, and neither does one that names no
-    /// folder, as every record this build writes names one; one written for this folder holds it.
+    /// an owner record this system wrote for another folder, as a clone or a copy of a project
+    /// carries, holds nobody out, and neither does one that names no folder, whatever system it
+    /// names, as every record this build writes names one; one another system wrote for this
+    /// folder holds it. `another_systems_owner_record_is_this_folders_by_its_creation_time` tells
+    /// another system's records apart.
     #[test]
     fn an_owner_record_written_for_another_folder_is_stale() {
         let (_dir, project) = project(&[(".fetchloom/notes", "")]);
         let path = project.own_folder().join("owner");
-        let os = if cfg!(windows) { "linux" } else { "windows" };
-        let record = |folder: Option<serde_json::Value>| {
+        let other = if cfg!(windows) { "linux" } else { "windows" };
+        let record = |os: &str, folder: Option<serde_json::Value>| {
             let mut record = serde_json::json!({
                 "os": os,
                 "pid": 4242,
@@ -2136,8 +2231,14 @@ mod tests {
         };
         // another folder's number and creation time, as the one a clone was made from has, or no
         // folder, as a record someone wrote or committed by hand holds
-        for elsewhere in [Some(serde_json::json!({ "inode": 1, "created": 1 })), None] {
-            fs::write(&path, record(elsewhere.clone())).unwrap();
+        for (os, elsewhere) in [
+            (
+                std::env::consts::OS,
+                Some(serde_json::json!({ "inode": 1, "created": 1 })),
+            ),
+            (other, None),
+        ] {
+            fs::write(&path, record(os, elsewhere.clone())).unwrap();
             let Hold::Held(mut held) = project.hold("remove").unwrap() else {
                 panic!("an owner record written for another folder keeps nobody out: {elsewhere:?}")
             };
@@ -2151,7 +2252,7 @@ mod tests {
             drop(held);
         }
         let here = serde_json::to_value(Folder::of(&project.root)).unwrap();
-        fs::write(&path, record(Some(here))).unwrap();
+        fs::write(&path, record(other, Some(here))).unwrap();
         assert!(
             matches!(project.hold("remove").unwrap(), Hold::Owner(_)),
             "one written for this folder by another system holds it"
