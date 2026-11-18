@@ -556,7 +556,8 @@ fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
 }
 
 /// an output's `at` changed to a folder whose parent is not there yet: the help makes the parent
-/// before the move, which then works.
+/// before the move, which then works, and status, whose only differences are that output's, which
+/// sync leaves whole, names no sync that places files.
 #[test]
 fn a_move_into_a_missing_folder_makes_it_first() -> Result {
     let sandbox = Sandbox::new()?;
@@ -574,6 +575,10 @@ fn a_move_into_a_missing_folder_makes_it_first() -> Result {
     let status = text(&sandbox.run(&["status"])?.stderr)?;
     assert!(
         status.contains("hint: results/final/processed is gone: `mkdir -p results/final && mv data/processed results/final/processed` moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins\n"),
+        "{status}"
+    );
+    assert!(
+        !status.contains("places missing or updated files"),
         "{status}"
     );
     fs::create_dir_all(work.join("results/final"))?;

@@ -1302,13 +1302,19 @@ impl Status {
     }
 
     /// whether a sync has more to do than remove what no dataset needs: pin, place or put back.
+    /// an output it leaves whole, as its folder changed or is gone, it pins anew at most, placing
+    /// nothing.
     fn places(&self) -> bool {
+        let left = |name: &String| {
+            self.changed_outputs
+                .iter()
+                .any(|changed| changed.name == *name)
+        };
         !self.removed.is_empty()
             || !self.not_downloaded.is_empty()
-            || self
-                .unlocked
-                .iter()
-                .any(|name| !self.waiting.contains_key(name) && !self.imports.contains_key(name))
+            || self.unlocked.iter().any(|name| {
+                !self.waiting.contains_key(name) && !self.imports.contains_key(name) && !left(name)
+            })
             || self.fetchable(&self.missing)
             || !self.not_unpacked.is_empty()
             || self
