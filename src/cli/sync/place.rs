@@ -213,8 +213,8 @@ pub(crate) struct ChangedOutput {
     pub(crate) change: String,
     /// whether an earlier run told of this change, so this one only counts it.
     pub(crate) told: bool,
-    /// its files at pinned paths a run leaves as they are, as their edits are told of, so a folder
-    /// moved keeping their times keeps them the person's.
+    /// its files a run leaves as they are, at pinned paths or added, as edits are told of, so a
+    /// folder moved keeping their times keeps them the person's.
     pub(crate) edits: Vec<String>,
 }
 
@@ -546,8 +546,8 @@ fn edited_path(edit: &str) -> &str {
 
 /// records in `state` what `placement` told once, so later runs stay quiet of it: each edit kept,
 /// and each file kept as fetchloom did not place it, with how its file looks on `disk`, each change
-/// of an output left whole, with how each of its files at a pinned path looks, each folder told how
-/// to keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
+/// of an output left whole, with how each file it changed or added looks, each folder told how to
+/// keep away, the data folder told how to keep elsewhere, an R package told where raw files go,
 /// each folder told it is too full to name, why files were copied on the data folder's disk, the
 /// lines of the markers made, and whether git keeps the folder of an output pinned now, as
 /// `git_keeps` reads it. forgets the edits and output changes of `scope` this run found no more,
@@ -3278,6 +3278,7 @@ fn changed_outputs(
                 output.added += 1;
                 changes.push(change("added", path));
                 extras.push((path.clone(), output.name.clone()));
+                output.edits.push(edited(path, look));
             }
         }
     }

@@ -179,12 +179,6 @@ fn replaced<'s>(
     let unrecorded_file = |blocker: &Blocker| {
         blocker.found == Entry::File && !survey.state.files.contains_key(&blocker.path)
     };
-    let told = |path: &str| {
-        survey
-            .disk
-            .get(path)
-            .is_some_and(|look| survey.state.told.has(Once::Edit, &edited(path, look)))
-    };
     for (target, action) in targets.iter().zip(actions) {
         if !inside(&target.path) {
             continue;
@@ -192,7 +186,7 @@ fn replaced<'s>(
         match action {
             Action::Overwrite(Reason::Foreign | Reason::Changed | Reason::Shared)
             | Action::Leave(Reason::Foreign | Reason::Changed | Reason::Shared)
-                if !told(&target.path) =>
+                if !told(survey, &target.path) =>
             {
                 replaced.insert(target.path.as_str());
             }
@@ -202,7 +196,7 @@ fn replaced<'s>(
             Action::Unselected => match survey.disk.get(&target.path) {
                 Some(look) => {
                     let path = native(&project.root, &target.path);
-                    if !told(&target.path) && other_bytes(target, look, survey, &path)? {
+                    if !told(survey, &target.path) && other_bytes(target, look, survey, &path)? {
                         replaced.insert(target.path.as_str());
                     }
                 }
@@ -218,6 +212,15 @@ fn replaced<'s>(
     Ok((replaced, in_the_way))
 }
 
+/// whether the state told of the file at `path` as an edit while it looked as it does now, which
+/// makes it the person's own, moved with their folder.
+fn told(survey: &Survey, path: &str) -> bool {
+    survey
+        .disk
+        .get(path)
+        .is_some_and(|look| survey.state.told.has(Once::Edit, &edited(path, look)))
+}
+
 /// whether the file at `path`, seen as `look`, holds other bytes than `target` pins, and than those
 /// the state records placing there when it looks as recorded no more, as a placing decides it.
 fn other_bytes(target: &Target, look: &Look, survey: &Survey, path: &Path) -> Result<bool, Error> {
@@ -231,9 +234,10 @@ fn other_bytes(target: &Target, look: &Look, survey: &Survey, path: &Path) -> Re
 }
 
 /// the files `inside` takes in the folder of an output of `manifest` that no pin of `targets`
-/// places and the state does not record, which `sync --force` deletes as the output's snapshot
-/// lacks them, each with its output's name and folder. what a system, git or a tool puts there,
-/// and what the output's patterns leave out, is no file of the output.
+/// places, the state does not record and no run told of as an edit while it looked as it does now,
+/// which `sync --force` deletes as the output's snapshot lacks them, each with its output's name and
+/// folder. what a system, git or a tool puts there, and what the output's patterns leave out, is
+/// no file of the output.
 fn deleted<'m, 's>(
     manifest: &'m Manifest,
     targets: &[Target],
@@ -254,6 +258,7 @@ fn deleted<'m, 's>(
                 && !wanted.contains(path.as_str())
                 && !survey.state.files.contains_key(*path)
                 && !survey.state.aside.contains_key(*path)
+                && !told(survey, path)
                 && !survey.made_by_system(path)
                 && !place::is_copy_temporary(path.rsplit('/').next().unwrap_or(path))
                 && !passed_over(manifest, survey, path)

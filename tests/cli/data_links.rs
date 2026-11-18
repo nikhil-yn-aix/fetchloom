@@ -871,9 +871,10 @@ fn a_told_edit_moved_with_its_data_folder_is_followed() -> Result {
     Ok(())
 }
 
-/// w1: an output its pipeline wrote again, which sync told of and left whole, moves with its data
-/// folder onto scratch keeping its times: the changed file is the person's, as a told edit is, so
-/// the link's first follow takes the folder with it.
+/// w1: an output its pipeline wrote again, changing one file and adding another, which sync told
+/// of and left whole, moves with its data folder onto scratch keeping its times: both files are
+/// the person's, as a told edit is, so the link's first follow takes the folder, and sync, an add
+/// and path work through it. pinned again, the files are the pin's, and their records go.
 #[test]
 fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -884,15 +885,18 @@ fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
     }
     unlink(&probe)?;
     let data = sandbox.work().join("data");
-    let features = data.join("processed").join("features.csv");
-    fs::create_dir_all(data.join("processed"))?;
-    fs::write(&features, b"x,y\n")?;
+    let processed = data.join("processed");
+    fs::create_dir_all(&processed)?;
+    fs::write(processed.join("features.csv"), b"x,y\n")?;
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
-    fs::write(&features, b"x,y,z\n")?;
+    fs::write(processed.join("features.csv"), b"x,y,z\n")?;
+    fs::write(processed.join("fig.svg"), b"<svg/>\n")?;
     let told = sandbox.run(&["sync"])?;
     let said = text(&told.stderr)?;
     assert!(
-        said.contains("warning: data/processed changed since processed was pinned"),
+        said.contains(
+            "warning: data/processed changed since processed was pinned: 1 file changed, 1 added"
+        ),
         "{said}"
     );
     let moved = scratch.join("project-data");
@@ -904,14 +908,26 @@ fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
         "data_links",
         &scratch.display().to_string(),
     ])?)?;
-    let synced = sandbox.run(&["sync"])?;
-    let stderr = text(&synced.stderr)?;
-    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    let link = format!("{}/iris.csv", routes.url);
+    for args in [
+        &["sync"][..],
+        &["add", &link, "--as", "iris"],
+        &["path", "processed"],
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+    }
     assert_eq!(
         fs::read(moved.join("processed").join("features.csv"))?,
         b"x,y,z\n"
     );
-    // pinned again, the file is the pin's, and its record as an edit goes
+    assert_eq!(
+        fs::read(moved.join("processed").join("fig.svg"))?,
+        b"<svg/>\n"
+    );
     let edits = || -> Result<usize> {
         let state = fs::read(sandbox.work().join(".fetchloom").join("state"))?;
         let state: serde_json::Value = serde_json::from_slice(&state)?;
@@ -921,11 +937,11 @@ fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
             .flatten()
             .filter(|told| {
                 told.as_str()
-                    .is_some_and(|told| told.starts_with("edit:data/processed/features.csv:"))
+                    .is_some_and(|told| told.starts_with("edit:data/processed/"))
             })
             .count())
     };
-    assert_eq!(edits()?, 1);
+    assert_eq!(edits()?, 2);
     ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
     assert_eq!(edits()?, 0);
     Ok(())
