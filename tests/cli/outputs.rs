@@ -1960,7 +1960,8 @@ fn audit_and_diff_say_what_an_output_is() -> Result {
 }
 
 /// push asks first, as no source says who may read an output, and then sends the files an output
-/// pins, never what its folder holds since, and says so when the folder changed.
+/// pins, never what its folder holds since, and says so when the folder changed, with the pin that
+/// sends the folder's files instead; a folder that is gone gets the ways back.
 #[test]
 fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1987,6 +1988,20 @@ fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Resu
     assert_eq!(
         document["result"]["objects"], 2,
         "the pinned files alone: {document}"
+    );
+    let help = |document: &serde_json::Value| {
+        crate::support::warning(document, "output.changed")["help"].clone()
+    };
+    assert_eq!(
+        help(&document),
+        "run `fetchloom add ./data/processed --as processed` first to pin what it holds now"
+    );
+    delete_folder(&work.join("data/processed"))?;
+    let gone = json(&sandbox.run(&["--json", "push", "--to", &mirror, "--yes"])?)?;
+    assert_eq!(
+        help(&gone),
+        "`fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at = \"<new folder>\" for processed in data.toml",
+        "{gone}"
     );
     Ok(())
 }

@@ -422,10 +422,17 @@ fn tell_changed_outputs(
                 changed.at,
                 changed.summary()
             ),
-            &format!(
-                "run `{}` first to pin what it holds now",
-                super::project::command(&crate::source::local::output_pin(name, &changed.shown))
-            ),
+            &if changed.gone {
+                changed.ways_on()
+            } else {
+                format!(
+                    "run `{}` first to pin what it holds now",
+                    super::project::command(&crate::source::local::output_pin(
+                        name,
+                        &changed.shown
+                    ))
+                )
+            },
         );
     }
 }
