@@ -9,6 +9,47 @@ use crate::support::{
     Result, Routes, Sandbox, add_ok, file, json, ok, text, without_copy_warning, zip_of,
 };
 
+/// a marker of this project's whose record a run forgot is fetchloom's still, as it names the
+/// project's id: status never names it as the person's, the next sync records it again, and
+/// removing the dataset takes it with the folder.
+#[test]
+fn a_marker_whose_record_was_lost_is_fetchlooms() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = sandbox.folder("flowers")?;
+    fs::write(source.join("sepals.csv"), b"length\n5.1\n")?;
+    ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let work = sandbox.work();
+    let folder = work.join("data/flowers");
+    let path = work.join(".fetchloom/state");
+    let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    let forgot = state["markers"]
+        .as_object_mut()
+        .and_then(|markers| markers.remove("data/flowers"));
+    assert!(forgot.is_some(), "{state}");
+    fs::write(&path, serde_json::to_vec(&state)?)?;
+    for args in [&["--json", "status"][..], &["sync"], &["--json", "status"]] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        if args[0] == "--json" {
+            let document = json(&output)?;
+            assert_eq!(
+                document["result"]["yours"],
+                serde_json::json!([]),
+                "{document}"
+            );
+        }
+    }
+    let state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
+    assert!(state["markers"]["data/flowers"].is_string(), "{state}");
+    let removed = sandbox.run(&["--json", "remove", "flowers", "--yes"])?;
+    let document = json(&removed)?;
+    assert_eq!(removed.status.code(), Some(0), "{document}");
+    assert!(!document.to_string().contains(".gitignore"), "{document}");
+    assert!(!folder.exists(), "{document}");
+    Ok(())
+}
+
 /// a server answering iris at [`PATH`], as often as asked.
 pub(crate) fn iris_server() -> Result<Routes> {
     Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])

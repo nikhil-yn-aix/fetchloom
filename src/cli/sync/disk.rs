@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 
 use super::Scope;
-use super::place::{is_marker_form, local, passed_over};
+use super::place::{Whose, is_marker_form, local, marker_of, passed_over};
 use crate::cache::{self, Cache};
 use crate::digest::{Block, Sha256};
 use crate::error::Error;
@@ -955,6 +955,15 @@ impl Survey {
     pub(crate) fn is_marker(&self, path: &str) -> bool {
         path.strip_suffix("/.gitignore")
             .is_some_and(|folder| self.state.markers.contains_key(folder))
+    }
+
+    /// whether the listed .gitignore at `folder`'s marker path is this project's marker though no
+    /// record names it, as when a run forgot the record: one naming this project's id, which no
+    /// other project's or copy's names, as a first follow takes it too.
+    pub(crate) fn unrecorded_marker(&self, folder: &str) -> bool {
+        let path = marker(folder);
+        let ours = |id: &str| matches!(marker_of(&native(&self.root, &path)), Some(Whose::Project(named)) if named == id);
+        self.disk.contains_key(&path) && self.state.id.as_deref().is_some_and(ours)
     }
 
     /// whether `path`, a listed file, is a .gitignore in the form fetchloom writes its marker in,

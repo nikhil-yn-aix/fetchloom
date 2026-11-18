@@ -1118,15 +1118,23 @@ fn kept_copies(extra: &[String], wanted: &HashSet<&str>) -> HashMap<String, Stri
 }
 
 /// the files in the data folder that no dataset places, sorted, but for the staging leftovers of an
-/// interrupted placement, which the next sync deletes, the files an operating system made, and the
-/// files an output's patterns leave out of its folder.
+/// interrupted placement, which the next sync deletes, the files an operating system made, the
+/// files an output's patterns leave out of its folder, and the markers of dataset folders that
+/// name this project though their record was lost, which are fetchloom's still.
 fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<String> {
     let leftovers: HashSet<&String> = survey.leftovers().collect();
+    let lost: HashSet<String> = manifest
+        .datasets
+        .keys()
+        .map(|name| plan::folder(manifest, name))
+        .filter(|folder| survey.unrecorded_marker(folder))
+        .map(|folder| disk::marker(&folder))
+        .collect();
     let mut extra: Vec<String> = survey
         .disk
         .keys()
         .filter(|path| !wanted.contains(path.as_str()) && !leftovers.contains(path))
-        .filter(|path| !survey.made_by_system(path))
+        .filter(|path| !survey.made_by_system(path) && !lost.contains(path.as_str()))
         .filter(|path| !place::passed_over(manifest, survey, path))
         .cloned()
         .collect();

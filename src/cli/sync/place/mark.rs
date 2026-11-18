@@ -545,6 +545,8 @@ pub(super) fn planned(
             Some(Mark::Gone) => planned.write.push((folder.clone(), false)),
             Some(Mark::Taken) => planned.forget.push(folder.clone()),
             None if none => {}
+            // this project's own whose record a run forgot, recorded again while it holds the text
+            None if survey.unrecorded_marker(folder) => planned.write.push((folder.clone(), true)),
             None => {
                 if bare(survey, folder) {
                     planned.write.push((folder.clone(), false));
@@ -814,7 +816,8 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
             Some(Mark::Gone | Mark::Taken) => false,
             None => {
                 let path = disk::marker(&folder);
-                survey.disk.contains_key(&path)
+                // this project's own marker that no record names takes a run to record it again
+                (survey.disk.contains_key(&path) && !survey.unrecorded_marker(&folder))
                     || survey.entries.contains_key(&path)
                     || too_full(manifest, state, &folder)
                     || kept_in_git(manifest, survey, &folder)
