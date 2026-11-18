@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::support::{Result, Routes, Sandbox, file, link_folder, ok, text};
+use crate::support::{Result, Routes, Sandbox, delete, file, link_folder, ok, text};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 
@@ -505,6 +505,8 @@ fn an_empty_folder_a_link_leads_to_is_followed_and_recorded() -> Result {
 
 /// a recorded link pointed at another folder is followed only as at first: one holding files this
 /// project did not place is refused and left as it was, and the folder recorded is still followed.
+/// an edit told of at the same path is no match for a file there of the same size, as its time is
+/// another.
 #[test]
 fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
     let sandbox = Sandbox::new()?;
@@ -527,9 +529,24 @@ fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
     ])?;
     sandbox.allow(&routes.url);
     ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let edited = target.join("iris").join("iris.csv");
+    delete(&edited)?;
+    fs::write(&edited, b"edited\n")?;
+    let told = sandbox.run(&["--offline", "sync"])?;
+    let said = text(&told.stderr)?;
+    assert!(
+        said.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        "{said}"
+    );
     let other = scratch.join("someone");
     fs::create_dir_all(other.join("iris"))?;
-    fs::write(other.join("iris").join("iris.csv"), b"theirs\n")?;
+    let theirs = other.join("iris").join("iris.csv");
+    fs::write(&theirs, b"theirs\n")?;
+    let later = fs::metadata(&edited)?.modified()? + std::time::Duration::from_secs(1);
+    fs::File::options()
+        .write(true)
+        .open(&theirs)?
+        .set_modified(later)?;
     unlink(&data)?;
     link_folder(&other, &data)?;
     let before = listing(&other)?;
@@ -787,6 +804,53 @@ fn a_file_downloaded_by_hand_is_adopted_only_with_the_pinned_bytes() -> Result {
         }
         assert_eq!(fs::read(&put)?, bytes, "{folder}");
     }
+    Ok(())
+}
+
+/// a person who fixed a header in place, which fetchloom told them it keeps, and later moves the
+/// data folder onto scratch keeping its times, as mv or rsync -a do, keeps working: the edit the
+/// state told of, by its path, size and time, is theirs, which only their own `sync --force` could
+/// touch, so the link's first follow takes the folder with it.
+#[test]
+fn a_told_edit_moved_with_its_data_folder_is_followed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let scratch = sandbox.folder("scratch")?;
+    let probe = sandbox.work().join("probe");
+    if link_folder(&scratch, &probe).is_err() {
+        return crate::support::skipped("symlinks", "no symbolic link can be made here");
+    }
+    unlink(&probe)?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url), "--as", "iris"])?)?;
+    let data = sandbox.work().join("data");
+    let placed = data.join("iris").join("iris.csv");
+    delete(&placed)?;
+    fs::write(&placed, b"sl,sw,pl,pw,species\n")?;
+    let told = sandbox.run(&["--offline", "sync"])?;
+    let said = text(&told.stderr)?;
+    assert!(
+        said.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        "{said}"
+    );
+    let moved = scratch.join("project-data");
+    fs::rename(&data, &moved)?;
+    link_folder(&moved, &data)?;
+    ok(&sandbox.run(&[
+        "settings",
+        "set",
+        "data_links",
+        &scratch.display().to_string(),
+    ])?)?;
+    let synced = sandbox.run(&["--offline", "sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("places nothing through it"), "{stderr}");
+    assert_eq!(
+        fs::read(moved.join("iris").join("iris.csv"))?,
+        b"sl,sw,pl,pw,species\n"
+    );
+    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&moved)?));
     Ok(())
 }
 

@@ -4,13 +4,13 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::path::Path;
 
-use super::{Action, Held, Reason, held, local, mark, passed_over, reads_as_target};
+use super::{Action, Held, Reason, edited, held, local, mark, passed_over, reads_as_target};
 use crate::cli::sync::disk::{Blocker, Entry, Survey, is_inside};
 use crate::error::{Error, Kind};
 use crate::place;
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
-use crate::project::state::Look;
+use crate::project::state::{Look, Once};
 use crate::project::{Followed, Project, native};
 
 /// refuses the first follow of `link` before anything is written through it when the folder it
@@ -20,8 +20,9 @@ use crate::project::{Followed, Project, native};
 /// folder the link led to before, or a file where they place a folder, which `sync --force`
 /// replaces; or a file in an output's folder that no pin places and the state does not record,
 /// which `sync --force` deletes. `actions` are those decided for `targets`. a file of the pinned
-/// bytes is taken as placed, what the folder an output's capture pins holds is the person's claim,
-/// and everything else there is theirs, as anywhere in a data folder.
+/// bytes is taken as placed, an edit the state told of, by its path, size and time, is the
+/// person's own moved with their folder, what the folder an output's capture pins holds is the
+/// person's claim, and everything else there is theirs, as anywhere in a data folder.
 pub(super) fn refuse_harm(
     project: &Project,
     manifest: &Manifest,
@@ -164,7 +165,8 @@ fn marked<'s>(
 
 /// the files `inside` takes at paths `targets` place that hold other bytes than pinned, as
 /// `actions` decided them or, for a dataset the run leaves alone, which a later run places
-/// trusting the folder, as a placing would; and the files where they place a folder.
+/// trusting the folder, as a placing would, but for an edit the state told of while its file
+/// looked as it does now; and the files where they place a folder.
 fn replaced<'s>(
     project: &Project,
     (targets, actions): (&'s [Target], &'s [Action]),
@@ -178,13 +180,21 @@ fn replaced<'s>(
             && blocker.found == Entry::File
             && !survey.state.files.contains_key(&blocker.path)
     };
+    let told = |path: &str| {
+        survey
+            .disk
+            .get(path)
+            .is_some_and(|look| survey.state.told.has(Once::Edit, &edited(path, look)))
+    };
     for (target, action) in targets.iter().zip(actions) {
         if !inside(&target.path) {
             continue;
         }
         match action {
             Action::Overwrite(Reason::Foreign | Reason::Changed | Reason::Shared)
-            | Action::Leave(Reason::Foreign | Reason::Changed | Reason::Shared) => {
+            | Action::Leave(Reason::Foreign | Reason::Changed | Reason::Shared)
+                if !told(&target.path) =>
+            {
                 replaced.insert(target.path.as_str());
             }
             Action::Unblock(blocker) | Action::Blocked(blocker) if unrecorded_file(blocker) => {
@@ -193,7 +203,7 @@ fn replaced<'s>(
             Action::Unselected => match survey.disk.get(&target.path) {
                 Some(look) => {
                     let path = native(&project.root, &target.path);
-                    if other_bytes(target, look, survey, &path)? {
+                    if !told(&target.path) && other_bytes(target, look, survey, &path)? {
                         replaced.insert(target.path.as_str());
                     }
                 }
