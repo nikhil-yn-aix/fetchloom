@@ -373,12 +373,8 @@ impl Layout {
             })
             .collect();
         let path = archive.path();
-        let (beside, name) = path.rsplit_once('/').unwrap_or(("", path));
-        let base = if beside.is_empty() {
-            folder.clone()
-        } else {
-            name::joined(&folder, beside)
-        };
+        let name = path.rsplit_once('/').map_or(path, |(_, name)| name);
+        let base = plan::unpacked_folder(manifest, dataset, path);
         let others = manifest
             .datasets
             .keys()
@@ -545,6 +541,25 @@ mod tests {
             .into_iter()
             .map(|guess| guess.into_iter().map(|(_, path)| path).collect())
             .collect()
+    }
+
+    /// an archive in a folder of its dataset unpacks below that folder, where its files are
+    /// looked for.
+    #[test]
+    fn an_archive_in_a_folder_of_its_dataset_is_looked_for_below_it() {
+        let manifest =
+            Manifest::parse("[datasets.scans]\nref = \"https://example.org/scans\"\n").unwrap();
+        let text = format!(
+            "version = 1\n\n[[dataset]]\nname = \"scans\"\nref = \"https://example.org/scans\"\nspec = \"sha256:11\"\nresolved = \"https://example.org/scans\"\nlocked = \"2026-11-15T07:00:00Z\"\nfiles = [\n  {{ path = \"raw/scans.zip\", size = 1, sha256 = \"{0}\", url = \"https://example.org/raw/scans.zip\", unpacks_to = \"sha256:{0}\" }},\n]\n",
+            "0".repeat(64)
+        );
+        let lock = Lock::parse(&text).unwrap();
+        let pinned = archives::pinned(&lock.get("scans").unwrap().files);
+        let Some(Pinned::Archive(archive)) = pinned.first() else {
+            panic!("no archive pinned");
+        };
+        let layout = Layout::of((&manifest, &lock), "scans", archive).unwrap();
+        assert_eq!(layout.base, "data/scans/raw");
     }
 
     #[test]
