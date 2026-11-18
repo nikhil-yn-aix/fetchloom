@@ -144,7 +144,7 @@ pub(super) fn run(context: &Arc<Context>, args: args::Diff) -> Result<Report, Er
 fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
     let project = super::project::find(context)?;
     let root = &project.root;
-    let git = git::on_path(root).ok_or_else(|| {
+    let git = git::on_path().ok_or_else(|| {
         Error::new(
             Kind::Usage,
             "fetchloom diff reads data.lock's history from git, and git is not on PATH",

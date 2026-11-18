@@ -190,7 +190,7 @@ pub(crate) fn find(var: Var<'_>, listed: &[AzureContainer]) -> Result<Storage, E
 fn sign_in(var: Var<'_>) -> Result<SignIn, Error> {
     let written = set(var, "AZURE_TOKEN_CREDENTIALS");
     let asked = written.as_deref().map(str::to_ascii_lowercase);
-    let cli = crate::machine::program(var, if cfg!(windows) { "az.cmd" } else { "az" }, None);
+    let cli = crate::machine::program(var, if cfg!(windows) { "az.cmd" } else { "az" });
     let managed = || {
         let client_id = set(var, "AZURE_CLIENT_ID")
             .map(|id| {

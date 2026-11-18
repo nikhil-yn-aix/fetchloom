@@ -443,11 +443,7 @@ pub(crate) fn said_user(id: u32) -> String {
 /// directory service, which `/etc/passwd` does not list and only the system's own lookup asks.
 #[cfg(unix)]
 fn user_name(id: u32) -> Option<String> {
-    let program = id_program(
-        std::ffi::OsStr::new("/usr/bin:/bin"),
-        &crate::machine::env,
-        None,
-    )?;
+    let program = id_program(std::ffi::OsStr::new("/usr/bin:/bin"), &crate::machine::env)?;
     let told = std::process::Command::new(program)
         .arg("-nu")
         .arg(id.to_string())
@@ -460,17 +456,12 @@ fn user_name(id: u32) -> Option<String> {
     (told.status.success() && !name.is_empty()).then(|| name.to_owned())
 }
 
-/// the `id` to ask: the system's own, in a folder of `system`, else the first on the PATH `var`
-/// gives past one inside `project`, or the project the run works in, as git, aws and az are found:
-/// a cloned project can hold a program in a folder PATH names.
+/// the `id` to ask: the system's own, in a folder of `system`, else the one on the PATH `var`
+/// gives as [`crate::machine::program`] finds every program fetchloom runs: a cloned project can
+/// hold one in a folder PATH names.
 #[cfg(unix)]
-fn id_program(
-    system: &std::ffi::OsStr,
-    var: crate::machine::Var<'_>,
-    project: Option<&Path>,
-) -> Option<PathBuf> {
-    crate::machine::installed(system, "id")
-        .or_else(|| crate::machine::program(var, "id", project).ok())
+fn id_program(system: &std::ffi::OsStr, var: crate::machine::Var<'_>) -> Option<PathBuf> {
+    crate::machine::installed(system, "id").or_else(|| crate::machine::program(var, "id").ok())
 }
 
 /// why a run as root takes no cache at `root` that another user owns: what it would make there
@@ -2541,8 +2532,10 @@ pub(crate) mod tests {
         }
         let path = std::env::join_paths([&planted, &outside]).unwrap();
         let var = |name: &str| (name == "PATH").then(|| path.clone());
+        // the run's project, as a run's start names it: nextest runs each test in a process of its own
+        crate::machine::distrust(project);
         assert_eq!(
-            id_program(system.as_os_str(), &var, Some(&project)),
+            id_program(system.as_os_str(), &var),
             Some(outside.join("id"))
         );
     }

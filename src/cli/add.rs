@@ -234,6 +234,10 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
     let found = Project::find(&here);
     let starting = found.is_none();
+    if starting {
+        // the run's start found no project here, so the one this add makes is distrusted now
+        crate::machine::distrust(here.clone());
+    }
     let mut project = found.unwrap_or_else(|| Project::at(here.clone()));
     project.data_links = super::project::data_links(context);
     let mut request = request(&mut args, &project)?;

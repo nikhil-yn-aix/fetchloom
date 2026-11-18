@@ -1168,6 +1168,32 @@ fn an_aws_cli_inside_the_project_never_runs_and_is_named() -> Result {
     Ok(())
 }
 
+/// the folder an add makes a project of holds its programs back from that first command on, as
+/// a project found when a run starts does: the AWS CLI it holds never runs.
+#[cfg(unix)]
+#[test]
+fn an_add_that_makes_a_project_never_runs_the_aws_cli_it_holds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = refusing()?;
+    let ran = sandbox.folder("ran")?.join("aws");
+    let bin = sandbox.work().join(".venv").join("bin");
+    fs::create_dir_all(&bin)?;
+    let aws = bin.join("aws");
+    program(
+        &aws,
+        &format!(": > '{}'\nprintf '%s' '{PRINTED}'", ran.display()),
+    )?;
+    let output = sandbox
+        .command(&["--json", "add", "s3://private-lab/"])
+        .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+        .env("FETCHLOOM_S3_BUCKETS", "private-lab")
+        .env("PATH", &bin)
+        .output()?;
+    assert!(!ran.exists(), "the default chain ran {}", aws.display());
+    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    Ok(())
+}
+
 /// a home folder kept in git, as a dotfiles repository keeps it, is no project: a
 /// `credential_process` installed under it, as `pip install --user` puts one in ~/.local/bin, is
 /// found from any folder of the home, while a project inside the home still holds its own back.

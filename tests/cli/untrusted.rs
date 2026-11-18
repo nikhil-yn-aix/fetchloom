@@ -568,3 +568,60 @@ fn the_owner_of_an_unreadable_project_is_named_by_the_systems_id() -> Result {
     );
     Ok(())
 }
+
+/// a home folder kept in git is no project, so the git installed under it, as in ~/.local/bin, is
+/// the one git every call of a run takes: an add that imports a folder of the home asks that git
+/// whether git will take the folder, and no git later on PATH is asked anything.
+#[cfg(unix)]
+#[test]
+fn a_home_kept_in_git_runs_one_git_for_every_call() -> Result {
+    let sandbox = Sandbox::new()?;
+    let Some(git) = system_folders()
+        .into_iter()
+        .map(|folder| folder.join("git"))
+        .find(|git| git.is_file())
+    else {
+        return crate::support::skipped("git", "git is not installed");
+    };
+    let home = sandbox.folder("home")?;
+    let Some(made) = crate::merge::git(&sandbox, &home, &["init", "-q"])? else {
+        return Ok(());
+    };
+    assert!(made.status.success(), "{}", text(&made.stderr)?);
+    let ran = sandbox.folder("ran")?;
+    let installed = home.join(".local").join("bin");
+    let later = sandbox.folder("later")?;
+    for (folder, log) in [(&installed, "installed"), (&later, "later")] {
+        fs::create_dir_all(folder)?;
+        let script = format!(
+            "printf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"",
+            ran.join(log).display(),
+            git.display()
+        );
+        crate::buckets::program(&folder.join("git"), &script)?;
+    }
+    let project = home.join("proj");
+    fs::create_dir_all(&project)?;
+    fs::write(project.join("data.toml"), "")?;
+    fs::create_dir_all(home.join("raw"))?;
+    fs::write(home.join("raw").join("a.csv"), "a,b\n1,2\n")?;
+    let raw = home.join("raw").display().to_string();
+    let mut command = sandbox.command_in(&project, &["add", &raw, "--as", "raw"]);
+    for name in crate::merge::git_variables() {
+        command.env_remove(name);
+    }
+    let output = command
+        .env("PATH", std::env::join_paths([&installed, &later])?)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("and git will take it"), "{stderr}");
+    let asked = fs::read_to_string(ran.join("installed")).unwrap_or_default();
+    assert!(asked.contains("./raw"), "{asked}");
+    assert!(
+        !ran.join("later").exists(),
+        "a git later on PATH ran: {}",
+        fs::read_to_string(ran.join("later"))?
+    );
+    Ok(())
+}

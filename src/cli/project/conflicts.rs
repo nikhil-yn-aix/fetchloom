@@ -57,7 +57,7 @@ pub(super) fn merge(
     let Some(conflicted) = read(project)? else {
         return Ok(None);
     };
-    let program = git::on_path(&project.root);
+    let program = git::on_path();
     if conflicted.manifest_sides.is_none() && conflicted.lock_sides.is_none() {
         if choices.is_empty() {
             return Ok(None);

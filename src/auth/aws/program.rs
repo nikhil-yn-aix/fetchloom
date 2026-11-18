@@ -443,7 +443,7 @@ fn installed(name: &str, var: Var<'_>) -> Result<PathBuf, Option<PathBuf>> {
     } else {
         name.to_owned()
     };
-    crate::machine::program(var, &file, None)
+    crate::machine::program(var, &file)
 }
 
 #[cfg(test)]

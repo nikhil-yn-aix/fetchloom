@@ -307,16 +307,12 @@ pub(crate) fn distrust(folder: PathBuf) {
     let _ = UNTRUSTED.set(folder);
 }
 
-/// the program `file` on the PATH `var` gives, past one inside `project`, else the folder
-/// [`distrust`] names, when there is one; else the one inside it passed over, if any, for help to
-/// name. every program fetchloom runs is found here.
-pub(crate) fn program(
-    var: Var<'_>,
-    file: &str,
-    project: Option<&Path>,
-) -> Result<PathBuf, Option<PathBuf>> {
+/// the program `file` on the PATH `var` gives, past one inside the folder [`distrust`] names,
+/// when there is one; else the one inside it passed over, if any, for help to name. every program
+/// fetchloom runs is found here, by that one folder for the whole run.
+pub(crate) fn program(var: Var<'_>, file: &str) -> Result<PathBuf, Option<PathBuf>> {
     let path = var("PATH").ok_or(None)?;
-    let found = match project.or(UNTRUSTED.get().map(PathBuf::as_path)) {
+    let found = match UNTRUSTED.get() {
         Some(project) => outside(&path, file, project),
         None => installed(&path, file),
     };
@@ -831,9 +827,8 @@ mod tests {
         }
     }
 
-    /// a program inside the project is passed over, though PATH names its folder in full, and named
-    /// for help when no other is found; the same program outside the project is found, and one
-    /// later on PATH is not hidden by it.
+    /// a program inside the project is passed over, though PATH names its folder in full; the same
+    /// program outside the project is found, and one later on PATH is not hidden by it.
     #[cfg(unix)]
     #[test]
     fn a_program_the_project_holds_is_passed_over() {
@@ -844,33 +839,22 @@ mod tests {
         let planted = bin.join("tool");
         fs::write(&planted, "#!/bin/sh\necho planted\n").unwrap();
         fs::set_permissions(&planted, fs::Permissions::from_mode(0o755)).unwrap();
-        let outside = tempfile::tempdir().unwrap();
-        let found = |path: &OsStr, project: &Path| {
-            let path = path.to_owned();
-            program(
-                &move |name: &str| (name == "PATH").then(|| path.clone()),
-                "tool",
-                Some(project),
-            )
-        };
+        let elsewhere = tempfile::tempdir().unwrap();
+        assert_eq!(outside(bin.as_os_str(), "tool", project.path()), None);
         assert_eq!(
-            found(bin.as_os_str(), project.path()),
-            Err(Some(planted.clone()))
-        );
-        assert_eq!(
-            found(bin.as_os_str(), outside.path()),
-            Ok(planted.clone()),
+            outside(bin.as_os_str(), "tool", elsewhere.path()),
+            Some(planted.clone()),
             "the same program outside the project is found"
         );
-        let installed = outside.path().join("tool");
+        let installed = elsewhere.path().join("tool");
         fs::copy(&planted, &installed).unwrap();
-        let path = std::env::join_paths([&bin, &outside.path().to_path_buf()]).unwrap();
+        let path = std::env::join_paths([&bin, &elsewhere.path().to_path_buf()]).unwrap();
         assert_eq!(
-            found(&path, project.path()),
-            Ok(installed),
+            outside(&path, "tool", project.path()),
+            Some(installed),
             "the project's program hides none later on PATH"
         );
-        assert_eq!(program(&|_| None, "tool", Some(project.path())), Err(None));
+        assert_eq!(program(&|_| None, "tool"), Err(None));
     }
 
     #[cfg(target_os = "linux")]

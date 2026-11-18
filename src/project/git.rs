@@ -34,12 +34,10 @@ const REPOSITORY_VARIABLES: [&str; 15] = [
     "GIT_COMMON_DIR",
 ];
 
-/// git on this run's PATH, past one inside the project at `project`, as
-/// [`crate::machine::program`] finds every program fetchloom runs: a cloned repository could have
-/// put one in a folder PATH names.
-pub(crate) fn on_path(project: &Path) -> Option<PathBuf> {
+/// git on this run's PATH, as [`crate::machine::program`] finds every program fetchloom runs.
+pub(crate) fn on_path() -> Option<PathBuf> {
     let name = if cfg!(windows) { "git.exe" } else { "git" };
-    crate::machine::program(&crate::machine::env, name, Some(project)).ok()
+    crate::machine::program(&crate::machine::env, name).ok()
 }
 
 /// a file as each side of an unfinished merge has it, and as their merge base had it.
@@ -332,7 +330,7 @@ pub(crate) fn tracked_among(root: &Path, folders: &[&str], paths: &[&str]) -> Ha
 /// the git [`on_path`] finds. none when there is none or it cannot tell, as outside a repository.
 pub(crate) fn tracked(root: &Path, folder: &str) -> Option<HashSet<String>> {
     let listed = run(
-        &on_path(root)?,
+        &on_path()?,
         root,
         &[
             "--literal-pathspecs",
@@ -398,7 +396,7 @@ pub(crate) fn known(root: &Path, paths: &[&str]) -> Option<Known> {
         "--",
     ];
     arguments.extend(specs.iter().map(String::as_str));
-    let listed = run(&on_path(root)?, root, &arguments).ok()?;
+    let listed = run(&on_path()?, root, &arguments).ok()?;
     let mut known = Known::default();
     // each entry is `<tag> <path>`, where `?` tags a file git does not have
     for entry in listed.split(|byte| *byte == 0) {
@@ -480,8 +478,7 @@ mod tests {
 
     /// git as the machine running the tests has it, of any version.
     fn git() -> Option<PathBuf> {
-        let elsewhere = tempfile::tempdir().ok()?;
-        let found = on_path(elsewhere.path());
+        let found = on_path();
         if found.is_none() {
             crate::test_skips::skip("git", "git is not installed");
         }
