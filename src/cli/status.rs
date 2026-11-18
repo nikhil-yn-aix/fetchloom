@@ -9,6 +9,7 @@ use serde::Serialize;
 
 use super::Context;
 use super::sync::disk::{self, Blocker, Entry, Folders, Survey};
+use super::sync::place::{Action, Reason, Stale};
 use super::sync::placed_archives::PlacedArchives;
 use super::sync::{Scope, place};
 use crate::cache::Cache;
@@ -973,69 +974,64 @@ fn compare(
     let freeing = OnceCell::new();
     let mut listed = HashSet::new();
     for target in targets {
-        let seen = survey.disk.get(&target.path);
         let file = native(&project.root, &target.path);
-        let list = match (seen, survey.state.files.get(&target.path)) {
-            (None, _) => match survey.blocker(&target.path) {
-                // what sync removes before it places anything stands in no file's way
-                Some(blocker)
-                    if !freeing
-                        .get_or_init(|| survey.freeing(going_now()))
-                        .frees(&blocker) =>
+        let record = survey.state.files.get(&target.path);
+        // sync's own decision for the file, without --force, listed by what a sync does with it
+        let list = match place::decide(target, survey, false, &file)? {
+            Action::Place => &mut status.missing,
+            // what sync removes before it places anything stands in no file's way
+            Action::Blocked(blocker) | Action::Unblock(blocker) | Action::Freed(blocker) => {
+                if freeing
+                    .get_or_init(|| survey.freeing(going_now()))
+                    .frees(&blocker)
                 {
+                    &mut status.missing
+                } else {
                     if listed.insert(blocker.path.clone()) {
                         status.blocked.push(blocker);
                     }
                     continue;
                 }
-                _ => &mut status.missing,
-            },
-            (Some(_), Some(_)) if survey.elsewhere.contains(&target.path) => {
-                status.linked.insert(target.path.clone());
+            }
+            Action::Keep | Action::Vouch(_) => {
+                status.holding.insert(target.sha256);
+                continue;
+            }
+            Action::Adopt(_) => {
+                status.holding.insert(target.sha256);
+                if record.is_some() {
+                    continue;
+                }
+                &mut status.adoptable
+            }
+            Action::Replace(Stale::Damaged { linked }) => {
+                if linked {
+                    status.linked.insert(target.path.clone());
+                }
                 &mut status.damaged
             }
-            (Some(_), Some(_)) if survey.damaged.contains(&target.path) => &mut status.damaged,
-            (Some(seen), Some(record))
-                if record.look == *seen && !survey.edited.contains(&target.path) =>
-            {
-                if let Some(label) = place::pinned_label(target)
-                    && let Some(actual) =
-                        place::placed_other_size(&file, record, &target.sha256, target.size)
-                {
-                    return Err(place::mispinned(&label, target.size, actual));
-                }
-                if record.sha256 == target.sha256 {
-                    if place::fits(target, record, survey) {
-                        status.holding.insert(target.sha256);
-                        continue;
-                    }
-                    if !target.copy && record.method == crate::place::Method::Hardlink {
-                        status.unsealed.insert(target.path.clone());
-                    }
+            Action::Replace(Stale::Outdated) => {
+                // a link to the cache's copy, unless someone made it writable
+                if record.is_some_and(|record| {
+                    !target.copy
+                        && record.method == crate::place::Method::Hardlink
+                        && record.sha256 == target.sha256
+                }) {
+                    status.unsealed.insert(target.path.clone());
                 }
                 &mut status.outdated
             }
-            // sync takes a changed file that holds the locked bytes as placed, and replaces one
-            // that still holds the bytes placed for another pin
-            (Some(seen), Some(record)) => match place::held(target, record, seen, &file) {
-                place::Held::Pinned => {
-                    if !target.copy || place::now_writable(&file) {
-                        status.holding.insert(target.sha256);
-                        continue;
-                    }
-                    &mut status.outdated
+            Action::Leave(Reason::Foreign) | Action::Overwrite(Reason::Foreign) => {
+                &mut status.untracked
+            }
+            Action::Leave(reason) | Action::Overwrite(reason) => {
+                if reason == Reason::Shared {
+                    status.shared.insert(target.path.clone());
                 }
-                place::Held::Earlier => &mut status.outdated,
-                place::Held::Other => {
-                    if record.method == crate::place::Method::Hardlink
-                        && crate::place::has_other_names(&file)
-                    {
-                        status.shared.insert(target.path.clone());
-                    }
-                    &mut status.edited
-                }
-            },
-            (Some(seen), None) => unrecorded(status, target, seen, &file),
+                &mut status.edited
+            }
+            Action::Unreadable(_) => &mut status.unreadable,
+            Action::Unselected => continue,
         };
         list.push(target.path.clone());
     }
@@ -1081,27 +1077,6 @@ fn sort_extra(status: &mut Status, owned: &plan::Owned) {
             Some(_) => status.yours.push(path),
             None => {}
         }
-    }
-}
-
-/// the list of `status` for a file fetchloom did not place at `target`'s path, seen as `seen`, as
-/// a sync would take it: one it adopts, as in a copy of the project, taking its bytes into the
-/// cache from there as from a placed file, one it replaces, read-only where the dataset asks for
-/// writable copies, one with other bytes it keeps, or one no one here can read.
-fn unrecorded<'s>(
-    status: &'s mut Status,
-    target: &plan::Target<'_>,
-    seen: &crate::project::state::Look,
-    file: &std::path::Path,
-) -> &'s mut Vec<String> {
-    match place::reads_as_target(target, seen, file) {
-        Ok(true) if target.copy && !place::now_writable(file) => &mut status.outdated,
-        Ok(true) => {
-            status.holding.insert(target.sha256);
-            &mut status.adoptable
-        }
-        Ok(false) => &mut status.untracked,
-        Err(_) => &mut status.unreadable,
     }
 }
 

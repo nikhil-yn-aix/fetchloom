@@ -423,7 +423,7 @@ impl Placement {
                     action,
                     Action::Place
                         | Action::Freed(_)
-                        | Action::Replace
+                        | Action::Replace(_)
                         | Action::Overwrite(_)
                         | Action::Unblock(_)
                 )
@@ -858,7 +858,8 @@ pub(crate) enum Reason {
     Blocked,
 }
 
-enum Action {
+/// what a run does with a file data.lock places, as [`decide`] decides it.
+pub(crate) enum Action {
     Keep,
     Place,
     /// `--force` removes the entry in the way, without following it, and places the file.
@@ -867,7 +868,7 @@ enum Action {
     /// an unneeded file fetchloom placed is in the way, or a folder of only such files, which
     /// removal clears first; one changed since the scan stays, and the file is blocked.
     Freed(Blocker),
-    Replace,
+    Replace(Stale),
     /// `--force` replaces a file sync would otherwise keep for this reason, and names it.
     Overwrite(Reason),
     Adopt(Look),
@@ -877,6 +878,29 @@ enum Action {
     Leave(Reason),
     /// a file of a dataset the run leaves alone: nothing happens to it, and nothing counts it.
     Unselected,
+    /// a file fetchloom did not place, of the pinned size, that could not be read to tell what it
+    /// holds: a run stops there, as [`Action::readable`] says, and status lists it.
+    Unreadable(std::io::Error),
+}
+
+impl Action {
+    /// this action, or the error that stops a run at a file that could not be read, `path`.
+    pub(crate) fn readable(self, path: &Path) -> Result<Action, Error> {
+        match self {
+            Action::Unreadable(err) => Err(local(path, &err)),
+            action => Ok(action),
+        }
+    }
+}
+
+/// why a run replaces a file fetchloom placed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Stale {
+    /// it no longer holds the pinned bytes, as hashing found, or as a link to the cache's copy,
+    /// which was changed, when `linked`.
+    Damaged { linked: bool },
+    /// it holds the bytes of an older pin, or is placed in another way than its dataset asks.
+    Outdated,
 }
 
 /// the data folder compared with a lock, with what each file needs decided before anything
@@ -949,7 +973,8 @@ impl<'a> Placing<'a> {
             .iter()
             .map(|target| {
                 if scope.includes(target.dataset) {
-                    decide(target, &survey, force, &native(&project.root, &target.path))
+                    let destination = native(&project.root, &target.path);
+                    decide(target, &survey, force, &destination)?.readable(&destination)
                 } else {
                     Ok(Action::Unselected)
                 }
@@ -1292,7 +1317,7 @@ impl<'a> Placing<'a> {
                 matches!(
                     action,
                     Action::Place
-                        | Action::Replace
+                        | Action::Replace(_)
                         | Action::Overwrite(_)
                         | Action::Unblock(_)
                         | Action::Freed(_)
@@ -1398,7 +1423,8 @@ impl<'a> Placing<'a> {
                 continue;
             }
             match action {
-                Action::Unselected => {}
+                // a placing holds no file it could not read, as its run stopped there
+                Action::Unselected | Action::Unreadable(_) => {}
                 Action::Keep | Action::Vouch(_) => placement.unchanged += 1,
                 Action::Adopt(_) => {
                     placement.unchanged += 1;
@@ -1418,7 +1444,7 @@ impl<'a> Placing<'a> {
                     blocker: Some(blocker.clone()),
                     ..Kept::of(target, Reason::Blocked, &self.survey)
                 }),
-                Action::Replace | Action::Overwrite(_) | Action::Unblock(_) => {
+                Action::Replace(_) | Action::Overwrite(_) | Action::Unblock(_) => {
                     if let Action::Overwrite(reason) = action {
                         placement
                             .overwritten
@@ -2011,7 +2037,7 @@ fn needs_bytes(action: &Action) -> bool {
     matches!(
         action,
         Action::Place
-            | Action::Replace
+            | Action::Replace(_)
             | Action::Overwrite(_)
             | Action::Unblock(_)
             | Action::Freed(_)
@@ -2629,7 +2655,7 @@ fn write_ahead(
         let moved = match action {
             Action::Overwrite(_) => &target.path,
             Action::Unblock(blocker) if blocker.found == Entry::File => &blocker.path,
-            Action::Replace if survey.state.files.contains_key(&target.path) => {
+            Action::Replace(_) if survey.state.files.contains_key(&target.path) => {
                 replacing.push(target.path.clone());
                 continue;
             }
@@ -2691,7 +2717,7 @@ fn settle<'t, 'a>(
             adopted = true;
         }
         match action {
-            Action::Unselected => {}
+            Action::Unselected | Action::Unreadable(_) => {}
             Action::Keep => placement.unchanged += 1,
             Action::Unblock(blocker) => {
                 let unblocked = unblock(
@@ -2730,7 +2756,7 @@ fn settle<'t, 'a>(
                 adopted = true;
             }
             Action::Leave(reason) => placement.kept.push(Kept::of(target, reason, survey)),
-            Action::Replace | Action::Overwrite(_) => {
+            Action::Replace(_) | Action::Overwrite(_) => {
                 let destination = native(&project.root, &target.path);
                 match now(&destination) {
                     Some(look) if survey.disk.get(&target.path) != Some(&look) => {
@@ -3103,9 +3129,10 @@ fn clear(
     }
 }
 
-/// what the file at `destination` needs. a changed file holding the locked bytes is adopted if its
-/// mode fits, since a run cut off before writing the state leaves a replaced file recorded as old.
-fn decide(
+/// what the file at `destination` needs, the one decision sync, status and a link's first follow
+/// take. a changed file holding the locked bytes is adopted if its mode fits, since a run cut off
+/// before writing the state leaves a replaced file recorded as old.
+pub(crate) fn decide(
     target: &Target,
     survey: &Survey,
     force: bool,
@@ -3121,7 +3148,9 @@ fn decide(
     };
     match survey.state.files.get(path) {
         Some(_) if survey.elsewhere.contains(path) || survey.damaged.contains(path) => {
-            Ok(Action::Replace)
+            Ok(Action::Replace(Stale::Damaged {
+                linked: survey.elsewhere.contains(path),
+            }))
         }
         Some(placed) if survey.vouched.contains(path) => {
             if placed.sha256 == target.sha256
@@ -3134,7 +3163,7 @@ fn decide(
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Vouch(*look)
             } else {
-                Action::Replace
+                Action::Replace(Stale::Outdated)
             })
         }
         Some(placed) if placed.look == *look && !survey.edited.contains(path) => {
@@ -3148,16 +3177,16 @@ fn decide(
             Ok(if placed.sha256 == target.sha256 && fits {
                 Action::Keep
             } else {
-                Action::Replace
+                Action::Replace(Stale::Outdated)
             })
         }
         Some(placed) => match held(target, placed, look, destination) {
             Held::Pinned => Ok(if !target.copy || now_writable(destination) {
                 Action::Adopt(*look)
             } else {
-                Action::Replace
+                Action::Replace(Stale::Outdated)
             }),
-            Held::Earlier => Ok(Action::Replace),
+            Held::Earlier => Ok(Action::Replace(Stale::Outdated)),
             Held::Other => {
                 let reason =
                     if placed.method == Method::Hardlink && place::has_other_names(destination) {
@@ -3172,21 +3201,13 @@ fn decide(
                 })
             }
         },
-        None => {
-            let block = Block::sized(target.size.saturating_add(1));
-            let same = look.size == target.size
-                && hash_plain(destination, block).map_err(|err| local(destination, &err))?
-                    == target.sha256;
-            Ok(if same && (!target.copy || now_writable(destination)) {
-                Action::Adopt(*look)
-            } else if same {
-                Action::Replace
-            } else if force {
-                Action::Overwrite(Reason::Foreign)
-            } else {
-                Action::Leave(Reason::Foreign)
-            })
-        }
+        None => Ok(match reads_as_target(target, look, destination) {
+            Err(err) => Action::Unreadable(err),
+            Ok(true) if !target.copy || now_writable(destination) => Action::Adopt(*look),
+            Ok(true) => Action::Replace(Stale::Outdated),
+            Ok(false) if force => Action::Overwrite(Reason::Foreign),
+            Ok(false) => Action::Leave(Reason::Foreign),
+        }),
     }
 }
 
@@ -3350,7 +3371,9 @@ fn changed_outputs(
             }
             // hashing found other bytes than the look tells, which is a change all the same, and
             // so is the author's file of another run, as after a branch switch
-            Action::Replace if survey.damaged.contains(path) || adopted(path) => {
+            Action::Replace(stale)
+                if *stale == (Stale::Damaged { linked: false }) || adopted(path) =>
+            {
                 output.changed += 1;
                 changes.push(change("changed", path));
             }
@@ -4354,7 +4377,7 @@ mod tests {
         survey.started = started;
         let actions = vec![
             Action::Place,
-            Action::Replace,
+            Action::Replace(Stale::Outdated),
             Action::Adopt(survey.disk[&targets[2].path]),
             Action::Vouch(survey.disk[&targets[3].path]),
         ];
@@ -4760,7 +4783,7 @@ mod tests {
             ("adopted", &shared, Action::Adopt(look)),
             ("vouched", &shared, Action::Vouch(look)),
             ("placed", &shared, Action::Place),
-            ("replaced", &shared, Action::Replace),
+            ("replaced", &shared, Action::Replace(Stale::Outdated)),
             ("edited", &shared, Action::Leave(Reason::Changed)),
             ("other", &other, Action::Keep),
         ];

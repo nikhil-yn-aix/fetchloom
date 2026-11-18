@@ -65,7 +65,7 @@ fn choice(action: &Action) -> Choice {
         Action::Vouch(_) => Choice::Vouch,
         Action::Adopt(_) => Choice::Adopt,
         Action::Place => Choice::Place,
-        Action::Replace | Action::Overwrite(_) => Choice::Replace,
+        Action::Replace(_) | Action::Overwrite(_) => Choice::Replace,
         Action::Leave(Reason::Changed) => Choice::Changed,
         Action::Leave(Reason::Shared) => Choice::Shared,
         Action::Leave(Reason::Foreign) => Choice::Foreign,
@@ -77,6 +77,7 @@ fn choice(action: &Action) -> Choice {
             panic!("the model puts nothing in a file's way")
         }
         Action::Unselected => panic!("the model leaves no dataset out"),
+        Action::Unreadable(err) => panic!("the model reads every file: {err}"),
     }
 }
 

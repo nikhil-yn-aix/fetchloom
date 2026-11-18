@@ -243,6 +243,10 @@ fn a_file_no_one_can_read_is_unreadable_not_untracked() -> Result {
             "data/iris/iris.csv cannot be read, so what it holds is unknown: {steps}"
         )])
     );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(50), "{stderr}");
+    assert!(stderr.contains("could not place "), "{stderr}");
     // what the steps say
     fs::set_permissions(&placed, fs::Permissions::from_mode(0o644))?;
     ok(&sandbox.run(&["sync"])?)?;

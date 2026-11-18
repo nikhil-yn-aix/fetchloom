@@ -2,16 +2,16 @@
 //! `sync --force` its help offers, could harm.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+#[cfg(unix)]
 use std::path::Path;
 
 use super::mark::{self, Whose};
-use super::{Action, Held, Reason, held, local, passed_over, reads_as_target};
+use super::{Action, Reason, decide, passed_over};
 use crate::cli::sync::disk::{Blocker, Entry, Mark, Survey, is_inside};
 use crate::error::Error;
 use crate::place;
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
-use crate::project::state::Look;
 use crate::project::{Followed, Project, native};
 
 /// refuses the first follow of `link` before anything is written through it when the folder it
@@ -288,6 +288,14 @@ fn replaced<'s>(
         if !inside(&target.path) {
             continue;
         }
+        let decided;
+        let action = if let Action::Unselected = action {
+            let path = native(&project.root, &target.path);
+            decided = decide(target, survey, false, &path)?.readable(&path)?;
+            &decided
+        } else {
+            action
+        };
         match action {
             Action::Overwrite(Reason::Foreign | Reason::Changed | Reason::Shared)
             | Action::Leave(Reason::Foreign | Reason::Changed | Reason::Shared)
@@ -298,19 +306,6 @@ fn replaced<'s>(
             Action::Unblock(blocker) | Action::Blocked(blocker) if unrecorded_file(blocker) => {
                 in_the_way.insert(blocker.path.clone());
             }
-            Action::Unselected => match survey.disk.get(&target.path) {
-                Some(look) => {
-                    let path = native(&project.root, &target.path);
-                    if !told(survey, &target.path) && other_bytes(target, look, survey, &path)? {
-                        replaced.insert(target.path.as_str());
-                    }
-                }
-                None => {
-                    if let Some(blocker) = survey.blocker(&target.path).filter(unrecorded_file) {
-                        in_the_way.insert(blocker.path);
-                    }
-                }
-            },
             _ => {}
         }
     }
@@ -321,18 +316,6 @@ fn replaced<'s>(
 /// makes it the person's own, moved with their folder.
 fn told(survey: &Survey, path: &str) -> bool {
     survey.told_edit(path, &survey.state.told)
-}
-
-/// whether the file at `path`, seen as `look`, holds other bytes than `target` pins, and than those
-/// the state records placing there when it looks as recorded no more, as a placing decides it.
-fn other_bytes(target: &Target, look: &Look, survey: &Survey, path: &Path) -> Result<bool, Error> {
-    match survey.state.files.get(&target.path) {
-        Some(placed) if placed.look == *look && !survey.edited.contains(&target.path) => Ok(false),
-        Some(placed) => Ok(held(target, placed, look, path) == Held::Other),
-        None => reads_as_target(target, look, path)
-            .map(|same| !same)
-            .map_err(|err| local(path, &err)),
-    }
 }
 
 /// the files `inside` takes in the folder of an output of `manifest` that no pin of `targets`

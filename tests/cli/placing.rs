@@ -1353,6 +1353,11 @@ fn a_link_made_writable_is_sealed_again() -> Result {
         serde_json::json!(["data/iris/iris.csv"]),
         "{report}"
     );
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        status.contains("Outdated data/iris/iris.csv · a link to the cache's copy made writable"),
+        "{status}"
+    );
     let synced = sandbox.run(&["sync"])?;
 
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);

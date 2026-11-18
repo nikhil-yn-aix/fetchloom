@@ -870,7 +870,7 @@ pub(super) fn unmarkable(
             matches!(
                 action,
                 Action::Place
-                    | Action::Replace
+                    | Action::Replace(_)
                     | Action::Freed(_)
                     | Action::Unblock(_)
                     | Action::Overwrite(_)
