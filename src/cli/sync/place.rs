@@ -1815,7 +1815,8 @@ impl<'a> Placing<'a> {
             || !tallies.is_empty();
         let dropped = state.forget_removed(manifest) || moved_away || replaced;
         let marks = unmarked || marking || rewritten || told_rule || told_link || taken_back;
-        // what a run that ends in an error never tells stays untold
+        // a line is recorded once said, and these are said last, which a run that ends in an error
+        // never reaches
         let telling = !stopped && failure.is_none();
         placement.copied = tallies
             .values()

@@ -159,7 +159,8 @@ impl Once {
     }
 }
 
-/// what runs told once, each as its kind and its subject, as `refill:data/iris`.
+/// what runs told once, each as its kind and its subject, as `refill:data/iris`: a line is
+/// recorded once it is said, by the run that says it.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
 pub(crate) struct Told(BTreeSet<String>);
