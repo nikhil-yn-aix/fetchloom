@@ -279,12 +279,15 @@ impl Folder {
     }
 
     /// whether a folder another system recorded is `here`, by its creation time alone: windows and
-    /// wsl read one ntfs folder's creation time alike, while wsl may make up its number. a side
-    /// that keeps no creation time tells nothing, so the folder counts as this one.
+    /// wsl read one ntfs folder's creation time alike, while wsl may make up its number. a record
+    /// with no creation time is no folder's here, as no fetchloom on windows writes one, while
+    /// none here, as wsl may read none on /mnt/c, tells nothing, so the folder counts as this one.
     pub(crate) fn created_alike(&self, here: &Folder) -> bool {
-        self.created
-            .zip(here.created)
-            .is_none_or(|(recorded, found)| recorded == found)
+        match (self.created, here.created) {
+            (Some(recorded), Some(found)) => recorded == found,
+            (Some(_), None) => true,
+            (None, _) => false,
+        }
     }
 
     /// [`Folder::matches`], by the number alone where both sides tell one when `numbers_first`.
@@ -299,6 +302,18 @@ impl Folder {
             };
         }
         same(self.inode, here.inode) || same(self.created, here.created)
+    }
+}
+
+#[cfg(test)]
+impl Folder {
+    /// the folder at `root` as another system's fetchloom records it: with a creation time, which
+    /// windows always keeps, any one where this disk keeps none, as hfs+ does.
+    pub(crate) fn recorded_elsewhere(root: &std::path::Path) -> Option<Folder> {
+        Folder::of(root).map(|folder| Folder {
+            created: folder.created.or(Some(1)),
+            ..folder
+        })
     }
 }
 

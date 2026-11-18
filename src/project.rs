@@ -2027,7 +2027,11 @@ mod tests {
             "pid": 42,
             "started": "2026-10-30T12:00:00Z",
             "command": "sync",
-            "folder": Folder::of(&project.root),
+            "folder": if os == std::env::consts::OS {
+                Folder::of(&project.root)
+            } else {
+                Folder::recorded_elsewhere(&project.root)
+            },
         }))
         .unwrap()
     }
@@ -2108,8 +2112,9 @@ mod tests {
 
     /// windows and wsl read one ntfs folder's creation time alike, while wsl may make up its
     /// number, so a record another system wrote is this folder's by its creation time alone: the
-    /// same time holds, another time is a clone's, and no time on either side tells nothing, so
-    /// it holds. a record of this system's own still goes by the folder's number first.
+    /// same time holds and another time is a clone's. a record with no time is stale, as no
+    /// fetchloom on windows writes one, while no time here, as wsl may read none on /mnt/c, tells
+    /// nothing, so the record holds. a record of this system's own still goes by the number first.
     #[test]
     fn another_systems_owner_record_is_this_folders_by_its_creation_time() {
         let other = if cfg!(windows) { "linux" } else { "windows" };
@@ -2131,8 +2136,15 @@ mod tests {
                 serde_json::json!({ "inode": 5, "created": 8 }),
                 false,
             ),
-            // no time in the record, or none here
-            (other, timed(), serde_json::json!({ "inode": 6 }), true),
+            // no time in the record, here or not
+            (other, timed(), serde_json::json!({ "inode": 6 }), false),
+            (
+                other,
+                folder(serde_json::json!({ "inode": 5 })),
+                serde_json::json!({ "inode": 6 }),
+                false,
+            ),
+            // no time here alone
             (
                 other,
                 folder(serde_json::json!({ "inode": 5 })),
@@ -2251,7 +2263,7 @@ mod tests {
             );
             drop(held);
         }
-        let here = serde_json::to_value(Folder::of(&project.root)).unwrap();
+        let here = serde_json::to_value(Folder::recorded_elsewhere(&project.root)).unwrap();
         fs::write(&path, record(other, Some(here))).unwrap();
         assert!(
             matches!(project.hold("remove").unwrap(), Hold::Owner(_)),
