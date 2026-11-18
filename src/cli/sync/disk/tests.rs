@@ -1457,6 +1457,7 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
                 folder: "data/a/b".to_owned(),
                 unplaced: vec!["data/a/b/own.txt".to_owned()],
                 system: Vec::new(),
+                output: None,
             },
             Retired {
                 folder: "data/gone".to_owned(),
@@ -1465,11 +1466,13 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
                     "data/gone/.DS_Store".to_owned(),
                     "data/gone/__MACOSX/._only.csv".to_owned(),
                 ],
+                output: None,
             },
             Retired {
                 folder: "data/old".to_owned(),
                 unplaced: vec!["data/old/mine.txt".to_owned()],
                 system: Vec::new(),
+                output: None,
             },
             Retired {
                 folder: "data/pets".to_owned(),
@@ -1479,6 +1482,7 @@ fn a_retired_folder_is_the_highest_holding_no_wanted_file() {
                     "data/pets/sub/x.txt".to_owned(),
                 ],
                 system: vec!["data/pets/._pets.csv".to_owned()],
+                output: None,
             },
         ]
     );

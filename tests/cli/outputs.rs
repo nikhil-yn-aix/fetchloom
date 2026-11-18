@@ -160,6 +160,118 @@ fn a_teammate_gets_an_output_where_the_author_had_it_and_may_write_it() -> Resul
     Ok(())
 }
 
+/// a teammate pulling an output's moved folder gets its pin in the new folder, and the copies a
+/// sync placed in the old one go as any dataset's old placement goes, with the emptied folder and
+/// its marker. a copy changed there, or a file added, stays under the folder's marker, and one line
+/// names the folder, once.
+#[test]
+fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let pull = |teammate: &Path| -> Result {
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(work.join(file), teammate.join(file))?;
+        }
+        Ok(())
+    };
+    let [clean, edited] = [sandbox.folder("clean")?, sandbox.folder("edited")?];
+    for teammate in [&clean, &edited] {
+        pull(teammate)?;
+        ok(&sandbox.command_in(teammate, &["sync"]).output()?)?;
+        assert_eq!(
+            crate::support::marker(&teammate.join("data/processed/.gitignore"))?,
+            b"*\n"
+        );
+    }
+    let old = edited.join("data/processed");
+    fs::write(old.join("summary.txt"), b"mine\n")?;
+    fs::write(old.join("notes.txt"), b"notes\n")?;
+    fs::rename(work.join("data/processed"), work.join("data/proc2"))?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        manifest.replace("data/processed", "data/proc2"),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    pull(&clean)?;
+    let synced = sandbox.command_in(&clean, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(clean.join("data/proc2/iris_clean.csv"))?, CLEAN);
+    assert!(!clean.join("data/processed").exists(), "{stderr}");
+    assert!(!stderr.contains("data/processed"), "{stderr}");
+    pull(&edited)?;
+    let synced = sandbox.command_in(&edited, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!old.join("iris_clean.csv").exists(), "{stderr}");
+    assert_eq!(fs::read(old.join("summary.txt"))?, b"mine\n");
+    assert_eq!(fs::read(old.join("notes.txt"))?, b"notes\n");
+    assert_eq!(
+        crate::support::marker(&old.join(".gitignore"))?,
+        b"*\n",
+        "{stderr}"
+    );
+    let said = "data/processed held processed until its folder moved to data/proc2, and still holds 2 files its pin does not hold, such as data/processed/notes.txt, so the folder stays";
+    assert_eq!(stderr.matches(said).count(), 1, "{stderr}");
+    assert!(!stderr.contains("no longer needed"), "{stderr}");
+    let again = sandbox.command_in(&edited, &["sync"]).output()?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("data/processed"), "{stderr}");
+    assert_eq!(
+        crate::support::marker(&old.join(".gitignore"))?,
+        b"*\n",
+        "{stderr}"
+    );
+    Ok(())
+}
+
+/// a sync deletes nothing outside the folders it lists: an output that moved from a folder outside
+/// the data folder leaves a teammate's copies there, under their marker, with no word of `data_dir`.
+#[test]
+fn a_moved_outputs_copies_outside_the_data_folder_stay() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/r.csv"), b"r\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    let pull = || -> Result {
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(work.join(file), teammate.join(file))?;
+        }
+        Ok(())
+    };
+    pull()?;
+    ok(&sandbox.command_in(&teammate, &["sync"]).output()?)?;
+    fs::rename(work.join("results"), work.join("results2"))?;
+    let manifest = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        manifest.replace("at = \"results\"", "at = \"results2\""),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    pull()?;
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(teammate.join("results2/r.csv"))?, b"r\n");
+    assert_eq!(
+        fs::read(teammate.join("results/r.csv"))?,
+        b"r\n",
+        "{stderr}"
+    );
+    assert_eq!(
+        crate::support::marker(&teammate.join("results/.gitignore"))?,
+        b"*\n"
+    );
+    assert!(!stderr.contains("data_dir"), "{stderr}");
+    Ok(())
+}
+
 /// an output's folder gets the .gitignore any dataset folder gets, outside the data folder too,
 /// for the author and for a teammate. it is fetchloom's, never the output's: no check, pin,
 /// status or sync takes it for a file of the folder.

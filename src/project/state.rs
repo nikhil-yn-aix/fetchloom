@@ -302,8 +302,9 @@ pub(crate) struct Placed {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) adopted: bool,
     /// whether the file is an output's: the author's own, pinned where their pipeline wrote it, or
-    /// a writable copy a sync placed there. once no output places it, the record goes and the
-    /// file stays; no command but `sync --force` deletes it.
+    /// a writable copy a sync placed there. the author's own stays once no pin places it, its
+    /// record gone, and so does a copy of an output data.toml no longer names; any other copy
+    /// follows its output's pin as any placed file does.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) output: bool,
     /// whether a sync found this file, a copy of its own, cannot be linked to the cache's copy:

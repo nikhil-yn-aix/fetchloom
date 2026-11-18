@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::put::Tally;
 use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
+use crate::cli::sync::disk::is_inside;
 use crate::output::{Output, Warning};
 use crate::place::Method;
 use crate::plan;
@@ -892,15 +893,32 @@ pub(super) fn set_aside(output: &Output, manifest: &Manifest, aside: &BTreeMap<S
 fn warn_retired(output: &Output, placement: &Placement) {
     for retired in &placement.retired {
         let folder = &retired.folder;
-        let (said, help) = match retired.unplaced.as_slice() {
-            [] => continue,
-            [only] => (
+        let (said, help) = match (&retired.output, retired.unplaced.as_slice()) {
+            (_, []) => continue,
+            (Some((name, at)), [only]) => (
+                format!(
+                    "{folder} held {name} until its folder moved to {at}, and still holds {only}, a file its pin does not hold, so the folder stays"
+                ),
+                format!(
+                    "it is yours, and fetchloom no longer looks at it; delete {folder} once you no longer need it"
+                ),
+            ),
+            (Some((name, at)), [first, ..]) => (
+                format!(
+                    "{folder} held {name} until its folder moved to {at}, and still holds {} files its pin does not hold, such as {first}, so the folder stays",
+                    retired.unplaced.len()
+                ),
+                format!(
+                    "they are yours, and fetchloom no longer looks at them; delete {folder} once you no longer need them"
+                ),
+            ),
+            (None, [only]) => (
                 format!(
                     "{folder} still holds {only}, a file fetchloom did not place, so the folder stays"
                 ),
                 "it is yours, and fetchloom no longer looks at it".to_owned(),
             ),
-            [first, ..] => (
+            (None, [first, ..]) => (
                 format!(
                     "{folder} still holds {} files fetchloom did not place, such as {first}, so the folder stays",
                     retired.unplaced.len()
@@ -942,6 +960,13 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         };
         output.warn_with(Warning::PlaceBlocked, &said, &help);
     }
+    // a copy an output's move left is named with its folder
+    let moved = |path: &str| {
+        placement
+            .retired
+            .iter()
+            .any(|retired| retired.output.is_some() && is_inside(path, &retired.folder))
+    };
     for kept in &placement.kept {
         let force = forcing(
             manifest,
@@ -950,6 +975,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         );
         let (message, help) = match kept.reason {
             Reason::Blocked => continue,
+            Reason::Unneeded if moved(&kept.path) => continue,
             Reason::Changed | Reason::Foreign if kept.told => continue,
             Reason::Changed => match kept.dataset.as_deref() {
                 Some(dataset) if kept.earlier => (

@@ -353,11 +353,11 @@ pub(crate) fn left_at<'f>(
     pinned.iter().all(held).then(|| from.to_owned())
 }
 
-/// the outputs of a placing: where each lives, and those left whole for a change.
+/// the outputs of a placing: those data.toml names, and those left whole for a change.
 #[derive(Debug, Default)]
 pub(crate) struct Outputs {
-    /// each output's folder, by name.
-    at: HashMap<String, String>,
+    /// the outputs data.toml names, by name.
+    named: HashSet<String>,
     /// the outputs a sync leaves whole, by name.
     left: HashSet<String>,
 }
@@ -365,20 +365,14 @@ pub(crate) struct Outputs {
 impl Outputs {
     pub(crate) fn of(manifest: &Manifest) -> Outputs {
         Outputs {
-            at: manifest
+            named: manifest
                 .datasets
                 .iter()
-                .filter_map(|(name, entry)| Some((name.clone(), entry.at.clone()?)))
+                .filter(|(_, entry)| entry.is_output())
+                .map(|(name, _)| name.clone())
                 .collect(),
             left: HashSet::new(),
         }
-    }
-
-    /// whether `path`, recorded for `dataset`, is in that output's folder now.
-    fn holds(&self, dataset: &str, path: &str) -> bool {
-        self.at
-            .get(dataset)
-            .is_some_and(|at| super::disk::is_inside(path, at))
     }
 }
 
@@ -836,8 +830,8 @@ enum Unwanted {
     /// someone changed it, so it stays.
     Keep,
     Gone,
-    /// an output's file the author made, or one no output places now: its record goes, and the
-    /// file stays.
+    /// an output's file the author made, a copy of an output data.toml names no more, or one
+    /// outside the folders a sync lists: its record goes, and the file stays.
     Untrack,
 }
 
@@ -1553,6 +1547,12 @@ impl<'a> Placing<'a> {
             .map(|(path, _)| path.as_str())
             .collect();
         preview.placement.retired = self.survey.retired(&wanted, &going);
+        moved_out(
+            &mut preview.placement.retired,
+            self.manifest,
+            &self.survey,
+            &unwanted,
+        );
         preview.placement.left_behind =
             self.survey.left_behind(&self.project.root, &wanted, &going);
         for (path, fate) in unwanted {
@@ -1579,6 +1579,7 @@ impl<'a> Placing<'a> {
                 Unwanted::Gone | Unwanted::Untrack => {}
             }
         }
+        left_by_move(&mut preview.placement.retired, &preview.placement.kept);
     }
 
     /// how many files the plan puts in the data folder, placed already or not.
@@ -3226,6 +3227,7 @@ fn remove_unwanted(
         .map(|(path, _)| path.as_str())
         .collect();
     placement.retired = survey.retired(wanted, &going);
+    moved_out(&mut placement.retired, manifest, survey, &unwanted);
     placement.left_behind = survey.left_behind(&project.root, wanted, &going);
     for (path, fate) in unwanted {
         placer.stop().check()?;
@@ -3259,8 +3261,73 @@ fn remove_unwanted(
             Unwanted::Keep => placement.kept.push(Kept::new(path, Reason::Unneeded)),
         }
     }
+    left_by_move(&mut placement.retired, &placement.kept);
+    // a folder an output's move left holding files keeps its marker, theirs from now on as the
+    // files are, so no later sync deletes it while they stay
+    for retired in &placement.retired {
+        if retired.output.is_some() && !retired.unplaced.is_empty() {
+            let folder = retired.folder.as_str();
+            survey
+                .state
+                .markers
+                .retain(|marked, _| !super::disk::is_inside(marked, folder));
+        }
+    }
     clear_system_made(project, placer, &placement.retired, &placement.kept);
     Ok(changed)
+}
+
+/// gives each folder of `retired` that held copies a sync placed for an output whose pin moved
+/// that output and its folder now, as the records of the files of `unwanted` tell.
+fn moved_out(
+    retired: &mut [Retired],
+    manifest: &Manifest,
+    survey: &Survey,
+    unwanted: &[(String, Unwanted)],
+) {
+    for (path, fate) in unwanted {
+        let Some(placed) = survey.state.files.get(path) else {
+            continue;
+        };
+        let Some(at) = manifest
+            .datasets
+            .get(&placed.dataset)
+            .and_then(|entry| entry.at.as_deref())
+        else {
+            continue;
+        };
+        let moved = placed.output
+            && !matches!(fate, Unwanted::Untrack)
+            && manifest.output_holding(path).map(|(name, _)| name) != Some(placed.dataset.as_str());
+        if let Some(retired) = retired
+            .iter_mut()
+            .filter(|_| moved)
+            .find(|retired| super::disk::is_inside(path, &retired.folder))
+        {
+            retired
+                .output
+                .get_or_insert_with(|| (placed.dataset.clone(), at.to_owned()));
+        }
+    }
+}
+
+/// adds to the files each folder of `retired` an output's move left holds the copies of `kept`
+/// there, kept as changed, so one line names them all with the folder.
+fn left_by_move(retired: &mut [Retired], kept: &[Kept]) {
+    for retired in retired
+        .iter_mut()
+        .filter(|retired| retired.output.is_some())
+    {
+        let folder = retired.folder.as_str();
+        retired.unplaced.extend(
+            kept.iter()
+                .filter(|kept| {
+                    kept.reason == Reason::Unneeded && super::disk::is_inside(&kept.path, folder)
+                })
+                .map(|kept| kept.path.clone()),
+        );
+        retired.unplaced.sort();
+    }
 }
 
 /// the outputs whose folders hold the author's own files, as `state` recorded their capture there:
@@ -3625,8 +3692,14 @@ fn unwanted(
         })
         .map(|(path, placed)| {
             let fate = match survey.disk.get(path) {
-                // the author's own files, and those no output places now, stay
-                _ if placed.output && (placed.adopted || !outputs.holds(&placed.dataset, path)) => {
+                // the author's own files stay, and so do the copies of an output data.toml names no
+                // more, as remove promises, and those where a sync deletes nothing; those of one
+                // whose pin moved go as any old placement
+                _ if placed.output
+                    && (placed.adopted
+                        || !outputs.named.contains(&placed.dataset)
+                        || survey.unlisted(path)) =>
+                {
                     Unwanted::Untrack
                 }
                 None => Unwanted::Gone,

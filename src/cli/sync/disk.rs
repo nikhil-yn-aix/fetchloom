@@ -203,6 +203,9 @@ pub(crate) struct Retired {
     /// the files in it an operating system made, sorted, which go with the folder when nothing
     /// else keeps it.
     pub(crate) system: Vec<String>,
+    /// the output whose copies a sync placed here before its pin moved, and its folder now, when
+    /// the folder held such copies: `unplaced` then also names the copies kept as changed.
+    pub(crate) output: Option<(String, String)>,
 }
 
 /// what stands at a path in the data folder.
@@ -591,6 +594,7 @@ impl Survey {
                     folder: folder.to_owned(),
                     unplaced: Vec::new(),
                     system: Vec::new(),
+                    output: None,
                 });
                 if self.made_by_system(path) {
                     found.system.push(path.clone());
@@ -617,6 +621,12 @@ impl Survey {
         self.disk.contains_key(path)
             && !self.state.files.contains_key(path)
             && name::system_file(path.rsplit('/').next().unwrap_or(path))
+    }
+
+    /// whether `path`, a file the state records, lies outside every folder the survey lists, where
+    /// a sync deletes nothing.
+    pub(crate) fn unlisted(&self, path: &str) -> bool {
+        self.folders.holding(path).is_none()
     }
 
     /// windows listings keep a hardlink's size, time and read-only flag as this name last saw
