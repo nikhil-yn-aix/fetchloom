@@ -1255,7 +1255,7 @@ fn a_told_output_change_moved_with_its_data_folder_is_followed() -> Result {
     let said = text(&told.stderr)?;
     assert!(
         said.contains(
-            "warning: data/processed changed since processed was pinned: 1 file changed, 1 added"
+            "warning: data/processed changed since processed was pinned: 1 edited file, 1 extra file"
         ),
         "{said}"
     );

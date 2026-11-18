@@ -303,21 +303,7 @@ fn tell_repairs(output: &Output, status: &Status) {
     }
     // an output's rerun is pinned as it is, which comes first; --force discards it
     for changed in &status.changed_outputs {
-        let name = &changed.name;
-        if changed.gone {
-            output.hint(&format!(
-                "{} is gone: {}",
-                changed.shown,
-                place::ways_back(name)
-            ));
-            continue;
-        }
-        output.hint(&format!(
-            "{} changed since {name} was pinned: `{}` pins it as it is now, or `{}` discards the changes",
-            changed.shown,
-            super::project::command(&crate::source::local::output_pin(name, &changed.shown)),
-            super::project::command(&format!("sync --force {name}"))
-        ));
+        output.hint(&changed.said());
     }
     let blocked = status.blocked.iter().map(|blocker| &blocker.path);
     if status

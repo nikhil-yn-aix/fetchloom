@@ -378,7 +378,7 @@ fn a_gone_outputs_folder_is_told_as_gone_and_never_searched_for() -> Result {
         assert_eq!(added.status.code(), Some(2), "{typed:?}: {stderr}");
         assert!(
             stderr.contains(&format!(
-                "error: {} is the folder of the output processed, and it is not there\n  help: run your pipeline to make it, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n",
+                "error: {} is the folder of the output processed, and it is not there\n  help: `fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n",
                 typed[0]
             )),
             "{typed:?}: {stderr}"
@@ -698,7 +698,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     let said = document["warnings"].to_string();
     assert!(
         said.contains(
-            "`fetchloom sync --force processed` to make it hold just the files processed pins"
+            "`fetchloom sync --force processed` makes it hold just the files processed pins"
         ),
         "{said}"
     );
@@ -810,7 +810,7 @@ fn a_branch_switch_between_two_pinned_runs_mixes_no_runs() -> Result {
     let synced = sandbox.run(&["sync"])?;
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
-    let changes = "1 file changed, 1 added, 1 removed";
+    let changes = "1 edited file, 1 extra file, 1 missing file";
     assert!(
         said.contains(&format!(
             "data/processed changed since processed was pinned, {changes}"
@@ -881,7 +881,7 @@ fn a_file_added_to_an_outputs_folder_changes_it_for_sync_too() -> Result {
     let stderr = text(&synced.stderr)?;
     assert_eq!(synced.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("warning: data/processed changed since processed was pinned: 1 file added, so sync leaves it as it is"),
+        stderr.contains("warning: data/processed changed since processed was pinned: 1 extra file, so sync leaves it as it is"),
         "{stderr}"
     );
     let strict = sandbox.run(&["--json", "sync", "--strict"])?;
@@ -952,7 +952,7 @@ fn status_after_a_rerun_names_the_pin_first() -> Result {
     assert_eq!(
         hints,
         [
-            "data/processed changed since processed was pinned: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned, 1 edited file, 1 extra file, 1 missing file: `fetchloom add ./data/processed --as processed` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins"
         ],
         "{stderr}"
     );
@@ -1199,7 +1199,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         synced["errors"][0]["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned, 1 edited file: `fetchloom add ./data/processed --as processed` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins"
         ]),
         "{synced}"
     );
@@ -1218,7 +1218,7 @@ fn status_check_and_a_dry_run_judge_an_outputs_whole_folder() -> Result {
     assert_eq!(
         error["details"],
         serde_json::json!([
-            "data/processed changed since processed was pinned, 1 file changed, 1 added, 1 removed: `fetchloom add ./data/processed --as processed` pins it as it is now, or `fetchloom sync --force processed` discards the changes"
+            "data/processed changed since processed was pinned, 1 edited file, 1 extra file, 1 missing file: `fetchloom add ./data/processed --as processed` pins what it holds now, or `fetchloom sync --force processed` makes it hold just the files processed pins"
         ]),
         "{document}"
     );
@@ -1934,7 +1934,7 @@ fn push_sends_an_outputs_pinned_files_and_says_when_its_folder_changed() -> Resu
     assert_eq!(pushed.status.code(), Some(0), "{document}");
     assert_eq!(
         crate::support::warning(&document, "output.changed")["message"],
-        "data/processed changed since processed was pinned: 1 file added, so push sends the files processed pins, not these",
+        "data/processed changed since processed was pinned: 1 extra file, so push sends the files processed pins, not these",
         "{document}"
     );
     assert_eq!(

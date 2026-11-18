@@ -39,6 +39,31 @@ pub(crate) fn output_pin(name: &str, folder: &str) -> String {
     format!("add {} --as {name}", crate::suggested::shell_word(&path))
 }
 
+/// what became of an output's folder since it was pinned, as the ways on from it differ.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Since {
+    /// it holds other files than the pin.
+    Changed,
+    /// nothing is at it.
+    Gone,
+}
+
+/// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
+/// was pinned: what it holds now pinned again, or the files it pins put back; a folder that is
+/// gone is put back, or named where it went.
+pub(crate) fn ways_on(name: &str, shown: &str, since: Since) -> String {
+    let force = crate::suggested::command(&format!("sync --force {name}"));
+    match since {
+        Since::Changed => format!(
+            "`{}` pins what it holds now, or `{force}` makes it hold just the files {name} pins",
+            pinned_again(name, shown)
+        ),
+        Since::Gone => format!(
+            "`{force}` puts back the files {name} pins, or if you moved it, set at = \"<new folder>\" for {name} in data.toml"
+        ),
+    }
+}
+
 /// the command that pins what the folder of the output `name` holds now, `at` as a command names
 /// it, keeping its table in data.toml as written.
 fn pinned_again(name: &str, at: &str) -> String {

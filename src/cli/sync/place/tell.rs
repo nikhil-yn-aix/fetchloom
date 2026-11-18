@@ -1007,15 +1007,7 @@ fn warn_changed_outputs(output: &Output, placement: &Placement) {
                 changed.at,
                 changed.summary()
             ),
-            &if changed.gone {
-                super::ways_back(name)
-            } else {
-                format!(
-                    "run `{}` to make it hold just the files {name} pins, or `{}` to pin what it holds now",
-                    crate::suggested::command(&format!("sync --force {name}")),
-                    crate::suggested::command(&crate::source::local::output_pin(name, &changed.shown))
-                )
-            },
+            &changed.ways_on(),
         );
     }
 }

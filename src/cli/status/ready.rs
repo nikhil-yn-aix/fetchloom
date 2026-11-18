@@ -8,7 +8,7 @@ use super::Status;
 use crate::cli::project::command;
 use crate::cli::sync::Scope;
 use crate::cli::sync::disk::is_inside;
-use crate::cli::sync::place::{Placement, Reason};
+use crate::cli::sync::place::{ChangedOutput, Placement, Reason};
 use crate::error::{Error, Kind};
 use crate::project::lock::Waiting;
 
@@ -50,14 +50,8 @@ pub(in crate::cli) enum Unready {
     NotDownloaded { name: String, by: &'static str },
     /// a dataset whose file list, which data.lock names, is not beside it.
     Waiting(Box<Waiting>),
-    /// an output whose folder changed since it was pinned, which sync leaves whole: its name,
-    /// its folder as a command names it, what changed, and whether the folder is gone.
-    Output {
-        name: String,
-        shown: String,
-        changes: String,
-        gone: bool,
-    },
+    /// an output whose folder changed since it was pinned, which sync leaves whole.
+    Output(Box<ChangedOutput>),
     /// an output whose files this machine lacks, as a clone of the project that made it does,
     /// which sync leaves out: its name, and its folder as a command names it.
     Elsewhere { name: String, shown: String },
@@ -137,22 +131,7 @@ impl Unready {
                 "{} waits for its file list {}, which is not there: commit data.lock.d where it was pinned",
                 waiting.name, waiting.part
             ),
-            Unready::Output {
-                name, shown, gone, ..
-            } if *gone => format!(
-                "{shown} is gone: {}",
-                crate::cli::sync::place::ways_back(name)
-            ),
-            Unready::Output {
-                name,
-                shown,
-                changes,
-                ..
-            } => format!(
-                "{shown} changed since {name} was pinned, {changes}: `{}` pins it as it is now, or `{}` discards the changes",
-                command(&crate::source::local::output_pin(name, shown)),
-                command(&format!("sync --force {name}"))
-            ),
+            Unready::Output(changed) => changed.said(),
             Unready::Elsewhere { name, shown } => line(crate::source::local::made_elsewhere(
                 &[(name, shown)],
                 false,
@@ -241,12 +220,7 @@ pub(in crate::cli) fn after_sync(
         placement
             .changed_outputs
             .iter()
-            .map(|changed| Unready::Output {
-                name: changed.name.clone(),
-                shown: changed.shown.clone(),
-                changes: changed.summary(),
-                gone: changed.gone,
-            }),
+            .map(|changed| Unready::Output(Box::new(changed.clone()))),
     );
     unready.extend(elsewhere(
         placement
@@ -390,12 +364,11 @@ pub(super) fn of_status(status: &Status) -> Vec<Unready> {
                 hashed: status.hashed_only.contains(path),
             }),
     );
-    unready.extend(outputs.iter().map(|changed| Unready::Output {
-        name: changed.name.clone(),
-        shown: changed.shown.clone(),
-        changes: changed.summary(),
-        gone: changed.gone,
-    }));
+    unready.extend(
+        outputs
+            .iter()
+            .map(|changed| Unready::Output(Box::new(changed.clone()))),
+    );
     unready.extend(elsewhere(made));
     unready
 }

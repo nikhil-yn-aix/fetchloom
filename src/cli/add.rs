@@ -408,9 +408,7 @@ fn output_gone(word: &str, project: &Project) -> Option<Error> {
                 word.trim()
             ),
         )
-        .help(format!(
-            "run your pipeline to make it, or if you moved it, set at = \"<new folder>\" for {output} in data.toml"
-        )),
+        .help(local::ways_on(output, word.trim(), local::Since::Gone)),
     )
 }
 

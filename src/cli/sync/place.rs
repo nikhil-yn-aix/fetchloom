@@ -31,6 +31,7 @@ use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::{Look, Once, Placed, State, Synced, Uncached};
 use crate::project::{Project, native};
+use crate::source::local::Since;
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -254,39 +255,51 @@ impl ChangedOutput {
         self
     }
 
-    /// `1 file changed, 2 added, 1 removed`, leaving out what is none.
+    /// `1 edited file, 2 extra files, 1 missing file`, as status lists them, leaving out what is
+    /// none.
     pub(crate) fn summary(&self) -> String {
-        changes_said(self.changed, self.added, self.removed)
+        let counts = [
+            (self.changed, "edited"),
+            (self.added, "extra"),
+            (self.removed, "missing"),
+        ];
+        let said: Vec<String> = counts
+            .into_iter()
+            .filter(|(count, _)| *count > 0)
+            .map(|(count, how)| {
+                crate::units::count(count, &format!("{how} file"), &format!("{how} files"))
+            })
+            .collect();
+        said.join(", ")
+    }
+
+    /// the ways on from this output's folder, as it changed or is gone.
+    pub(crate) fn ways_on(&self) -> String {
+        let since = if self.gone {
+            Since::Gone
+        } else {
+            Since::Changed
+        };
+        crate::source::local::ways_on(&self.name, &self.shown, since)
+    }
+
+    /// what became of this output's folder and the ways on, as a line of status says it.
+    pub(crate) fn said(&self) -> String {
+        if self.gone {
+            return format!("{} is gone: {}", self.shown, self.ways_on());
+        }
+        format!(
+            "{} changed since {} was pinned, {}: {}",
+            self.shown,
+            self.name,
+            self.summary(),
+            self.ways_on()
+        )
     }
 
     fn is_changed(&self) -> bool {
         self.changed + self.added + self.removed > 0
     }
-}
-
-/// how the output `name` comes back once its folder is gone: `sync --force` puts back the files it
-/// pins, and a folder moved on purpose is named in data.toml.
-pub(crate) fn ways_back(name: &str) -> String {
-    format!(
-        "`{}` puts back the files {name} pins, or if you moved it, set at = \"<new folder>\" for {name} in data.toml",
-        crate::suggested::command(&format!("sync --force {name}"))
-    )
-}
-
-/// `1 file changed, 2 added, 1 removed` for these counts of files, leaving out what is none.
-pub(crate) fn changes_said(changed: u64, added: u64, removed: u64) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    for (count, done) in [(changed, "changed"), (added, "added"), (removed, "removed")] {
-        if count == 0 {
-            continue;
-        }
-        parts.push(if parts.is_empty() {
-            format!("{} {done}", crate::units::count(count, "file", "files"))
-        } else {
-            format!("{} {done}", crate::units::grouped(count))
-        });
-    }
-    parts.join(", ")
 }
 
 /// the outputs of a placing: where each lives, and those left whole for a change.
