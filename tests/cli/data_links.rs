@@ -1035,68 +1035,82 @@ fn a_cookiecutter_data_folder_on_scratch_is_followed() -> Result {
     Ok(())
 }
 
-/// a file in the folder of an output this project declares that no pin of the output places is
-/// what `sync --force` deletes, as the output's snapshot lacks it, so a link's first follow refuses
-/// the folder holding it; git's placeholder there is no file of the output. pinning that folder
-/// again claims the file, and the link is followed then.
+/// a file in the folder of an output this project declares that `sync --force` would harm, one no
+/// pin of the output places, which it deletes as the output's snapshot lacks it, or a rerun's at a
+/// path the pin holds, which it replaces, refuses a link's first follow of the folder holding it,
+/// with help naming the pin of the folder again; git's placeholder there is no file of the output.
+/// pinning that folder again claims the file, and the link is followed then.
 #[test]
-fn a_stray_file_in_an_outputs_folder_refuses_the_first_follow() -> Result {
-    let sandbox = Sandbox::new()?;
-    let scratch = sandbox.folder("scratch")?;
-    let target = scratch.join("project-data");
-    let processed = target.join("processed");
-    fs::create_dir_all(&processed)?;
-    if link_folder(&target, &sandbox.work().join("data")).is_err() {
-        return crate::support::skipped("symlinks", "no symbolic link can be made here");
-    }
-    let origin = sandbox.folder("origin")?;
-    fs::create_dir_all(origin.join("data").join("processed"))?;
-    fs::write(
-        origin.join("data").join("processed").join("clean.csv"),
-        b"clean\n",
-    )?;
-    let pinned = sandbox
-        .command_in(&origin, &["add", "data/processed", "--as", "processed"])
-        .output()?;
-    assert_eq!(pinned.status.code(), Some(0), "{}", text(&pinned.stderr)?);
-    for name in ["data.toml", "data.lock"] {
-        fs::copy(origin.join(name), sandbox.work().join(name))?;
-    }
-    fs::write(processed.join("clean.csv"), b"clean\n")?;
-    fs::write(processed.join(".gitkeep"), b"")?;
-    fs::write(processed.join("stray.csv"), b"mine\n")?;
-    ok(&sandbox.run(&[
-        "settings",
-        "set",
-        "data_links",
-        &scratch.display().to_string(),
-    ])?)?;
-    let before = listing(&target)?;
-    for args in [
-        &["--offline", "sync"][..],
-        &["--offline", "sync", "--force", "processed"],
+fn a_file_force_would_harm_in_an_outputs_folder_refuses_the_first_follow() -> Result {
+    for (file, bytes, harm) in [
+        (
+            "stray.csv",
+            &b"mine\n"[..],
+            "processed/stray.csv is in an output's folder though no pin places it, which `sync --force` would delete",
+        ),
+        (
+            "clean.csv",
+            b"rerun\n",
+            "processed/clean.csv holds other bytes than data.lock pins, which `sync --force` would replace",
+        ),
     ] {
-        let output = sandbox.run(args)?;
-        let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
-        assert!(
-            stderr.contains(&format!(
-                " is a link to {}, where processed/stray.csv is in an output's folder though no pin places it, which `sync --force` would delete, so fetchloom places nothing through it\n",
-                real(&target)?
-            )),
-            "{args:?}: {stderr}"
-        );
-        assert!(
-            stderr.contains("help: point the link at a folder of this project's own, or keep that file by moving it out of the output's folder or by pinning the folder again with `fetchloom add ./data/processed --as processed`\n"),
-            "{args:?}: {stderr}"
-        );
-        assert_eq!(listing(&target)?, before, "{args:?}");
+        let sandbox = Sandbox::new()?;
+        let scratch = sandbox.folder("scratch")?;
+        let target = scratch.join("project-data");
+        let processed = target.join("processed");
+        fs::create_dir_all(&processed)?;
+        if link_folder(&target, &sandbox.work().join("data")).is_err() {
+            return crate::support::skipped("symlinks", "no symbolic link can be made here");
+        }
+        let origin = sandbox.folder("origin")?;
+        fs::create_dir_all(origin.join("data").join("processed"))?;
+        fs::write(
+            origin.join("data").join("processed").join("clean.csv"),
+            b"clean\n",
+        )?;
+        let pinned = sandbox
+            .command_in(&origin, &["add", "data/processed", "--as", "processed"])
+            .output()?;
+        assert_eq!(pinned.status.code(), Some(0), "{}", text(&pinned.stderr)?);
+        for name in ["data.toml", "data.lock"] {
+            fs::copy(origin.join(name), sandbox.work().join(name))?;
+        }
+        fs::write(processed.join("clean.csv"), b"clean\n")?;
+        fs::write(processed.join(".gitkeep"), b"")?;
+        fs::write(processed.join(file), bytes)?;
+        ok(&sandbox.run(&[
+            "settings",
+            "set",
+            "data_links",
+            &scratch.display().to_string(),
+        ])?)?;
+        let before = listing(&target)?;
+        for args in [
+            &["--offline", "sync"][..],
+            &["--offline", "sync", "--force", "processed"],
+        ] {
+            let output = sandbox.run(args)?;
+            let stderr = text(&output.stderr)?;
+            assert_eq!(output.status.code(), Some(50), "{args:?}: {stderr}");
+            assert!(
+                stderr.contains(&format!(
+                    " is a link to {}, where {harm}, so fetchloom places nothing through it\n",
+                    real(&target)?
+                )),
+                "{args:?}: {stderr}"
+            );
+            assert!(
+                stderr.contains("help: point the link at a folder of this project's own, or keep that file by moving it out of the output's folder or by pinning the folder again with `fetchloom add ./data/processed --as processed`\n"),
+                "{args:?}: {stderr}"
+            );
+            assert_eq!(listing(&target)?, before, "{args:?}");
+        }
+        ok(&sandbox.run(&["add", "./data/processed", "--as", "processed", "--yes"])?)?;
+        let synced = sandbox.run(&["--offline", "sync"])?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        assert_eq!(fs::read(processed.join(file))?, bytes);
+        assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
     }
-    ok(&sandbox.run(&["add", "data/processed", "--as", "processed", "--yes"])?)?;
-    let synced = sandbox.run(&["--offline", "sync"])?;
-    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
-    assert_eq!(fs::read(processed.join("stray.csv"))?, b"mine\n");
-    assert_eq!(recorded(&sandbox.work(), "data")?, Some(resolved(&target)?));
     Ok(())
 }
 

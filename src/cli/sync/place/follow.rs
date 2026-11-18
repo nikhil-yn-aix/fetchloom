@@ -76,16 +76,20 @@ pub(super) fn refuse_harm(
     };
     if !replaced.is_empty() {
         let holds = if replaced.len() == 1 { "holds" } else { "hold" };
+        let help = match outputs_holding(manifest, &replaced) {
+            Some(outputs) => keeping(project, &outputs, replaced.len()),
+            None => format!(
+                "point the link at a folder of this project's own, or {}: a file holding the pinned bytes is taken as placed",
+                move_away(&replaced)
+            ),
+        };
         return Err(refused(
             link,
             &format!(
                 "{} {holds} other bytes than data.lock pins, which `sync --force` would replace",
                 named(&replaced)
             ),
-            &format!(
-                "point the link at a folder of this project's own, or {}: a file holding the pinned bytes is taken as placed",
-                move_away(&replaced)
-            ),
+            &help,
         ));
     }
     if !in_the_way.is_empty() {
@@ -123,12 +127,46 @@ fn unpinned(
     deleted: &BTreeMap<&str, (&str, &str)>,
     files: &str,
 ) -> Error {
-    let (is, it, those) = if deleted.len() == 1 {
-        ("is", "it", "that file")
+    let (is, it) = if deleted.len() == 1 {
+        ("is", "it")
     } else {
-        ("are", "them", "those files")
+        ("are", "them")
     };
     let outputs: BTreeSet<(&str, &str)> = deleted.values().copied().collect();
+    refused(
+        link,
+        &format!(
+            "{files} {is} in an output's folder though no pin places {it}, which `sync --force` would delete"
+        ),
+        &keeping(project, &outputs, deleted.len()),
+    )
+}
+
+/// the name and folder of each output of `manifest` holding one of `paths`, or none when one is in
+/// no output's folder.
+fn outputs_holding<'m>(
+    manifest: &'m Manifest,
+    paths: &BTreeSet<&str>,
+) -> Option<BTreeSet<(&'m str, &'m str)>> {
+    paths
+        .iter()
+        .map(|path| {
+            manifest.datasets.iter().find_map(|(name, entry)| {
+                let at = entry.at.as_deref()?;
+                is_inside(path, at).then_some((name.as_str(), at))
+            })
+        })
+        .collect()
+}
+
+/// the help of a refusal of `count` files in the folders of `outputs`, each an output's name and
+/// folder: keep them by moving them out, or by pinning the folder again, which claims them.
+fn keeping(project: &Project, outputs: &BTreeSet<(&str, &str)>, count: usize) -> String {
+    let (it, those) = if count == 1 {
+        ("it", "that file")
+    } else {
+        ("them", "those files")
+    };
     let again = match outputs.iter().next() {
         Some((name, at)) if outputs.len() == 1 => {
             crate::suggested::command(&crate::source::local::output_pin(
@@ -138,14 +176,8 @@ fn unpinned(
         }
         _ => crate::suggested::command("add <folder> --as <name>"),
     };
-    refused(
-        link,
-        &format!(
-            "{files} {is} in an output's folder though no pin places {it}, which `sync --force` would delete"
-        ),
-        &format!(
-            "point the link at a folder of this project's own, or keep {those} by moving {it} out of the output's folder or by pinning the folder again with `{again}`"
-        ),
+    format!(
+        "point the link at a folder of this project's own, or keep {those} by moving {it} out of the output's folder or by pinning the folder again with `{again}`"
     )
 }
 
@@ -283,4 +315,29 @@ fn refused(link: &Followed, why: &str, help: &str) -> Error {
         ),
     )
     .help(help)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeSet;
+
+    use super::outputs_holding;
+    use crate::project::manifest::Manifest;
+
+    /// a refusal names the pin of an output's folder again only when every file it names lies in
+    /// an output's folder: a fetched dataset's file among them keeps the help that fits it.
+    #[test]
+    fn only_files_all_in_outputs_take_the_pin_again() {
+        let manifest = Manifest::parse(
+            "[datasets.processed]\nref = \"local\"\nat = \"data/processed\"\n\n[datasets.iris]\nref = \"https://example.org/iris.csv\"\n",
+        )
+        .unwrap();
+        let rerun = BTreeSet::from(["data/processed/clean.csv"]);
+        assert_eq!(
+            outputs_holding(&manifest, &rerun),
+            Some(BTreeSet::from([("processed", "data/processed")]))
+        );
+        let mixed = BTreeSet::from(["data/processed/clean.csv", "data/iris/iris.csv"]);
+        assert_eq!(outputs_holding(&manifest, &mixed), None);
+    }
 }
