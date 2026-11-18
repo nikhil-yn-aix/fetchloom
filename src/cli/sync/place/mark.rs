@@ -79,9 +79,10 @@ pub(super) fn contents(
         .iter()
         .map(|run| folder_of[run[0].dataset].as_str())
         .collect();
+    let folders = DatasetFolders::of(manifest);
     let mut named: HashMap<&str, Entries> = placing
         .iter()
-        .filter(|folder| shared(manifest, folder))
+        .filter(|folder| folders.shared(folder))
         .map(|folder| (*folder, Entries::default()))
         .collect();
     if !named.is_empty() {
@@ -258,14 +259,40 @@ fn bare(survey: &Survey, folder: &str) -> bool {
     !survey.disk.contains_key(&path) && !survey.entries.contains_key(&path)
 }
 
-/// whether the person shares `folder`, a dataset's, with its datasets: the data folder itself, or
-/// one holding another dataset's folder, where `*` would hide the person's files too.
-fn shared(manifest: &Manifest, folder: &str) -> bool {
-    folder == manifest.data_dir
-        || manifest.datasets.keys().any(|name| {
-            let other = plan::folder(manifest, name);
-            other != folder && disk::is_inside(&other, folder)
-        })
+/// every dataset's folder in [`disk::folder_order`], which puts the folders inside one right after
+/// it, so whether a folder holds another dataset's folder is one search.
+struct DatasetFolders<'m> {
+    data_dir: &'m str,
+    sorted: Vec<String>,
+}
+
+impl<'m> DatasetFolders<'m> {
+    fn of(manifest: &'m Manifest) -> Self {
+        let mut sorted: Vec<String> = manifest
+            .datasets
+            .keys()
+            .map(|name| plan::folder(manifest, name))
+            .collect();
+        sorted.sort_unstable_by(|left, right| disk::folder_order(left, right));
+        DatasetFolders {
+            data_dir: &manifest.data_dir,
+            sorted,
+        }
+    }
+
+    /// whether the person shares `folder`, a dataset's, with its datasets: the data folder itself,
+    /// or one holding another dataset's folder, where `*` would hide the person's files too.
+    fn shared(&self, folder: &str) -> bool {
+        if folder == self.data_dir {
+            return true;
+        }
+        let after = self
+            .sorted
+            .partition_point(|other| disk::folder_order(other, folder).is_le());
+        self.sorted
+            .get(after)
+            .is_some_and(|other| disk::is_inside(other, folder))
+    }
 }
 
 /// a marker naming `entries`, each a name at the top of its folder and whether it is a folder,
@@ -830,6 +857,7 @@ pub(super) fn take_back(
 /// and no record waits to be forgotten, as a run that changes nothing leaves the markers.
 pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bool {
     let state = &survey.state;
+    let folders = std::cell::OnceCell::new();
     let placed: BTreeSet<String> = manifest
         .datasets
         .iter()
@@ -850,7 +878,12 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
                 // this project's own marker that no record names takes a run to record it again
                 (survey.disk.contains_key(&path) && !survey.unrecorded_marker(&folder))
                     || survey.entries.contains_key(&path)
-                    || too_full(manifest, state, &folder)
+                    || too_full(
+                        manifest,
+                        state,
+                        &folder,
+                        folders.get_or_init(|| DatasetFolders::of(manifest)),
+                    )
                     || kept_in_git(manifest, survey, &folder)
             }
         });
@@ -864,8 +897,8 @@ pub(crate) fn settled(manifest: &Manifest, survey: &Survey, scope: &Scope) -> bo
 
 /// whether the files `state` records in `folder`, one the person shares, put more entries at its
 /// top than a marker names, as [`contents`] counts them, so it gets none.
-fn too_full(manifest: &Manifest, state: &State, folder: &str) -> bool {
-    if !shared(manifest, folder) {
+fn too_full(manifest: &Manifest, state: &State, folder: &str, folders: &DatasetFolders) -> bool {
+    if !folders.shared(folder) {
         return false;
     }
     let below = format!("{folder}/");
@@ -1134,15 +1167,123 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        MOST_NAMED, TEXT, hiding_line, holds, in_marker_form, named_for, names, project_of, settled,
+        DatasetFolders, MOST_NAMED, TEXT, hiding_line, holds, in_marker_form, named_for, names,
+        project_of, settled,
     };
     use crate::cli::sync::Scope;
-    use crate::cli::sync::disk::{Folders, Survey};
+    use crate::cli::sync::disk::{self, Folders, Survey};
     use crate::digest;
     use crate::place::{Method, Placer};
+    use crate::plan;
     use crate::project::Project;
     use crate::project::manifest::Manifest;
     use crate::project::state::{Look, Once, Placed, State};
+
+    /// a folder the person shares is the data folder, or one holding another dataset's folder
+    /// below it: not one beside it that only starts alike, as data/ab or data/a-b beside data/a,
+    /// nor one that only a second dataset shares.
+    #[test]
+    fn a_folder_is_shared_as_the_data_folder_or_one_holding_another_folder() {
+        let manifest = Manifest::parse(concat!(
+            "[datasets.a]\nref = \"x\"\npath = \"a\"\n",
+            "[datasets.inner]\nref = \"x\"\npath = \"a/inner\"\n",
+            "[datasets.ab]\nref = \"x\"\npath = \"ab\"\n",
+            "[datasets.dash]\nref = \"x\"\npath = \"a-b\"\n",
+            "[datasets.x]\nref = \"x\"\npath = \"x\"\n",
+            "[datasets.xy]\nref = \"x\"\npath = \"xy\"\n",
+            "[datasets.one]\nref = \"x\"\npath = \"pair\"\n",
+            "[datasets.two]\nref = \"x\"\npath = \"pair\"\n",
+            "[datasets.run]\nref = \"local\"\nat = \"results/run\"\n",
+            "[datasets.part]\nref = \"x\"\npath = \"part\"\n",
+            "[datasets.output]\nref = \"local\"\nat = \"data/part/out\"\n",
+        ))
+        .unwrap();
+        let folders = DatasetFolders::of(&manifest);
+        for (folder, shared) in [
+            ("data", true),
+            ("data/a", true),
+            ("data/a/inner", false),
+            ("data/ab", false),
+            ("data/a-b", false),
+            ("data/x", false),
+            ("data/xy", false),
+            ("data/pair", false),
+            ("results/run", false),
+            ("data/part", true),
+            ("data/part/out", false),
+        ] {
+            assert_eq!(folders.shared(folder), shared, "{folder}");
+        }
+        let alone = Manifest::parse("[datasets.top]\nref = \"x\"\npath = \".\"\n").unwrap();
+        assert!(DatasetFolders::of(&alone).shared("data"));
+        let nested = "[project]\ndata_dir = \"data/in\"\n[datasets.a]\nref = \"x\"\n";
+        let nested = Manifest::parse(nested).unwrap();
+        let folders = DatasetFolders::of(&nested);
+        assert!(folders.shared("data/in"));
+        assert!(!folders.shared("data/in/a"));
+    }
+
+    /// the answer as a walk of every dataset for each folder gave it, the oracle for the search.
+    fn walked(manifest: &Manifest, folder: &str) -> bool {
+        folder == manifest.data_dir
+            || manifest.datasets.keys().any(|name| {
+                let other = plan::folder(manifest, name);
+                other != folder && disk::is_inside(&other, folder)
+            })
+    }
+
+    /// on generated tables of dataset folders, nested, beside one another, sharing a start or a
+    /// folder, at the data folder and as outputs, the search answers every folder as the walk did.
+    #[test]
+    fn the_sorted_folders_answer_as_a_walk_of_every_dataset() {
+        use std::fmt::Write as _;
+        const PARTS: [&str; 8] = ["a", "ab", "a-b", "a.b", "b", "A", "a b", "a_b"];
+        let mut seed: usize = 0x2545_f491;
+        let mut next = |below: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        for _ in 0..400 {
+            let data_dir = ["data", "data/a", "d"][next(3)];
+            let mut text = format!("[project]\ndata_dir = \"{data_dir}\"\n");
+            for at in 0..=next(12) {
+                let path = (0..=next(3))
+                    .map(|_| PARTS[next(PARTS.len())])
+                    .collect::<Vec<_>>()
+                    .join("/");
+                let _ = match next(8) {
+                    0 => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \".\"\n"),
+                    1 => write!(
+                        text,
+                        "[datasets.d{at}]\nref = \"local\"\nat = \"results/{path}\"\n"
+                    ),
+                    2 => write!(
+                        text,
+                        "[datasets.d{at}]\nref = \"local\"\nat = \"{data_dir}/{path}\"\n"
+                    ),
+                    _ => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \"{path}\"\n"),
+                };
+            }
+            let manifest = Manifest::parse(&text).unwrap();
+            let folders = DatasetFolders::of(&manifest);
+            let mut asked = vec![String::new(), data_dir.to_owned(), "results".to_owned()];
+            for name in manifest.datasets.keys() {
+                let folder = plan::folder(&manifest, name);
+                let parent = folder.rsplit_once('/').map(|(parent, _)| parent.to_owned());
+                asked.extend([format!("{folder}/"), format!("{folder}-"), folder]);
+                asked.extend(parent);
+            }
+            for folder in &asked {
+                assert_eq!(
+                    folders.shared(folder),
+                    walked(&manifest, folder),
+                    "{folder:?} in\n{text}"
+                );
+            }
+        }
+    }
 
     /// a folder the person shares, filled past what a marker names, settles with no marker of
     /// fetchloom's, so a sync with nothing to do stays quick; one at the limit needs its marker.

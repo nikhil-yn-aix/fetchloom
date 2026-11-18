@@ -1592,7 +1592,7 @@ fn way_down(
 }
 
 /// compares paths with an implicit final `/`, so `a-` cannot separate `a` from `a/x`.
-fn folder_order(left: &str, right: &str) -> std::cmp::Ordering {
+pub(super) fn folder_order(left: &str, right: &str) -> std::cmp::Ordering {
     use std::cmp::Ordering;
     let (left, right) = (left.as_bytes(), right.as_bytes());
     let end = left.len().min(right.len());
