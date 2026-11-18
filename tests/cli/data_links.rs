@@ -524,9 +524,10 @@ fn a_link_to_another_users_file_in_ones_own_folder_is_followed() -> Result {
 }
 
 /// a teammate's clone holds the author's data link when it was committed before the line that
-/// hides it. refused as not on this machine, not listed or another user's, a link git tracks is
-/// said to have come with the clone, with the way to a plain data folder: deleting it, and
-/// committing that. a link git does not track gets no such line.
+/// hides it. refused as not on this machine, not listed, another user's or holding what a first
+/// follow could harm, a link git tracks is said to have come with the clone, with the way to a
+/// plain data folder: deleting it, and committing that. a link git does not track gets no such
+/// line.
 #[cfg(unix)]
 #[test]
 fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
@@ -579,6 +580,19 @@ fn a_refused_link_git_tracks_says_it_came_with_the_clone() -> Result {
         &["sync"],
         None,
         "which does not exist: its disk may be unmounted",
+    )?;
+    assert!(said.contains(came), "{said}");
+    // a first follow's refusal, as of a folder holding other bytes where data.lock pins a file
+    let mine = root.join("mine");
+    fs::create_dir_all(mine.join("iris"))?;
+    fs::write(mine.join("iris").join("iris.csv"), b"not iris\n")?;
+    unlink(&data)?;
+    link_folder(&mine, &data)?;
+    commit("link data to a folder holding other bytes")?;
+    let said = refused(
+        &["sync"],
+        None,
+        "other bytes than data.lock pins, which `sync --force` would replace",
     )?;
     assert!(said.contains(came), "{said}");
     crate::merge::ok(&sandbox, &["rm", "-q", "--", "data"])?;

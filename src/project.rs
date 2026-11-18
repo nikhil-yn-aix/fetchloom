@@ -1716,17 +1716,26 @@ fn remember(folder: &Path) -> Result<(), Error> {
         .map_err(|err| Error::io(format_args!("could not read {}", folder.display()), &err))
 }
 
-/// the refusal of the link at `folder` to `found`, a folder `listed` holds, which lies in the
-/// project at `other`.
-fn taken(folder: &Path, found: &Path, other: &Path) -> Error {
+/// the refusal of the link at `at` to `found`, which `why` says what keeps fetchloom from following;
+/// each refusal adds its own help.
+pub(crate) fn link_refused(at: &Path, found: &Path, why: &str) -> Error {
     Error::new(
         Kind::ProjectInvalid,
         format!(
-            "{} is a link to {}, which lies in the project at {}, so fetchloom places nothing through it",
-            folder.display(),
-            found.display(),
-            other.display()
+            "{} is a link to {}, {why}, so fetchloom places nothing through it",
+            at.display(),
+            crate::machine::plain(found).display()
         ),
+    )
+}
+
+/// the refusal of the link at `folder` to `found`, a folder `listed` holds, which lies in the
+/// project at `other`.
+fn taken(folder: &Path, found: &Path, other: &Path) -> Error {
+    link_refused(
+        folder,
+        found,
+        &format!("which lies in the project at {}", other.display()),
     )
     .help("point the link at a folder of this project's own, outside every other project's folder")
 }
@@ -1734,14 +1743,7 @@ fn taken(folder: &Path, found: &Path, other: &Path) -> Error {
 /// the refusal of the link at `folder` to `found`, which no folder `listed` holds, with how to
 /// list the folder where the list came from.
 fn unlisted(folder: &Path, found: &Path, listed: &DataLinks) -> Error {
-    let error = Error::new(
-        Kind::ProjectInvalid,
-        format!(
-            "{} is a link to {}, which no folder in data_links holds, so fetchloom places nothing through it",
-            folder.display(),
-            found.display()
-        ),
-    );
+    let error = link_refused(folder, found, "which no folder in data_links holds");
     let entries = listed.folders.as_slice();
     let check = "check where it leads, since a cloned project's link can aim anywhere; if you made it to keep data on another disk";
     if listed.from_variable {

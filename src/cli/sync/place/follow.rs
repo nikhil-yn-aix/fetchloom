@@ -7,7 +7,7 @@ use std::path::Path;
 use super::mark::{self, Whose};
 use super::{Action, Held, Reason, edited, held, local, passed_over, reads_as_target};
 use crate::cli::sync::disk::{Blocker, Entry, Mark, Survey, is_inside};
-use crate::error::{Error, Kind};
+use crate::error::Error;
 use crate::place;
 use crate::plan::Target;
 use crate::project::manifest::Manifest;
@@ -40,7 +40,7 @@ pub(super) fn refuse_harm(
         crate::cache::run_as(),
         &owner_of,
     ) {
-        return Err(project.cloned_link(&link.path, theirs(link, entry, owner)));
+        return Err(theirs(project, link, entry, owner));
     }
     let inside = |path: &str| {
         is_inside(path, &link.path)
@@ -76,9 +76,10 @@ pub(super) fn refuse_harm(
             ),
         };
         return Err(refused(
+            project,
             link,
             &format!(
-                "{} {holds} other bytes than data.lock pins, which `sync --force` would replace",
+                "where {} {holds} other bytes than data.lock pins, which `sync --force` would replace",
                 named(&replaced)
             ),
             &help,
@@ -91,9 +92,10 @@ pub(super) fn refuse_harm(
             "stand"
         };
         return Err(refused(
+            project,
             link,
             &format!(
-                "{} {stands} where data.lock pins a folder, which `sync --force` would remove",
+                "where {} {stands} where data.lock pins a folder, which `sync --force` would remove",
                 named(&in_the_way)
             ),
             &format!(
@@ -126,9 +128,10 @@ fn unpinned(
     };
     let outputs: BTreeSet<(&str, &str)> = deleted.values().copied().collect();
     refused(
+        project,
         link,
         &format!(
-            "{files} {is} in an output's folder though no pin places {it}, which `sync --force` would delete"
+            "where {files} {is} in an output's folder though no pin places {it}, which `sync --force` would delete"
         ),
         &keeping(project, &outputs, deleted.len()),
     )
@@ -200,8 +203,9 @@ fn refuse_marked(
             "mark dataset folders of the project this one was copied or moved from"
         };
         return Err(refused(
+            project,
             link,
-            &format!("{} {why}", named(&paths)),
+            &format!("where {} {why}", named(&paths)),
             "if this is a copy, give it a data folder of its own: the cache keeps each file's bytes once. if you moved the project here and no other copy uses that folder, delete those .gitignore files, and sync makes them again",
         ));
     }
@@ -217,8 +221,9 @@ fn refuse_marked(
         )
     };
     Err(refused(
+        project,
         link,
-        &format!("{} {why}", named(&paths)),
+        &format!("where {} {why}", named(&paths)),
         &format!(
             "point the link at a folder of this project's own, or delete {those} if no other project places files there now"
         ),
@@ -405,34 +410,27 @@ fn owner_of(path: &Path) -> Option<u32> {
 /// the refusal of the first follow of `link` into a folder of the user `owner`, or one holding
 /// `entry` of theirs.
 #[cfg(unix)]
-fn theirs(link: &Followed, entry: Option<&str>, owner: u32) -> Error {
+fn theirs(project: &Project, link: &Followed, entry: Option<&str>, owner: u32) -> Error {
     let owner = crate::cache::said_user(owner);
     let why = match entry {
         Some(entry) => format!("where {entry} belongs to {owner}"),
         None => format!("which belongs to {owner}"),
     };
-    Error::new(
-        Kind::ProjectInvalid,
-        format!(
-            "{} is a link to {}, {why}, so fetchloom places nothing through it",
-            link.at.display(),
-            crate::machine::plain(&link.found).display()
-        ),
+    refused(
+        project,
+        link,
+        &why,
+        "point the link at a folder of your own; to share bytes with others, share a cache (FETCHLOOM_CACHE) rather than a data folder",
     )
-    .help("point the link at a folder of your own; to share bytes with others, share a cache (FETCHLOOM_CACHE) rather than a data folder")
 }
 
-/// the refusal of the first follow of `link`, where `why` says what a run could harm, with `help`.
-fn refused(link: &Followed, why: &str, help: &str) -> Error {
-    Error::new(
-        Kind::ProjectInvalid,
-        format!(
-            "{} is a link to {}, where {why}, so fetchloom places nothing through it",
-            link.at.display(),
-            crate::machine::plain(&link.found).display()
-        ),
+/// the refusal of the first follow of `link`, which `why` says what a run could harm, with `help`
+/// and, for a link git tracks, how it came with the clone.
+fn refused(project: &Project, link: &Followed, why: &str, help: &str) -> Error {
+    project.cloned_link(
+        &link.path,
+        crate::project::link_refused(&link.at, &link.found, why).help(help),
     )
-    .help(help)
 }
 
 #[cfg(test)]
