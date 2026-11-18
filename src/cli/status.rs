@@ -246,7 +246,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
 /// of another pin is a change too, and so is a pinned file never there, as after a branch switch.
 fn changed_outputs(
     status: &Status,
-    manifest: &Manifest,
+    (manifest, lock): (&Manifest, &Lock),
     root: &std::path::Path,
     state: &crate::project::state::State,
 ) -> Vec<place::ChangedOutput> {
@@ -282,7 +282,13 @@ fn changed_outputs(
                     .iter()
                     .filter(|path| ours || state.files.contains_key(*path)),
             );
-            (output.changed + output.added + output.removed > 0).then(|| output.looked_at(root))
+            let pinned = lock
+                .datasets
+                .iter()
+                .filter(|locked| locked.name == *name)
+                .flat_map(|locked| &locked.files);
+            (output.changed + output.added + output.removed > 0)
+                .then(|| output.looked_at(root, pinned, state))
         })
         .collect()
 }
@@ -757,7 +763,8 @@ fn check(
         status.kept_copies = kept_copies(&status.extra, &recorded);
         status.set_aside = set_aside(&status.extra, &survey);
         sort_extra(&mut status, &plan::Owned::of(&manifest));
-        status.changed_outputs = changed_outputs(&status, &manifest, &project.root, &survey.state);
+        status.changed_outputs =
+            changed_outputs(&status, (&manifest, &lock), &project.root, &survey.state);
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
@@ -792,7 +799,8 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
-    status.changed_outputs = changed_outputs(&status, &manifest, &project.root, &survey.state);
+    status.changed_outputs =
+        changed_outputs(&status, (&manifest, &lock), &project.root, &survey.state);
     Ok((status, manifest, lock_text))
 }
 

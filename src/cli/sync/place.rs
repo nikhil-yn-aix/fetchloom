@@ -220,6 +220,9 @@ pub(crate) struct ChangedOutput {
     /// whether nothing is at its folder, as after a move or a run that deleted it, so pinning
     /// what it holds now pins nothing.
     pub(crate) gone: bool,
+    /// the folder of a gone output that data.toml named before and that still holds its pin, as
+    /// a command names it.
+    pub(crate) left: Option<String>,
 }
 
 impl ChangedOutput {
@@ -236,13 +239,26 @@ impl ChangedOutput {
             told: false,
             edits: Vec::new(),
             gone: false,
+            left: None,
         }
     }
 
-    /// this output, as its folder in the project at `root` is there or gone.
-    pub(crate) fn looked_at(mut self, root: &Path) -> Self {
+    /// this output, as its folder in the project at `root` is there or gone, and when gone, where
+    /// `state` recorded its `pinned` files still held.
+    pub(crate) fn looked_at<'f>(
+        mut self,
+        root: &Path,
+        pinned: impl IntoIterator<Item = &'f LockedFile>,
+        state: &State,
+    ) -> Self {
         self.gone = fs::symlink_metadata(native(root, &self.at))
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
+        if self.gone {
+            // `shown` is `at` as a command run here names it
+            let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
+            self.left = left_at(root, (&self.name, &self.at), pinned, state)
+                .map(|from| format!("{up}{from}"));
+        }
         self
     }
 
@@ -273,12 +289,12 @@ impl ChangedOutput {
         said.join(", ")
     }
 
-    /// the ways on from this output's folder, as it changed or is gone.
+    /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
-        let since = if self.gone {
-            Since::Gone
-        } else {
-            Since::Changed
+        let since = match &self.left {
+            Some(from) => Since::Left(from),
+            None if self.gone => Since::Gone,
+            None => Since::Changed,
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -300,6 +316,34 @@ impl ChangedOutput {
     fn is_changed(&self) -> bool {
         self.changed + self.added + self.removed > 0
     }
+}
+
+/// the folder other than `at` where `state` recorded every file of `pinned`, the files of the
+/// output `name` as its dataset names them, each looking as recorded: the folder data.toml moved
+/// the output from, which still holds its pin.
+pub(crate) fn left_at<'f>(
+    root: &Path,
+    (name, at): (&str, &str),
+    pinned: impl IntoIterator<Item = &'f LockedFile>,
+    state: &State,
+) -> Option<String> {
+    let pinned: Vec<&LockedFile> = pinned.into_iter().collect();
+    let first = pinned.first()?;
+    let suffix = format!("/{}", first.path);
+    let from = state.files.iter().find_map(|(path, placed)| {
+        let from = path.strip_suffix(&suffix)?;
+        (from != at && placed.dataset == name && placed.sha256 == first.sha256).then_some(from)
+    })?;
+    let held = |file: &&LockedFile| {
+        let path = format!("{from}/{}", file.path);
+        state.files.get(&path).is_some_and(|placed| {
+            placed.dataset == name
+                && placed.sha256 == file.sha256
+                && fs::symlink_metadata(native(root, &path))
+                    .is_ok_and(|found| Look::of(&found) == placed.look)
+        })
+    };
+    pinned.iter().all(held).then(|| from.to_owned())
 }
 
 /// the outputs of a placing: where each lives, and those left whole for a change.
@@ -3325,7 +3369,16 @@ fn changed_outputs(
     let changed: Vec<ChangedOutput> = found
         .into_values()
         .filter(|(output, _)| output.is_changed())
-        .map(|(output, changes)| output.told_of(changes, &survey.state.told).looked_at(root))
+        .map(|(output, changes)| {
+            let pinned: Vec<&LockedFile> = targets
+                .iter()
+                .filter(|target| target.dataset == output.name)
+                .map(|target| target.file)
+                .collect();
+            output
+                .told_of(changes, &survey.state.told)
+                .looked_at(root, pinned, &survey.state)
+        })
         .collect();
     let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
     extras.retain(|(_, name)| left.contains(name.as_str()));

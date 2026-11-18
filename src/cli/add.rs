@@ -400,6 +400,18 @@ fn output_gone(word: &str, project: &Project) -> Option<Error> {
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
         _ => return None,
     }
+    let (state, _) = project.state();
+    let lock = project.lock().ok().flatten();
+    let pinned = lock
+        .iter()
+        .flat_map(|lock| &lock.datasets)
+        .filter(|locked| locked.name == *output)
+        .flat_map(|locked| &locked.files);
+    let left = crate::cli::sync::place::left_at(&project.root, (output, at), pinned, &state)
+        .map(|from| super::folder_from_here(&project.root, &from));
+    let since = left
+        .as_deref()
+        .map_or(local::Since::Gone, local::Since::Left);
     Some(
         Error::new(
             Kind::Usage,
@@ -408,7 +420,7 @@ fn output_gone(word: &str, project: &Project) -> Option<Error> {
                 word.trim()
             ),
         )
-        .help(local::ways_on(output, word.trim(), local::Since::Gone)),
+        .help(local::ways_on(output, word.trim(), since)),
     )
 }
 

@@ -340,6 +340,53 @@ fn a_moved_outputs_new_at_is_told_as_a_sync_moving_its_pin() -> Result {
     Ok(())
 }
 
+/// an output whose `at` data.toml changed while its folder stayed is told to move the folder that
+/// still holds its pin, by status, sync and an add of the new folder; once moved, sync has
+/// nothing to tell of it.
+#[test]
+fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    processed(&work)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    let manifest = work.join("data.toml");
+    let table = fs::read_to_string(&manifest)?;
+    let moved = table.replace("at = \"data/processed\"", "at = \"data/proc2\"");
+    assert_ne!(moved, table);
+    fs::write(&manifest, moved)?;
+    let ways = "`mv data/processed data/proc2` moves it where data.toml puts it now, or `fetchloom sync --force processed` puts back the files processed pins";
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        status.contains(&format!("hint: data/proc2 is gone: {ways}\n")),
+        "{status}"
+    );
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&format!("  help: {ways}\n")), "{stderr}");
+    let added = text(
+        &sandbox
+            .run(&["add", "data/proc2", "--as", "processed"])?
+            .stderr,
+    )?;
+    assert!(added.contains(&format!("  help: {ways}\n")), "{added}");
+    fs::rename(work.join("data/processed"), work.join("data/proc2"))?;
+    let synced = sandbox.run(&["sync"])?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("processed was pinned"), "{stderr}");
+    assert_eq!(fs::read(work.join("data/proc2/iris_clean.csv"))?, CLEAN);
+    // a folder left that no longer holds the pin is no move's
+    fs::write(&manifest, table)?;
+    crate::support::edit(&work.join("data/proc2/iris_clean.csv"), b"edited\n")?;
+    let status = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        status.contains("hint: data/processed is gone: `fetchloom sync --force processed` puts back the files processed pins, or if you moved it, set at"),
+        "{status}"
+    );
+    Ok(())
+}
+
 /// an output's folder that is gone, as after a move data.toml does not know of yet or a failed
 /// run, is told as gone with the two ways back, and an add of it in any spelling says so rather
 /// than send the folder's name off as search words.

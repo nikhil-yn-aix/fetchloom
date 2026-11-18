@@ -49,6 +49,20 @@ pub(crate) fn git(root: &std::path::Path, words: &str) -> String {
     }
 }
 
+/// `mv` of `from` to `to`, each as a command run here names it: after a run given `-C`, whole, so
+/// the move finds them from the folder the person ran in.
+pub(crate) fn moving(from: &str, to: &str) -> String {
+    let named = |path: &str| {
+        if ran_elsewhere() {
+            std::path::absolute(path)
+                .map_or_else(|_| path.to_owned(), |whole| whole.display().to_string())
+        } else {
+            path.to_owned()
+        }
+    };
+    format!("mv {} {}", shell_word(&named(from)), shell_word(&named(to)))
+}
+
 /// `fetchloom` and `words`, for a command that reads no project, as `auth` and `help` do, so it
 /// runs the same from any folder.
 pub(crate) fn anywhere(words: &str) -> String {

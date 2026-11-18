@@ -41,17 +41,20 @@ pub(crate) fn output_pin(name: &str, folder: &str) -> String {
 
 /// what became of an output's folder since it was pinned, as the ways on from it differ.
 #[derive(Clone, Copy, Debug)]
-pub(crate) enum Since {
+pub(crate) enum Since<'a> {
     /// it holds other files than the pin.
     Changed,
     /// nothing is at it.
     Gone,
+    /// nothing is at it, and the folder data.toml named before, as a command names it, still
+    /// holds the pin.
+    Left(&'a str),
 }
 
 /// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
 /// was pinned: what it holds now pinned again, or the files it pins put back; a folder that is
-/// gone is put back, or named where it went.
-pub(crate) fn ways_on(name: &str, shown: &str, since: Since) -> String {
+/// gone is moved from where it was left, else put back or named where it went.
+pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
     let force = crate::suggested::command(&format!("sync --force {name}"));
     match since {
         Since::Changed => format!(
@@ -60,6 +63,10 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since) -> String {
         ),
         Since::Gone => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, set at = \"<new folder>\" for {name} in data.toml"
+        ),
+        Since::Left(from) => format!(
+            "`{}` moves it where data.toml puts it now, or `{force}` puts back the files {name} pins",
+            crate::suggested::moving(from, shown)
         ),
     }
 }
