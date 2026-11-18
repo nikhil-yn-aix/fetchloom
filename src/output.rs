@@ -93,6 +93,9 @@ pub(crate) struct Output {
     /// the last closing line, such as `Added iris`, and whether a finishing ctrl-c came after it: a
     /// terminal drops what it had not yet shown at a ctrl-c, so the line is told again at the end.
     closing: Mutex<(Option<String>, bool)>,
+    /// what this run said once, by key: a line many paths reach, such as each open of the cache,
+    /// that a run says only the first time.
+    once: Mutex<std::collections::HashSet<String>>,
     /// every line told, in the order it went out, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
@@ -374,6 +377,7 @@ impl Output {
             untold: progress::UNTOLD,
             moment: progress::moment(),
             closing: Mutex::new((None, false)),
+            once: Mutex::default(),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
             columns: None,
@@ -389,6 +393,23 @@ impl Output {
             );
         }
         output
+    }
+
+    /// records that this run says what `key` names, a line it says once however many paths reach
+    /// it: whether it had not said it yet.
+    pub(crate) fn once(&self, key: &str) -> bool {
+        self.once
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(key.to_owned())
+    }
+
+    /// whether this run said what `key` names, as [`Output::once`] records it.
+    pub(crate) fn said_once(&self, key: &str) -> bool {
+        self.once
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .contains(key)
     }
 
     /// a finished step: a right-aligned verb, then the facts.

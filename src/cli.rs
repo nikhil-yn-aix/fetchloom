@@ -561,37 +561,35 @@ fn open_cache() -> Result<Cache, Error> {
 /// add to, as a folder there that only its owner may write makes it.
 #[cfg(unix)]
 fn tell_unshared(output: &Output, root: &std::path::Path) {
-    if let Some(unshared) = crate::cache::unshared(root) {
-        static TOLD: std::sync::Once = std::sync::Once::new();
-        TOLD.call_once(|| {
-            output.warn_with(
-                Warning::CacheUnshared,
-                &unshared,
-                "whoever owns a folder the group cannot write gives the group its write with `chmod g+rwx`",
-            );
-        });
+    if let Some(unshared) = crate::cache::unshared(root)
+        && output.once("cache unshared")
+    {
+        output.warn_with(
+            Warning::CacheUnshared,
+            &unshared,
+            "whoever owns a folder the group cannot write gives the group its write with `chmod g+rwx`",
+        );
     }
 }
 
 /// warns once a run when the cache at `root` is another user's or others may write it.
 fn tell_exposed(output: &Output, root: &std::path::Path) {
-    if let Some(exposed) = crate::cache::exposed(root) {
-        // a run may open the cache more than once, and says this only the first time
-        static TOLD: std::sync::Once = std::sync::Once::new();
-        TOLD.call_once(|| {
-            let keep = if cfg!(windows) {
-                "keep the cache inside your user profile, as the one in LOCALAPPDATA is"
-            } else {
-                "keep the cache in a folder only you can write"
-            };
-            output.warn_with(
-                Warning::CacheForeign,
-                &exposed,
-                &format!(
-                    "{keep}, set with `fetchloom settings set cache <folder>` or FETCHLOOM_CACHE, unless your team shares this one on purpose"
-                ),
-            );
-        });
+    // a run may open the cache more than once, and says this only the first time
+    if let Some(exposed) = crate::cache::exposed(root)
+        && output.once("cache exposed")
+    {
+        let keep = if cfg!(windows) {
+            "keep the cache inside your user profile, as the one in LOCALAPPDATA is"
+        } else {
+            "keep the cache in a folder only you can write"
+        };
+        output.warn_with(
+            Warning::CacheForeign,
+            &exposed,
+            &format!(
+                "{keep}, set with `fetchloom settings set cache <folder>` or FETCHLOOM_CACHE, unless your team shares this one on purpose"
+            ),
+        );
     }
 }
 
@@ -748,25 +746,25 @@ fn peek_cache() -> Result<Cache, Error> {
 /// age takes first, as it was made with the cache: one opened to write got it back, and one only
 /// read, as status reads it, keeps the promise to change nothing.
 fn tell_untagged(root: &std::path::Path, put_back: bool) {
-    static TOLD: std::sync::Once = std::sync::Once::new();
     let Some((output, _)) = WAITS.get() else {
         return;
     };
-    TOLD.call_once(|| {
-        let root = root.display();
-        output.warn(
-            Warning::CacheUntagged,
-            &if put_back {
-                format!(
-                    "the cache at {root} had lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first, so fetchloom put it back"
-                )
-            } else {
-                format!(
-                    "the cache at {root} has lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first; a command that writes to the cache puts it back"
-                )
-            },
-        );
-    });
+    if !output.once("cache untagged") {
+        return;
+    }
+    let root = root.display();
+    output.warn(
+        Warning::CacheUntagged,
+        &if put_back {
+            format!(
+                "the cache at {root} had lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first, so fetchloom put it back"
+            )
+        } else {
+            format!(
+                "the cache at {root} has lost its tag, CACHEDIR.TAG, which a cleaner deleting old files takes first; a command that writes to the cache puts it back"
+            )
+        },
+    );
 }
 
 /// for a command that only frees or checks a cache, as gc and verify do: the cache folder when it

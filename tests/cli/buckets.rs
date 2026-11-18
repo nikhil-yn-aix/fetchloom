@@ -1451,6 +1451,52 @@ fn an_md5_hint_for_a_smaller_file_never_skips_asking() -> Result {
     Ok(())
 }
 
+/// a sync that locks a new bucket folder and places a pinned one past `cache_budget` asks once for
+/// both, so under `--yes` it warns once.
+#[test]
+fn a_sync_that_locks_and_places_past_the_cache_budget_warns_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let base = "/audit-bucket.s3.amazonaws.com/";
+    let (one, two) = (vec![b'x'; 2048], vec![b'y'; 2048]);
+    let mut served = Vec::new();
+    for (prefix, name, bytes) in [("one/", "one/a.bin", &one), ("two/", "two/b.bin", &two)] {
+        served.push((
+            s3_listing(base, prefix, None),
+            s3_page(&[(name, bytes)], None),
+        ));
+        let etag = format!("\"{}\"", md5_hex(bytes));
+        served.push((format!("{base}{name}"), file(bytes, &etag)));
+    }
+    let routes = Routes::start(served)?;
+    let added = command(&sandbox, &routes, &["add", "s3://audit-bucket/one/"]).output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let (fresh, cache) = crate::mirrors::cold(&sandbox, "fresh")?;
+    let manifest = fresh.join("data.toml");
+    let more = "\n[datasets.two]\nref = \"s3://audit-bucket/two/\"\n";
+    fs::write(&manifest, fs::read_to_string(&manifest)? + more)?;
+    let synced = command(&sandbox, &routes, &["--json", "sync", "--yes"])
+        .current_dir(&fresh)
+        .env("FETCHLOOM_CACHE", &cache)
+        .env("FETCHLOOM_CACHE_BUDGET", "1K")
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stdout)?);
+    let document = json(&synced)?;
+    let warned: Vec<_> = document["warnings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|warning| warning["kind"] == "cache.over_budget")
+        .map(|warning| &warning["message"])
+        .collect();
+    assert_eq!(
+        warned,
+        ["downloading 1 file brings the cache to 2.0 KiB, past the 1.0 KiB cache_budget"],
+        "{document}"
+    );
+    assert_eq!(fs::read(fresh.join("data/one/a.bin"))?, one);
+    Ok(())
+}
+
 /// a get whose stated sizes take the cache past `cache_budget` asks first, as a sync does: with no
 /// one to answer it stops before any download, and `--yes` goes on with a warning.
 #[test]

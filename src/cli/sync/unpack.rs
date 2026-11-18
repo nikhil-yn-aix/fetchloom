@@ -476,12 +476,7 @@ impl Loop<'_> {
     pub(super) fn tell_nested(&self, manifest: &Manifest, dataset: &str, path: &str, outer: &str) {
         let folder = format!("{}/", plan::folder(manifest, dataset));
         let inside = path.strip_prefix(&folder).unwrap_or(path);
-        let first = self
-            .told_packed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert((dataset.to_owned(), inside.to_owned()));
-        if !first {
+        if !self.context.output.once(&packed(dataset, inside)) {
             return;
         }
         let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
@@ -501,12 +496,7 @@ impl Loop<'_> {
     /// says the archive at `path` in `dataset` stays packed and why, and how to unpack it beside
     /// itself in the data folder, which git ignores; a run tells each once.
     pub(super) fn tell_packed(&self, manifest: &Manifest, dataset: &str, path: &str, why: &Why) {
-        let first = self
-            .told_packed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert((dataset.to_owned(), path.to_owned()));
-        if !first {
+        if !self.context.output.once(&packed(dataset, path)) {
             return;
         }
         let here = std::env::current_dir().unwrap_or_else(|_| self.project.root.clone());
@@ -795,6 +785,12 @@ impl Loop<'_> {
         unpacked.dedup();
         drop_archives(&self.cache, &unpacked, Some(lock), self.context.threads);
     }
+}
+
+/// the key a run says once, as [`Output::once`] keeps it, that the archive at `path` in `dataset`,
+/// its path in the dataset's folder, stays packed.
+fn packed(dataset: &str, path: &str) -> String {
+    format!("packed {dataset}/{path}")
 }
 
 /// an intact archive that unpacks to other files than data.lock says, as one pinned by another

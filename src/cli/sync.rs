@@ -105,8 +105,6 @@ pub(super) struct Loop<'a> {
     pub(super) cache: Cache,
     /// archives this run unpacked, whose own bytes the cache may drop once their files are in.
     unpacked: Mutex<Vec<Sha256>>,
-    /// the archives this run said stay packed, by dataset and path, so each is told once.
-    told_packed: Mutex<HashSet<(String, String)>>,
     /// excludes of each dataset this run listed that matched no listed file, for placing's warning.
     unlisted: Mutex<plan::Unlisted>,
     /// datasets the command's last lines tell about, whose lock and placement lines wait for `-v`.
@@ -116,8 +114,6 @@ pub(super) struct Loop<'a> {
     wrote_lock: AtomicBool,
     /// whether a person said yes despite a short disk, which also covers every download's size.
     roomy: AtomicBool,
-    /// whether this run found its downloads take the cache past `cache_budget`, which it tells once.
-    past_budget: AtomicBool,
     /// the run as its questions and warnings name it, as `this sync`.
     run: &'static str,
     /// whether placing follows relocking, so the first downloads tell what placing adds.
@@ -165,13 +161,11 @@ impl<'a> Loop<'a> {
             net,
             cache,
             unpacked: Mutex::default(),
-            told_packed: Mutex::default(),
             unlisted: Mutex::default(),
             told: BTreeSet::new(),
             scope: Scope::All,
             wrote_lock: AtomicBool::new(false),
             roomy: AtomicBool::new(false),
-            past_budget: AtomicBool::new(false),
             run: "this sync",
             places: AtomicBool::new(false),
             fills: false,
@@ -1769,7 +1763,9 @@ impl<'a> Loop<'a> {
     /// the cache past the `cache_budget` setting. only then are the cache's files read, and what
     /// frees room told: gc's share and the largest datasets of `lock`, else of data.lock.
     fn ask_budget(&self, doing: &str, adding: u64, lock: Option<&Lock>) -> Result<(), Error> {
-        if self.past_budget.load(Ordering::Relaxed) {
+        // a run that found its downloads take the cache past the budget asks once
+        let output = &self.context.output;
+        if output.said_once("cache budget") {
             return Ok(());
         }
         let (threads, stop) = (self.context.threads, &self.context.stop);
@@ -1782,7 +1778,7 @@ impl<'a> Loop<'a> {
         }) else {
             return Ok(());
         };
-        self.past_budget.store(true, Ordering::Relaxed);
+        output.once("cache budget");
         let now = SystemTime::now();
         let freeable =
             scan.and_then(|scan| super::cache::unneeded_in(&self.cache, &scan, now, threads, stop));
