@@ -67,8 +67,11 @@ pub(crate) struct Project {
 pub(crate) struct Held {
     lock: Option<File>,
     owner: Option<PathBuf>,
-    /// an owner record fetchloom could not read, which taking the hold removed as stale.
+    /// an owner record fetchloom could not read, or one written for another folder, which taking
+    /// the hold removed as stale.
     removed: Option<PathBuf>,
+    /// the project's folder, which the owner record this hold writes names.
+    here: Option<Folder>,
 }
 
 pub(crate) enum Hold {
@@ -86,6 +89,9 @@ struct Owner {
     pid: u32,
     started: String,
     command: String,
+    /// the folder the record was written for, so one a clone or a copy carries holds nobody out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    folder: Option<Folder>,
 }
 
 /// the commands that hold a project, the only ones an owner record names.
@@ -111,7 +117,8 @@ impl Owner {
 }
 
 impl Held {
-    /// the owner record fetchloom could not read that taking this hold removed, told once.
+    /// the owner record fetchloom could not read, or one written for another folder, that taking
+    /// this hold removed, told once.
     pub(crate) fn removed_unread(&mut self) -> Option<PathBuf> {
         self.removed.take()
     }
@@ -171,6 +178,7 @@ impl Held {
             pid: std::process::id(),
             started: crate::units::timestamp(now),
             command: command.to_owned(),
+            folder: self.here.clone(),
         };
         let record = serde_json::to_vec(&owner).map_err(io::Error::other)?;
         loop {
@@ -208,6 +216,17 @@ impl Held {
             // a record no fetchloom writes, as a clone or a crash can leave, holds nobody out. an
             // empty one is a reservation, which may belong to a paused writer on another OS
             if owner.is_none() && !bytes.is_empty() {
+                remove_stale_owner(path, &bytes, modified)?;
+                self.removed = Some(path.to_path_buf());
+                continue;
+            }
+            // a record written for another folder, as a clone or a copy carries, does neither
+            let elsewhere = owner
+                .as_ref()
+                .and_then(|owner| owner.folder.as_ref())
+                .zip(self.here.as_ref())
+                .is_some_and(|(written, here)| !written.matches(here));
+            if elsewhere {
                 remove_stale_owner(path, &bytes, modified)?;
                 self.removed = Some(path.to_path_buf());
                 continue;
@@ -927,6 +946,7 @@ impl Project {
                 lock,
                 owner: None,
                 removed: None,
+                here: Folder::of(&self.root),
             }
             .claim(&owner, command, now)
             .map_err(|err| self.not_locked(&owner, &err))?;
@@ -2024,6 +2044,7 @@ mod tests {
             lock: None,
             owner: None,
             removed: None,
+            here: None,
         };
         assert!(matches!(
             competing.claim(&path, "remove", SystemTime::now()).unwrap(),
@@ -2087,6 +2108,45 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), record);
         fs::remove_file(&path).unwrap();
         assert!(!path.exists());
+    }
+
+    /// an owner record a fetchloom wrote for another folder, as a clone or a copy of a project
+    /// carries, holds nobody out, whatever system it names; one written for this folder does.
+    #[test]
+    fn an_owner_record_written_for_another_folder_is_stale() {
+        let (_dir, project) = project(&[(".fetchloom/notes", "")]);
+        let path = project.own_folder().join("owner");
+        let os = if cfg!(windows) { "linux" } else { "windows" };
+        let record = |folder: serde_json::Value| {
+            serde_json::json!({
+                "os": os,
+                "pid": 4242,
+                "started": "2026-11-18T10:00:00Z",
+                "command": "sync",
+                "folder": folder,
+            })
+            .to_string()
+        };
+        // another folder's number and creation time, as the one a clone was made from has
+        let elsewhere = serde_json::json!({ "inode": 1, "created": 1 });
+        fs::write(&path, record(elsewhere)).unwrap();
+        let Hold::Held(mut held) = project.hold("remove").unwrap() else {
+            panic!("an owner record written for another folder keeps nobody out")
+        };
+        assert_eq!(held.removed_unread(), Some(path.clone()));
+        let ours = Owner::read(&fs::read(&path).unwrap()).unwrap();
+        assert_eq!(
+            ours.folder,
+            Folder::of(&project.root),
+            "the record names its folder"
+        );
+        drop(held);
+        let here = serde_json::to_value(Folder::of(&project.root)).unwrap();
+        fs::write(&path, record(here)).unwrap();
+        assert!(
+            matches!(project.hold("remove").unwrap(), Hold::Owner(_)),
+            "one written for this folder by another system holds it"
+        );
     }
 
     /// a record no fetchloom writes, as a clone or a crash can leave, holds nobody out: other
@@ -2168,6 +2228,7 @@ mod tests {
             lock: None,
             owner: None,
             removed: None,
+            here: None,
         };
         assert!(matches!(
             held.claim(&path, "remove", std::time::SystemTime::now())
@@ -2192,12 +2253,14 @@ mod tests {
             lock: None,
             owner: Some(path.clone()),
             removed: None,
+            here: None,
         };
         for lock in [None, Some(File::open(&path).unwrap())] {
             let second = Held {
                 lock,
                 owner: None,
                 removed: None,
+                here: None,
             }
             .claim(&path, "remove", started + Duration::from_secs(12))
             .unwrap();
@@ -2461,6 +2524,7 @@ mod tests {
                 lock: None,
                 owner: None,
                 removed: None,
+                here: None,
             }
             .claim(&path, "sync", now)
             .unwrap()

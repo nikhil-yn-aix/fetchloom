@@ -1262,7 +1262,7 @@ fn an_owner_record_no_fetchloom_writes_is_removed_with_a_warning() -> Result {
     assert_eq!(
         crate::support::warned(&document),
         [format!(
-            "removed {}, which no fetchloom wrote, as a cloned project can hold, and went on",
+            "removed {}, which no fetchloom wrote for this folder, as a cloned or copied project can hold, and went on",
             owner.display()
         )],
         "{document}"
@@ -2501,7 +2501,7 @@ fn an_owner_record_too_large_to_be_one_is_removed_and_told_plainly() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
         stderr.starts_with(&format!(
-            "warning: removed {}, which no fetchloom wrote, as a cloned project can hold, and went on\n",
+            "warning: removed {}, which no fetchloom wrote for this folder, as a cloned or copied project can hold, and went on\n",
             owner.display()
         )),
         "{stderr}"

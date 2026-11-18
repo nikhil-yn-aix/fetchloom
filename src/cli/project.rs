@@ -1862,7 +1862,7 @@ pub(super) async fn hold_until<T>(
                     context.output.warn(
                         Warning::ProjectOwnerRemoved,
                         &format!(
-                            "removed {}, which no fetchloom wrote, as a cloned project can hold, and went on",
+                            "removed {}, which no fetchloom wrote for this folder, as a cloned or copied project can hold, and went on",
                             path.display()
                         ),
                     );
