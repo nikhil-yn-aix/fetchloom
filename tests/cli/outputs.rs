@@ -381,12 +381,18 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
 
 /// a teammate without an output's bytes is told once per output and pin, by sync and path alike,
 /// that it was made on another machine; each sync's last line still names it, and json says it on
-/// every run, as a script reads each run alone. a new pin is told of again.
+/// every run, as a script reads each run alone. a run of another dataset alone, as a notebook's
+/// `path` of it, keeps what was told. a new pin is told of again, and so is an output dropped from
+/// data.toml and pinned again with the same files.
 #[test]
 fn an_output_made_elsewhere_is_told_once_per_pin() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
-    let server = Routes::start(vec![(PATH.to_owned(), file(IRIS, "\"v1\""))])?;
+    let raw = b"station,rain\nlerwick,3\n";
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/raw.csv".to_owned(), file(raw, "\"r1\"")),
+    ])?;
     let link = format!("{}{PATH}", server.url);
     sandbox.allow(&link);
     ok(&sandbox.run(&["add", &link])?)?;
@@ -449,6 +455,20 @@ fn an_output_made_elsewhere_is_told_once_per_pin() -> Result {
         let again = run(args)?;
         assert!(!again.contains(said), "{args:?}: {again}");
     }
+    // added after the teammate's syncs, so `path raw` places it, a run of raw alone
+    ok(&sandbox.run(&["add", &format!("{}/files/raw.csv", server.url)])?)?;
+    pull()?;
+    run(&["path", "raw"])?;
+    assert_eq!(fs::read(teammate.join("data/raw/raw.csv"))?, raw);
+    let quiet = run(sync)?;
+    assert!(!quiet.contains(said), "after a run of raw alone: {quiet}");
+    ok(&sandbox.run(&["remove", "processed"])?)?;
+    pull()?;
+    run(sync)?;
+    ok(&sandbox.run(&["add", "data/processed", "--as", "processed"])?)?;
+    pull()?;
+    let restored = run(sync)?;
+    assert_eq!(restored.matches(said).count(), 1, "{restored}");
     Ok(())
 }
 
