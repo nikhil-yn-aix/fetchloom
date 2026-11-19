@@ -85,10 +85,11 @@ pub(crate) enum Reach {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LineEnds {
     /// CRLF where the pin has LF, as a checkout writes them where git converts line ends: with the
-    /// git command that checks out again just those whose staged copy holds the pinned bytes, if
-    /// any, and those whose staged copy does not, which no checkout gives back.
+    /// git commands that write just those whose blob in git's index and last commit is the pinned
+    /// bytes fresh from that commit, if any, unstaging them first, so git holds no record of the
+    /// file it could skip one by, and those whose blob is not, which no checkout gives back.
     Crlf {
-        checkout: Option<String>,
+        restore: Option<[String; 2]>,
         stale: Vec<String>,
     },
     /// LF where the pin has CRLF, as git keeps the CRLF file it was given where it converts them.
@@ -98,9 +99,9 @@ pub(crate) enum LineEnds {
 /// that `files`, which git tracks in the folder of the output `name`, whose files .gitattributes
 /// names by `pattern`, differ from the pin only in their line ends, `ends` here, with the fix:
 /// git keeping that
-/// folder's bytes as they are, committed, then a checkout of just the files whose staged copy holds
-/// the pinned bytes, and LF line ends for the rest, which no command writes for them, or, where
-/// git kept them as LF, a commit of the pinned bytes where they are.
+/// folder's bytes as they are, committed, then a fresh checkout of just the files whose blob git
+/// keeps is the pinned bytes, and LF line ends for the rest, which no command writes for them, or,
+/// where git kept them as LF, a commit of the pinned bytes where they are.
 fn line_ends_said(name: &str, pattern: &str, files: &[String], ends: &LineEnds) -> String {
     let named = |files: &[String]| match files {
         [one] => one.clone(),
@@ -120,32 +121,47 @@ fn line_ends_said(name: &str, pattern: &str, files: &[String], ends: &LineEnds) 
         format!("add `{pattern} -text` to the .gitattributes beside data.toml and commit it");
     match ends {
         LineEnds::Crlf {
-            checkout: Some(checkout),
+            restore: Some([unstage, checkout]),
             stale,
         } if stale.is_empty() => format!(
-            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{checkout}` writes the bytes git keeps, which the pin holds"
+            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps, which the pin holds"
         ),
         LineEnds::Crlf {
-            checkout: Some(checkout),
+            restore: Some([unstage, checkout]),
             stale,
         } => format!(
-            "{these} differ from the pin only in their line ends, made CRLF by git's checkout; {rule}, then `{checkout}` writes the bytes git keeps for those it keeps as pinned, and give {} LF line ends, as git's staged copy is not the pinned one",
+            "{these} differ from the pin only in their line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps for those it keeps as pinned, and give {} LF line ends, as git's staged or committed copy is not the pinned one",
             named(stale)
         ),
-        LineEnds::Crlf { checkout: None, .. } => format!(
-            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout, but git's staged copy is not the pinned one, so no checkout brings the pin back; {rule}, then give {them} LF line ends"
+        LineEnds::Crlf { restore: None, .. } => format!(
+            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout, but git's staged or committed copy is not the pinned one, so no checkout brings the pin back; {rule}, then give {them} LF line ends"
         ),
         LineEnds::Lf => {
-            let paths: Vec<String> = files
-                .iter()
-                .map(|file| crate::suggested::shell_word(file).into_owned())
-                .collect();
-            let paths = paths.join(" ");
+            let (literal, paths) = git_paths(files);
             format!(
-                "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git add --renormalize -- {paths}` and commit, so a pull brings them as pinned"
+                "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git {literal}add --renormalize -- {paths}` and commit, so a pull brings them as pinned"
             )
         }
     }
+}
+
+/// `paths`, files in the project, as the words a git command a person runs names them by: each a
+/// word of the shell, with `--literal-pathspecs ` to give git ahead of the command where one holds
+/// a character git reads as a pattern or a leading `:`, which would name other files too.
+pub(crate) fn git_paths(paths: &[String]) -> (&'static str, String) {
+    let patterned = paths
+        .iter()
+        .any(|path| path.contains(['*', '?', '[', '\\']) || path.starts_with(':'));
+    let words: Vec<String> = paths
+        .iter()
+        .map(|path| crate::suggested::shell_word(path).into_owned())
+        .collect();
+    let literal = if patterned {
+        "--literal-pathspecs "
+    } else {
+        ""
+    };
+    (literal, words.join(" "))
 }
 
 /// why `sync --force` leaves a file git tracks in an output's folder as it is, in every line that
@@ -529,6 +545,22 @@ mod tests {
                 !(path && crate::source::search::is_search(text)),
                 "{text:?} would be searched for"
             );
+        }
+    }
+
+    #[test]
+    fn a_told_git_command_takes_a_path_git_would_read_as_a_pattern_literally() {
+        for (path, literal) in [
+            ("results/a.csv", false),
+            ("my results/a b.csv", false),
+            ("results/[run]/a.csv", true),
+            ("out/*.csv", true),
+            ("out/a?.csv", true),
+            ("out/a\\b.csv", true),
+            (":out/a.csv", true),
+        ] {
+            let (flag, _) = git_paths(&[String::from("results/z.csv"), path.to_owned()]);
+            assert_eq!(flag == "--literal-pathspecs ", literal, "{path}");
         }
     }
 

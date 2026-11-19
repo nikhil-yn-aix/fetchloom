@@ -3878,8 +3878,8 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
 
 /// which line ends each of `files`, at its path in the project with the SHA-256 and size its pin
 /// holds, holds where the pin holds the other kind, when each differs only so: none otherwise. it
-/// reads each once, and git's staged copy of each that holds CRLF, which only a checkout naming
-/// just the files whose staged copy holds the pinned bytes may write.
+/// reads each once, and of each that holds CRLF, the blob git's index and its last commit hold,
+/// which only the commands that write those files fresh from that commit may write.
 pub(crate) fn line_ends(root: &Path, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
     // whether each holds CRLF where its pin holds LF, rather than the other way
     let mut crlf = None;
@@ -3901,45 +3901,60 @@ pub(crate) fn line_ends(root: &Path, files: &[(&str, Sha256, u64)]) -> Option<Li
     if !crlf? {
         return Some(LineEnds::Lf);
     }
-    let pinned = staged_as_pinned(root, files);
-    let checkout = (!pinned.is_empty()).then(|| {
-        let words: Vec<String> = pinned
-            .iter()
-            .map(|path| crate::suggested::shell_word(path).into_owned())
-            .collect();
-        crate::suggested::git(root, &format!("checkout -- {}", words.join(" ")))
+    let (restorable, stale) = restorable(root, files);
+    let restore = (!restorable.is_empty()).then(|| {
+        let (literal, paths) = crate::source::local::git_paths(&restorable);
+        [
+            crate::suggested::git(root, &format!("{literal}rm --cached -q -- {paths}")),
+            crate::suggested::git(root, &format!("{literal}checkout HEAD -- {paths}")),
+        ]
     });
-    let stale = files
-        .iter()
-        .map(|(path, ..)| (*path).to_owned())
-        .filter(|path| !pinned.contains(path))
-        .collect();
-    Some(LineEnds::Crlf { checkout, stale })
+    Some(LineEnds::Crlf { restore, stale })
 }
 
-/// those of `files`, each at its path in the project with the SHA-256 and size its pin holds,
-/// whose copy in git's index holds the pinned bytes, read raw, so no filter or program the project
-/// configures runs: what a checkout of them writes once git keeps their bytes as they are.
-fn staged_as_pinned(root: &Path, files: &[(&str, Sha256, u64)]) -> Vec<String> {
-    let Some(git) = crate::project::git::on_path() else {
-        return Vec::new();
-    };
-    let paths: Vec<&str> = files.iter().map(|(path, ..)| *path).collect();
-    let Some(staged) = crate::project::git::staged(&git, root, &paths) else {
-        return Vec::new();
-    };
-    files
-        .iter()
-        .filter(|(path, sha256, size)| {
-            staged
-                .get(*path)
-                .and_then(|object| crate::project::git::blob(&git, root, object))
-                .is_some_and(|bytes| {
-                    bytes.len() as u64 == *size && crate::digest::sha256(&bytes) == *sha256
-                })
-        })
-        .map(|(path, ..)| (*path).to_owned())
-        .collect()
+/// `files`, each at its path in the project with the SHA-256 and size its pin holds, split into
+/// those whose blob git's index and its last commit share holds the pinned bytes, read raw, so no
+/// filter or program the project configures runs, and the rest: what unstaging them, which loses
+/// nothing, then a checkout from that commit writes once git keeps their bytes as they are.
+fn restorable(root: &Path, files: &[(&str, Sha256, u64)]) -> (Vec<String>, Vec<String>) {
+    let git = crate::project::git::on_path();
+    let listed = git.as_deref().and_then(|git| {
+        let paths: Vec<&str> = files.iter().map(|(path, ..)| *path).collect();
+        Some((
+            crate::project::git::staged(git, root, &paths)?,
+            crate::project::git::blobs(git, root, "HEAD", &paths)?,
+        ))
+    });
+    let (staged, committed) = listed.unwrap_or_default();
+    split_restorable(files, (&staged, &committed), |object| {
+        crate::project::git::blob(git.as_deref()?, root, object)
+    })
+}
+
+/// `files`, each at its path with the SHA-256 and size its pin holds, split in one pass, each part
+/// in their order, into those whose blob, one in `staged` and `committed` alike, each naming a
+/// blob by path, holds the pinned bytes, as `read` gives a blob's bytes by its name, and the rest.
+fn split_restorable(
+    files: &[(&str, Sha256, u64)],
+    (staged, committed): (&BTreeMap<String, String>, &BTreeMap<String, String>),
+    mut read: impl FnMut(&str) -> Option<Vec<u8>>,
+) -> (Vec<String>, Vec<String>) {
+    let (mut restorable, mut stale) = (Vec::new(), Vec::new());
+    for (path, sha256, size) in files {
+        let pinned = staged
+            .get(*path)
+            .filter(|object| committed.get(*path) == Some(*object))
+            .and_then(|object| read(object))
+            .is_some_and(|bytes| {
+                bytes.len() as u64 == *size && crate::digest::sha256(&bytes) == *sha256
+            });
+        if pinned {
+            restorable.push((*path).to_owned());
+        } else {
+            stale.push((*path).to_owned());
+        }
+    }
+    (restorable, stale)
 }
 
 /// `at`, a folder in the project at `root`, as a command run in the current folder names it.
@@ -4387,6 +4402,53 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a file is checked out fresh only where git's index and last commit hold one blob for it,
+    /// the pinned bytes: a staged change, a commit or a stage it lacks, other bytes or another
+    /// size leave it to LF line ends by hand, and each part keeps the files' order.
+    #[test]
+    fn only_a_blob_staged_and_committed_as_pinned_is_checked_out_fresh() {
+        let (pinned, other) = (b"a,b\n1,2\n".to_vec(), b"a,b\n3,4\n".to_vec());
+        let (one, two) = ("1".repeat(40), "2".repeat(40));
+        let blobs = HashMap::from([(one.clone(), pinned.clone()), (two.clone(), other)]);
+        let pin = (crate::digest::sha256(&pinned), pinned.len() as u64);
+        let by_path = |objects: &[(&str, &String)]| -> BTreeMap<String, String> {
+            objects
+                .iter()
+                .map(|(path, object)| ((*path).to_owned(), (*object).clone()))
+                .collect()
+        };
+        let staged = by_path(&[
+            ("r/a.csv", &one),
+            ("r/b.csv", &two),
+            ("r/c.csv", &one),
+            ("r/d.csv", &one),
+            ("r/f.csv", &one),
+            ("r/g.csv", &one),
+        ]);
+        let committed = by_path(&[
+            ("r/a.csv", &one),
+            ("r/b.csv", &two),
+            ("r/c.csv", &two),
+            ("r/e.csv", &one),
+            ("r/f.csv", &one),
+            ("r/g.csv", &one),
+        ]);
+        let files: Vec<(&str, Sha256, u64)> = ["r/g.csv", "r/b.csv", "r/c.csv", "r/a.csv"]
+            .into_iter()
+            .chain(["r/d.csv", "r/e.csv"])
+            .map(|path| (path, pin.0, pin.1))
+            .chain([("r/f.csv", pin.0, pin.1 + 1)])
+            .collect();
+        let (restorable, stale) = split_restorable(&files, (&staged, &committed), |object| {
+            blobs.get(object).cloned()
+        });
+        assert_eq!(restorable, ["r/g.csv", "r/a.csv"]);
+        assert_eq!(
+            stale,
+            ["r/b.csv", "r/c.csv", "r/d.csv", "r/e.csv", "r/f.csv"]
+        );
+    }
 
     /// each output gets its own pins from one pass, in data.lock's order, and a dataset not asked
     /// for gets none.
