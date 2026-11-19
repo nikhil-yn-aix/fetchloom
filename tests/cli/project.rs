@@ -4492,6 +4492,50 @@ fn a_list_that_comes_back_is_placed_by_the_next_sync() -> Result {
     Ok(())
 }
 
+/// in a project whose list of big is gone, plain `export`, and `remove` or `exclude` of another
+/// dataset work, export telling that big waits; `export big` and an exclude inside big's folder
+/// say that its list is not there.
+#[test]
+fn commands_of_other_datasets_go_on_while_a_list_is_missing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (_, part) = clone_without_big(&sandbox)?;
+    let pair = sandbox.folder("pair")?;
+    for name in ["d.csv", "e.csv"] {
+        fs::write(pair.join(name), name)?;
+    }
+    let pair = pair.to_string_lossy();
+    let added = listing_in(&sandbox, &sandbox.work(), &["add", &pair, "--as", "pair"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    fs::remove_file(sandbox.work().join(&part))?;
+    let exported = listing_in(&sandbox, &sandbox.work(), &["export"])?;
+    let stderr = text(&exported.stderr)?;
+    assert_eq!(exported.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("so big waits for it"), "{stderr}");
+    let stdout = text(&exported.stdout)?;
+    assert!(
+        stdout.contains("data/small/c.csv") && !stdout.contains("data/big/"),
+        "{stdout}"
+    );
+    for args in [
+        &["remove", "small", "--dry-run"][..],
+        &["exclude", "data/pair/d.csv", "--dry-run"],
+    ] {
+        let output = listing_in(&sandbox, &sandbox.work(), args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+    }
+    let said = format!("data.lock names {part}, the file list of big, which is not there");
+    for args in [
+        &["--json", "export", "big"][..],
+        &["--json", "exclude", "data/big/a.csv", "--dry-run"],
+    ] {
+        let output = listing_in(&sandbox, &sandbox.work(), args)?;
+        assert_eq!(output.status.code(), Some(50), "{args:?}");
+        assert_eq!(json(&output)?["errors"][0]["message"], said, "{args:?}");
+    }
+    Ok(())
+}
+
 /// a waiting dataset whose table data.toml no longer has, deleted, renamed or changed, is no pin
 /// data.toml asks for: `lock` takes its entry out and says so, pins a new or changed table from
 /// its source, and `lock --check` passes after it, rather than `lock` saying all is up to date
