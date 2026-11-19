@@ -108,16 +108,18 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             pin(yes)
         ),
         Since::Changed { yes, lost: true } => format!(
-            "run your pipeline here, then `{}`, or that add alone pins what it holds now",
-            pin(yes)
+            "{}, so {}",
+            unreached(&[name]),
+            reach_ways(&format!("`{}`", pin(yes)))
         ),
         Since::Gone { lost: false } => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, {}",
             set_moved(name, true)
         ),
         Since::Gone { lost: true } => format!(
-            "run your pipeline here, then `{}`, or if you moved it, {}",
-            pin(false),
+            "{}, so {}, or if you moved it, {}",
+            unreached(&[name]),
+            reach_ways(&format!("`{}`", pin(false))),
             set_moved(name, true)
         ),
         Since::Left { from, lost } => {
@@ -255,45 +257,37 @@ pub(crate) fn imported_elsewhere(name: &str, folder: &str, mirrored: bool) -> Er
 }
 
 /// the error for the outputs of `made`, each with its folder as a command run here names it,
-/// whose files this machine's cache lacks, and the mirrors too when `mirrored`: made on another
-/// machine, as in a clone, since git carries data.lock and never the bytes, or pinned `here`, as
-/// the state records, whose bytes this machine's cache lost.
-pub(crate) fn made_elsewhere(made: &[(&str, &str)], mirrored: bool, here: bool) -> Error {
+/// whose pinned files no cache or mirror here holds, in the words every command tells it with.
+pub(crate) fn out_of_reach(made: &[(&str, &str)]) -> Error {
     let names: Vec<&str> = made.iter().map(|(name, _)| *name).collect();
-    let (was, files, pin) = match made {
-        [(name, at)] => ("was", "its files", format!("`{}`", pinned_again(name, at))),
-        _ => (
-            "were",
-            "their files",
-            format!(
-                "`{}` for each",
-                crate::suggested::command("add <folder> --as <name>")
-            ),
+    let pin = match made {
+        [(name, at)] => format!("`{}`", pinned_again(name, at)),
+        _ => format!(
+            "`{}` for each",
+            crate::suggested::command("add <folder> --as <name>")
         ),
     };
-    let names = crate::units::listed(&names, "and");
-    let pipeline = format!("run your pipeline here, then {pin}");
-    if here {
-        let lost = if mirrored {
-            lacking(mirrored, files)
-        } else {
-            format!("this machine's cache no longer holds {files}")
-        };
-        return Error::new(
-            Kind::ReferenceUnresolved,
-            format!("{names} {was} pinned here, and {lost}"),
-        )
-        .help(pipeline);
-    }
-    let message = format!(
-        "{names} {was} made on another machine, and {}",
-        lacking(mirrored, files)
-    );
-    Error::new(Kind::ReferenceUnresolved, message).help(format!(
-        "push them from the machine that made them with `{}` and add that mirror here with `{}`, or {pipeline}",
+    Error::new(Kind::ReferenceUnresolved, unreached(&names)).help(reach_ways(&pin))
+}
+
+/// that no cache or mirror here holds the files the outputs `names` pin, which says nothing of
+/// the machine that made them.
+fn unreached(names: &[&str]) -> String {
+    let pin = if names.len() == 1 { "pins" } else { "pin" };
+    format!(
+        "the files {} {pin} are in no cache or mirror here",
+        crate::units::listed(names, "and")
+    )
+}
+
+/// the two ways on from pinned files [`unreached`] names, `pin` the add that pins what a pipeline
+/// makes: a machine that has them pushes them to a mirror added here, or the pipeline runs here.
+fn reach_ways(pin: &str) -> String {
+    format!(
+        "push them from a machine that has them with `{}` and add that mirror here with `{}`, or run your pipeline here, then {pin}",
         crate::suggested::command("push --to <mirror>"),
         crate::suggested::command("settings set mirrors <mirror>"),
-    ))
+    )
 }
 
 /// where files no link fetches are not, `files` naming them: this machine's cache, and every

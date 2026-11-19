@@ -564,7 +564,7 @@ fn an_at_changed_without_the_folder_moved_names_the_move() -> Result {
 
 /// an output pinned here whose folder is gone while no cache here holds its files, as after a new
 /// `FETCHLOOM_CACHE`: the ways on name its pipeline, not a sync that would put back nothing, and no
-/// line says it was made on another machine. with a mirror, which may hold them, they name the
+/// line says where they were made. with a mirror, which may hold them, they name the
 /// sync, which puts them back from it.
 #[test]
 fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
@@ -586,7 +586,7 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
         assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
         Ok(stderr)
     };
-    let ways = "run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml";
+    let ways = "the files processed pins are in no cache or mirror here, so push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml";
     let status = run(&["status"])?;
     assert!(
         status.contains(&format!("hint: data/processed is gone: {ways}\n")),
@@ -645,7 +645,7 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
     );
     let forced = run(&["sync", "--force", "processed"])?;
     assert!(
-        forced.contains("warning: processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
+        forced.contains("warning: the files processed pins are in no cache or mirror here\n  help: push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`\n"),
         "{forced}"
     );
     run(&["sync", "--force", "processed", "--mirror", &mirror])?;
@@ -655,10 +655,10 @@ fn a_gone_output_no_cache_holds_names_its_pipeline() -> Result {
 }
 
 /// an output captured here, put back by `sync --force` and then lost with its cache, is told as
-/// this machine's, as a file this machine placed of it says: `sync --force` names this machine's
-/// cache, never another machine, and push says the loss once.
+/// any output whose pinned files no cache or mirror here holds, in the same words by `sync --force`
+/// and push, which says it once.
 #[test]
-fn a_restored_output_lost_again_is_told_as_this_machines() -> Result {
+fn a_restored_output_lost_again_is_told_as_out_of_reach() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     processed(&work)?;
@@ -668,7 +668,7 @@ fn a_restored_output_lost_again_is_told_as_this_machines() -> Result {
     assert_eq!(fs::read(work.join("data/processed/iris_clean.csv"))?, CLEAN);
     delete_folder(&work.join("data/processed"))?;
     let cache = sandbox.folder("empty-cache")?;
-    let lost = "processed was pinned here, and this machine's cache no longer holds its files\n  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`\n";
+    let lost = "the files processed pins are in no cache or mirror here\n  help: push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`\n";
     let elsewhere = sandbox.folder("elsewhere")?;
     let pushed = sandbox
         .command(&["push", "--to", &elsewhere.to_string_lossy(), "--yes"])
@@ -737,7 +737,7 @@ fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
     );
     fs::remove_file(work.join("data/processed/extra.csv"))?;
     fs::write(work.join("data/processed/iris_clean.csv"), b"edited")?;
-    let ways = "run your pipeline here, then `fetchloom add ./data/processed --as processed`, or that add alone pins what it holds now";
+    let ways = "the files processed pins are in no cache or mirror here, so push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`";
     let (_, edited) = run(&["status"])?;
     assert!(
         edited.contains(&format!("1 edited file: {ways}\n")),
@@ -760,7 +760,7 @@ fn a_changed_output_no_cache_holds_offers_no_force() -> Result {
     assert_eq!(code, Some(0), "{forced}");
     let (_, waiting) = run(&["status"])?;
     assert!(
-        waiting.contains("hint: data/processed is gone: run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n"),
+        waiting.contains("hint: data/processed is gone: the files processed pins are in no cache or mirror here, so push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`, or if you moved it, set at = \"<new folder>\" for processed in data.toml\n"),
         "{waiting}"
     );
     Ok(())
@@ -776,13 +776,14 @@ fn told_of_processed(stderr: &str) -> Vec<&str> {
 
 /// all a push says of processed when it refuses it, as nothing here holds its files.
 const REFUSED: [&str; 2] = [
-    "error: processed was pinned here, and this machine's cache no longer holds its files",
-    "  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`",
+    "error: the files processed pins are in no cache or mirror here",
+    "  help: push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`",
 ];
 
 /// a teammate's sync placed an output's first pin from a mirror; the author pinned a new run on
 /// their machine and pushed nothing, and the teammate added a note to the folder. no `sync --force`
-/// is offered, as it would have to write the new pin's files, which nothing here holds.
+/// is offered, as it would have to write the new pin's files, which nothing here holds, and every
+/// command says so in the same words, which claim nothing of the machine that made them.
 #[test]
 fn a_teammates_output_pinned_anew_elsewhere_offers_no_force() -> Result {
     let sandbox = Sandbox::new()?;
@@ -813,16 +814,27 @@ fn a_teammates_output_pinned_anew_elsewhere_offers_no_force() -> Result {
     ok(&sandbox.run(&["add", "./results", "--as", "results", "--yes"])?)?;
     fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
     fs::write(teammate.join("results/notes.txt"), b"my notes\n")?;
+    let unreached = "the files results pins are in no cache or mirror here";
+    let ways = "push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./results --as results`";
     let status = run(&["status"])?;
-    assert!(status.contains("1 extra file: "), "{status}");
+    assert!(
+        status.contains(&format!("1 extra file: {unreached}, so {ways}\n")),
+        "{status}"
+    );
     assert!(!status.contains("--force"), "{status}");
     let synced = run(&["sync"])?;
     assert!(
-        synced.contains("1 extra file, so sync leaves it"),
+        synced.contains(&format!(
+            "1 extra file, so sync leaves it as it is\n  help: {unreached}, so {ways}\n"
+        )),
         "{synced}"
     );
     assert!(!synced.contains("--force"), "{synced}");
-    run(&["sync", "--force", "results"])?;
+    let forced = run(&["sync", "--force", "results"])?;
+    assert!(
+        forced.contains(&format!("warning: {unreached}\n  help: {ways}\n")),
+        "{forced}"
+    );
     assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
     Ok(())
 }
@@ -882,7 +894,7 @@ fn the_same_add_offers_force_only_where_it_puts_files_back() -> Result {
     let stderr = text(&lost.stderr)?;
     assert_eq!(lost.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("  help: run your pipeline here, then `fetchloom add ./data/processed --as processed --yes`, or that add alone pins what it holds now\n"),
+        stderr.contains("  help: the files processed pins are in no cache or mirror here, so push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed --yes`\n"),
         "{stderr}"
     );
     let teammate = sandbox.folder("teammate")?;
@@ -1012,8 +1024,8 @@ fn a_gone_outputs_folder_is_told_as_gone_and_never_searched_for() -> Result {
 }
 
 /// git carries data.lock, never an output's bytes: a teammate whose cache and mirrors lack them
-/// still gets every other dataset, and the run names the output once, as made on another machine,
-/// with both ways on, and ends well, so a pipeline run after it can make the output. the output's
+/// still gets every other dataset, and the run names the output once, as in no cache or mirror
+/// here, with both ways on, and ends well, so a pipeline run after it can make the output. the output's
 /// folder is made with fetchloom's marker, as a placed output's is, so that run writes out of
 /// git's sight, and `path` names a folder that is there. only a strict sync or a status check calls
 /// the data not ready, and a dry run makes nothing.
@@ -1038,9 +1050,8 @@ fn a_teammate_without_an_outputs_bytes_gets_the_rest_and_both_ways_on() -> Resul
             .env("FETCHLOOM_CACHE", &cache)
             .output()
     };
-    let said =
-        "processed was made on another machine, and this machine's cache does not hold its files";
-    let ways = "push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`";
+    let said = "the files processed pins are in no cache or mirror here";
+    let ways = "push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add ./data/processed --as processed`";
     let folder = teammate.join("data").join("processed");
     let dry = sync(&["sync", "--dry-run"])?;
     assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stderr)?);
@@ -1153,11 +1164,10 @@ fn a_waiting_output_with_its_own_gitignore_gets_its_folder_alone() -> Result {
     Ok(())
 }
 
-/// a teammate's status names every output made on another machine in one hint, with the ways on
-/// for each, and as it asks no mirror, says only what the cache lacks; a sync that asked one says
-/// so.
+/// a teammate's status names every output whose pinned files no cache or mirror here holds in one
+/// hint, with the ways on for each, in the words a sync that asked a mirror tells each with.
 #[test]
-fn status_names_the_outputs_made_elsewhere_in_one_hint() -> Result {
+fn status_names_the_outputs_out_of_reach_in_one_hint() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     for name in ["a", "b"] {
@@ -1179,7 +1189,7 @@ fn status_names_the_outputs_made_elsewhere_in_one_hint() -> Result {
     };
     let stderr = text(&run(&["status"])?.stderr)?;
     assert!(
-        stderr.contains("  hint: a and b were made on another machine, and this machine's cache does not hold their files: push them from the machine that made them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add <folder> --as <name>` for each\n"),
+        stderr.contains("  hint: the files a and b pin are in no cache or mirror here: push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `fetchloom add <folder> --as <name>` for each\n"),
         "{stderr}"
     );
     let mirror = sandbox.folder("mirror")?;
@@ -1191,7 +1201,7 @@ fn status_names_the_outputs_made_elsewhere_in_one_hint() -> Result {
     ])?)?;
     assert_eq!(
         warning(&document, "output.elsewhere")["message"],
-        "a was made on another machine, and neither this machine's cache nor a mirror holds its files",
+        "the files a pins are in no cache or mirror here",
         "{document}"
     );
     Ok(())
@@ -1237,12 +1247,12 @@ fn a_sync_that_makes_a_waiting_outputs_folder_counts_it() -> Result {
 }
 
 /// a teammate without an output's bytes is told once per output and pin, by sync and path alike,
-/// that it was made on another machine; each sync's last line still names it, and json says it on
+/// that no cache or mirror here holds them; each sync's last line still names it, and json says it on
 /// every run, as a script reads each run alone. a run of another dataset alone, as a notebook's
 /// `path` of it, keeps what was told. a new pin is told of again, and so is an output dropped from
 /// data.toml and pinned again with the same files.
 #[test]
-fn an_output_made_elsewhere_is_told_once_per_pin() -> Result {
+fn an_output_out_of_reach_is_told_once_per_pin() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     let raw = b"station,rain\nlerwick,3\n";
@@ -1272,7 +1282,7 @@ fn an_output_made_elsewhere_is_told_once_per_pin() -> Result {
         assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
         Ok(stderr)
     };
-    let said = "warning: processed was made on another machine";
+    let said = "warning: the files processed pins are in no cache or mirror here";
     let path: &[&str] = &["path", "processed"];
     let sync: &[&str] = &["sync"];
     pull()?;

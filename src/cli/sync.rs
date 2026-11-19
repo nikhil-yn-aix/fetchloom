@@ -128,7 +128,7 @@ pub(super) struct Loop<'a> {
     /// the run's refusal names with every other file it lacks.
     unfilled: Mutex<Vec<fill::Unfilled>>,
     /// the outputs whose files no cache or mirror the run reaches holds, which placing leaves
-    /// out and the run names once, as made on another machine.
+    /// out and the run names once.
     made_elsewhere: Mutex<BTreeSet<String>>,
 }
 
@@ -298,14 +298,13 @@ impl<'a> Loop<'a> {
         super::folder_from_here(&self.project.root, &plan::folder(manifest, name))
     }
 
-    /// warns of each output of `elsewhere`, made on another machine, with both ways to bring
-    /// its files here: once per output and pin, though in every json document, which a script
+    /// warns of each output of `elsewhere`, whose files no cache or mirror here holds, with both
+    /// ways to bring them here: once per output and pin, though in every json document, which a script
     /// reads alone.
     fn warn_elsewhere(&self, elsewhere: &[Elsewhere]) {
         let output = &self.context.output;
-        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
         for left in elsewhere.iter().filter(|left| output.json() || !left.told) {
-            let said = local::made_elsewhere(&[(&left.name, &left.shown)], mirrored, left.here);
+            let said = local::out_of_reach(&[(&left.name, &left.shown)]);
             output.warn_with(
                 Warning::OutputElsewhere,
                 &said.message,
@@ -315,8 +314,8 @@ impl<'a> Loop<'a> {
     }
 
     /// `missing` without the files of outputs, which no link fetches, so that what this run
-    /// could not fill it lacks for good: each such output is noted as made on another machine,
-    /// for placing to leave out and the run to name once.
+    /// could not fill it lacks for good: each such output is noted as out of reach, for placing
+    /// to leave out and the run to name once.
     fn set_aside<'f>(
         &self,
         manifest: &Manifest,
@@ -770,9 +769,7 @@ impl<'a> Loop<'a> {
             let mirrored = !self.context.mirrors.mirrors.list.is_empty();
             if manifest.datasets.get(dataset).is_some_and(Entry::is_output) {
                 let shown = self.shown(manifest, dataset);
-                let (state, _) = self.project.state();
-                let here = place::placed_here(&state, dataset);
-                return Err(local::made_elsewhere(&[(dataset, &shown)], mirrored, here));
+                return Err(local::out_of_reach(&[(dataset, &shown)]));
             }
             let folder = plan::folder(manifest, dataset);
             return Err(

@@ -175,9 +175,6 @@ pub(crate) struct Elsewhere {
     pub(crate) pin: String,
     /// whether an earlier run told of this pin, so this one names it in its last line alone.
     pub(crate) told: bool,
-    /// whether the state records a file of the output placed or pinned on this machine, as
-    /// [`placed_here`] says, so its cache lost the bytes, rather than another machine made them.
-    pub(crate) here: bool,
 }
 
 impl Elsewhere {
@@ -203,7 +200,6 @@ impl Elsewhere {
             shown,
             pin: format!("{name}:{}", crate::cache::tree_hash(&members).hex()),
             told: false,
-            here: false,
         }
     }
 }
@@ -1137,7 +1133,6 @@ impl<'a> Placing<'a> {
     pub(crate) fn leave_out(&mut self, mut elsewhere: Vec<Elsewhere>) {
         for output in &mut elsewhere {
             output.told = self.survey.state.told.has(Once::Elsewhere, &output.pin);
-            output.here = placed_here(&self.survey.state, &output.name);
         }
         let names: HashSet<&str> = elsewhere
             .iter()

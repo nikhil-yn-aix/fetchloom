@@ -90,7 +90,7 @@ pub(super) struct Status {
     #[serde(skip)]
     imported_elsewhere: BTreeMap<String, Vec<String>>,
     /// each output's folder as a command run here names it, by name, for the step that pins it
-    /// again and the line that says it was made on another machine.
+    /// again and the line that says no cache or mirror here holds its files.
     #[serde(skip)]
     outputs: BTreeMap<String, String>,
     /// datasets `fetchloom drop` freed on this machine, which a plain sync leaves out.
@@ -327,7 +327,7 @@ fn tell_imports(output: &Output, status: &Status) {
 }
 
 /// how to bring the files of each import of `status` whose bytes this machine lacks, which no sync
-/// fetches, in the words of sync's refusal. an output, made on another machine, comes from a
+/// fetches, in the words of sync's refusal. an output's come from a machine that has them, by a
 /// mirror, or from running its pipeline here.
 fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest) {
     let names: Vec<&str> = status
@@ -342,8 +342,7 @@ fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest
         .map(|(name, shown)| (name.as_str(), shown.as_str()))
         .collect();
     if !made.is_empty() {
-        // status asks no mirror, so it says only what the cache lacks
-        let refused = crate::source::local::made_elsewhere(&made, false, false);
+        let refused = crate::source::local::out_of_reach(&made);
         output.hint(&ready::line(&refused));
     }
     let refused = match names.as_slice() {
