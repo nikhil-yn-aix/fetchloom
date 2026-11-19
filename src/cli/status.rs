@@ -759,7 +759,8 @@ fn check(
         }
     }
     status.downloads = downloads(&status, &planned, &cache);
-    status.imported_elsewhere = imported_elsewhere(&status, &manifest, &planned, &cache);
+    status.imported_elsewhere =
+        imported_elsewhere((&status, &manifest), &planned, &cache, mirrored);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -850,13 +851,17 @@ fn downloads(
 
 /// the imports of `planned` with a file of `status` this machine cannot give back, each with those
 /// files: a missing or damaged one whose bytes `cache` lacks, as when an edit through a link
-/// changed the cache's copy with it.
+/// changed the cache's copy with it, with no mirror to ask. as [`place::reach`] decides, a mirror
+/// set, as `mirrored` says, may hold them, so a sync may bring them and none is listed.
 fn imported_elsewhere(
-    status: &Status,
-    manifest: &Manifest,
+    (status, manifest): (&Status, &Manifest),
     planned: &plan::Plan<'_>,
     cache: &Cache,
+    mirrored: bool,
 ) -> BTreeMap<String, Vec<String>> {
+    if mirrored {
+        return BTreeMap::new();
+    }
     let missing: HashSet<&str> = status.missing.iter().map(String::as_str).collect();
     let damaged: HashSet<&str> = status.damaged.iter().map(String::as_str).collect();
     let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();

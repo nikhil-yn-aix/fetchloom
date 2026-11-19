@@ -1207,6 +1207,63 @@ fn status_names_the_outputs_out_of_reach_in_one_hint() -> Result {
     Ok(())
 }
 
+/// a teammate whose mirror holds an output's files, named by `--mirror` or by the settings, is
+/// told of them as of any dataset's missing files, which `fetchloom sync` places, as it does from
+/// that mirror; without a mirror, nothing here can, and status says so in the neutral words.
+#[test]
+fn status_tells_an_output_a_mirror_holds_as_missing_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"v1\n")?;
+    fs::write(work.join("results/b.csv"), b"w1\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let run = |args: &[&str], mirrors: Option<&str>| -> Result<(Option<i32>, String)> {
+        let mut command = sandbox.command_in(&teammate, args);
+        command.env("FETCHLOOM_CACHE", &cache);
+        match mirrors {
+            Some(mirrors) => command.env("FETCHLOOM_MIRRORS", mirrors),
+            None => command.env_remove("FETCHLOOM_MIRRORS"),
+        };
+        let output = command.output()?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    };
+    let sync = "  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n";
+    let unreached = "the files results pins are in no cache or mirror here";
+    let (_, flagged) = run(&["--mirror", &mirror, "status"], None)?;
+    assert!(flagged.contains(sync), "{flagged}");
+    assert!(!flagged.contains(unreached), "{flagged}");
+    let (_, set) = run(&["status"], Some(&mirror))?;
+    assert!(set.contains(sync), "{set}");
+    assert!(!set.contains(unreached), "{set}");
+    let (code, checked) = run(&["--mirror", &mirror, "status", "--check"], None)?;
+    assert_eq!(code, Some(1), "{checked}");
+    for file in ["a.csv", "b.csv"] {
+        assert!(
+            checked.contains(&format!(
+                "  results/{file} is missing: `fetchloom sync` places it\n"
+            )),
+            "{checked}"
+        );
+    }
+    assert!(!checked.contains(unreached), "{checked}");
+    let (_, alone) = run(&["status"], None)?;
+    assert!(alone.contains(unreached), "{alone}");
+    assert!(!alone.contains(sync), "{alone}");
+    let (code, synced) = run(&["--mirror", &mirror, "sync"], None)?;
+    assert_eq!(code, Some(0), "{synced}");
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
+    Ok(())
+}
+
 /// a sync that makes the folder of an output made elsewhere, for the pipeline run here, counts it
 /// in its last line rather than say it had nothing to do; with the folder there, it has nothing to
 /// do.
