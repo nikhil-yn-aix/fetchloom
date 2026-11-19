@@ -71,6 +71,7 @@ debug builds read these variables so a CLI test can put a local server where a h
 | `FETCHLOOM_TEST_FILESYSTEM` | the format every disk reports, by the name `Filesystem::named` reads, such as `vfat` | `project.rs`, `get.rs`, `buckets.rs` |
 | `FETCHLOOM_TEST_PROFILE` | the folder windows' checks take as the user profile instead of `USERPROFILE`: the sandbox's own `USERPROFILE` is beside its cache, while all it makes sits in the temp folder, inside the real profile | every command, as the temp folder; `cache.rs` and `auth.rs` remove it to test `USERPROFILE` |
 | `FETCHLOOM_TEST_FREE` | the bytes free on every disk | `project.rs`, `import.rs`, `build.rs`, `get.rs` |
+| `FETCHLOOM_TEST_STALL` | every link or rename the stall watch sees hangs, as one ReFS deadlocked in does, and the watch ends the run after that many looks, a second apart, on any system | `get.rs` |
 | `FETCHLOOM_TEST_ROOM` | the memory the machine has, as a container's limit leaves it | `caps.rs` |
 | `FETCHLOOM_TEST_INLINE` | the most files a source lists in data.lock itself, rather than 50,000, so a test writes lists to `data.lock.d` with few files | `project.rs`, `import.rs`, `merge.rs`, `buckets.rs` |
 

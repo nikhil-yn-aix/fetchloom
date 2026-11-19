@@ -18,6 +18,17 @@ $env:FETCHLOOM_CACHE = 'D:\fetchloom-cache'
 
 keep projects on the same drive to permit linking. changing the variable selects a cache location; it does not migrate the old cache. [cache folder](../reference/cache-folder.md#location) gives the defaults.
 
+## a run that stops on a dev drive
+
+a dev drive is formatted as ReFS, and windows' ReFS driver can lock up while it gives a file a name, which fetchloom does for each file it puts in the cache or a project. the command then waits for an answer that never comes, and no program can end it, task manager included. fetchloom waits 90 seconds for each name, then stops with an error on stderr and exit code 50, as this run of `fetchloom add .\iris.csv` shows:
+
+```text
+error: windows has not finished giving D:\docs-sample\.fetchloom\.gitignore its name after 1 min 30 s, so fetchloom stopped
+  help: on a ReFS drive, such as a Dev Drive, windows can lock up while it names a file, and only a restart ends that. restart windows, then run `fetchloom add ".\iris.csv"` again: the files fetchloom finished are kept, and this window may not close before the restart
+```
+
+restart windows, then run the command again. the files fetchloom finished before the lock-up stay in the cache, so the next run does not download them again. until the restart the window may stay open, and other programs that use the drive may wait too. fetchloom's [tests on a new ReFS volume](../../dev/engineering/ci.md#filesystem-runs) met this about once in 160 runs, each within a minute of the volume's format.
+
 ## short name
 
 the installer also makes `fl.exe` beside `fetchloom.exe`, made again on every install so it never runs an old version. `fl sync` runs `fetchloom sync` in cmd and other shells. powershell runs an alias before any program, and there `fl` is the alias of `Format-List`, so type `fl.exe sync`, or give `fl` to fetchloom in your powershell profile:

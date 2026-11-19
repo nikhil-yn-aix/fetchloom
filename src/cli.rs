@@ -1025,6 +1025,7 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     };
     let entered = runtime.enter();
     let _ = WAITS.set((Arc::clone(&context.output), Arc::clone(&context.stop)));
+    end_at_a_stall(&context, name, started);
     let mut outcome = match command.clone() {
         Some(command) => dispatch(&context, command, started),
         None => alone(&context, started),
@@ -1063,6 +1064,18 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
     drop(entered);
     end_runtime(runtime, EXIT_WAIT);
     outcome
+}
+
+/// ends the run, its error told as any other's, once windows never finishes giving a file its
+/// name: no kill ends the thread stuck in that call, so the run cannot wait for it.
+fn end_at_a_stall(context: &Arc<Context>, name: Option<&'static str>, started: Instant) {
+    let context = Arc::clone(context);
+    crate::volume::stall::when_stalled(move |error| {
+        context.output.abandon();
+        let code = error.kind.exit_code();
+        let _ = finish::<()>(&context, name, Err(error), started);
+        std::process::exit(i32::from(code));
+    });
 }
 
 /// how long the end of a run on windows waits for the runtime's threads to exit. 1,920 measured

@@ -21,6 +21,7 @@ use self::state::{Folder, Look, State, Synced, Untold};
 use crate::cache::names;
 use crate::error::{Error, Kind};
 use crate::volume::Volume;
+use crate::volume::stall::naming;
 
 const FOLDER: &str = ".fetchloom";
 
@@ -147,14 +148,14 @@ impl Held {
             fill(file, record)?;
             // windows and WSL do not share OS locks, so an empty reservation could be
             // reclaimed while its writer is still publishing
-            match fs::hard_link(&temporary, path) {
+            match naming(path, || fs::hard_link(&temporary, path)) {
                 Ok(()) => self.owner = Some(path.to_path_buf()),
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => return Err(err),
                 Err(_) => {
                     let file = OpenOptions::new().write(true).create_new(true).open(path)?;
                     self.owner = Some(path.to_path_buf());
                     drop(file);
-                    fs::rename(&temporary, path)?;
+                    naming(path, || fs::rename(&temporary, path))?;
                 }
             }
             #[cfg(test)]
@@ -1668,13 +1669,13 @@ fn replace(temporary: &Path, path: &Path, _: Option<&fs::Permissions>) -> io::Re
 )]
 fn replace(temporary: &Path, path: &Path, kept: Option<&fs::Permissions>) -> io::Result<()> {
     let Some(kept) = kept else {
-        return fs::rename(temporary, path);
+        return naming(path, || fs::rename(temporary, path));
     };
     let mut writable = kept.clone();
     writable.set_readonly(false);
     fs::set_permissions(temporary, kept.clone())?;
     let renamed = fs::set_permissions(path, writable.clone()).and_then(|()| {
-        fs::rename(temporary, path).inspect_err(|_| {
+        naming(path, || fs::rename(temporary, path)).inspect_err(|_| {
             let _ = fs::set_permissions(path, kept.clone());
         })
     });

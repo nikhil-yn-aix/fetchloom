@@ -160,7 +160,10 @@ impl Folder {
             Ok(rustix::fs::renameat(&self.handle, name, &into.handle, to)?)
         }
         #[cfg(not(unix))]
-        std::fs::rename(self.join(name), into.join(to))
+        {
+            let to = into.join(to);
+            crate::volume::stall::naming(&to, || std::fs::rename(self.join(name), &to))
+        }
     }
 
     /// flushes the folder's names, which flushing a file does not make last on unix.

@@ -3511,3 +3511,40 @@ fn an_address_without_its_scheme_gets_the_link_it_means() -> Result {
     );
     Ok(())
 }
+
+/// windows can deadlock giving a file its name on a `ReFS` drive, and the thread in that call never
+/// returns: once the watch gives up on it, the run ends with what is stuck and that a restart
+/// frees it, as text and in `--json`, rather than waiting forever. here every name change hangs,
+/// and the watch gives up at once.
+#[cfg(debug_assertions)]
+#[test]
+fn a_name_change_that_never_returns_ends_the_run_with_what_to_do() -> Result {
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let stalled = |args: &[&str]| -> Result<std::process::Output> {
+        let sandbox = Sandbox::new()?;
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_STALL", "0")
+            .output()?;
+        assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
+        Ok(output)
+    };
+    let stderr = text(&stalled(&["get", &server.url])?.stderr)?;
+    let again = format!(
+        "restart windows, then run `fetchloom get {}` again",
+        server.url
+    );
+    assert!(
+        stderr.contains("its name after 0 s, so fetchloom stopped\n") && stderr.contains(&again),
+        "{stderr}"
+    );
+    let document = json(&stalled(&["--json", "get", &server.url])?)?;
+    assert_eq!(document["errors"][0]["kind"], "local.io");
+    assert!(
+        document["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("windows has not finished giving ")),
+        "{document}"
+    );
+    Ok(())
+}

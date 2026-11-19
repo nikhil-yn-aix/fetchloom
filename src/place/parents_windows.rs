@@ -10,6 +10,8 @@ use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
+use crate::volume::stall::naming;
+
 #[derive(Default)]
 pub(super) struct Parents {
     root: OnceLock<Arc<Root>>,
@@ -112,14 +114,14 @@ impl Location {
     }
 
     pub(super) fn link(&self, object: &Path) -> io::Result<()> {
-        fs::hard_link(object, &self.path)
+        naming(&self.path, || fs::hard_link(object, &self.path))
     }
 
     /// gives `object` a second name hidden in this location's folder, which goes again when the
     /// result is dropped, unless it took this location's name.
     pub(super) fn stage_link(self: &Arc<Self>, object: &Path) -> io::Result<Staged> {
         let (staged, _) = self.claim(|path| {
-            fs::hard_link(object, path)?;
+            naming(path, || fs::hard_link(object, path))?;
             File::open(path).inspect_err(|_| {
                 let _ = fs::remove_file(path);
             })
@@ -164,16 +166,18 @@ impl Location {
     }
 
     pub(super) fn rename_to(&self, target: &Location) -> io::Result<()> {
-        fs::rename(&self.path, &target.path)
+        naming(&target.path, || fs::rename(&self.path, &target.path))
     }
 
     /// renames to `target`'s name, refusing a taken name with `AlreadyExists`.
     pub(super) fn rename_new_to(&self, target: &Location) -> io::Result<()> {
-        crate::volume::rename_new(&self.path, &target.path)
+        naming(&target.path, || {
+            crate::volume::rename_new(&self.path, &target.path)
+        })
     }
 
     pub(super) fn link_to(&self, target: &Location) -> io::Result<()> {
-        fs::hard_link(&self.path, &target.path)
+        naming(&target.path, || fs::hard_link(&self.path, &target.path))
     }
 
     pub(super) fn remove_dir(&self) -> io::Result<()> {
@@ -262,9 +266,10 @@ impl Staged {
             .temporary
             .take()
             .ok_or_else(|| invalid("a placement was already published"))?;
-        temporary
-            .persist_noclobber(&self.location.path)
-            .map_err(|error| error.error)?;
+        naming(&self.location.path, || {
+            temporary.persist_noclobber(&self.location.path)
+        })
+        .map_err(|error| error.error)?;
         self.location.metadata()
     }
 
@@ -287,7 +292,12 @@ impl Staged {
         }
         // tempfile's own rename clears the file's attributes, which a hardlink shares with the
         // cached object and every other link to it
-        match fs::rename(&*temporary, &self.location.path) {
+        let rename = || {
+            naming(&self.location.path, || {
+                fs::rename(&*temporary, &self.location.path)
+            })
+        };
+        match rename() {
             Err(error)
                 if error.kind() == io::ErrorKind::PermissionDenied
                     && found.permissions().readonly()
@@ -302,7 +312,7 @@ impl Staged {
                 )]
                 writable.set_readonly(false);
                 held.set_permissions(writable)?;
-                if let Err(error) = fs::rename(&*temporary, &self.location.path) {
+                if let Err(error) = rename() {
                     let _ = held.set_permissions(before);
                     return Err(error);
                 }

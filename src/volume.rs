@@ -9,6 +9,8 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
+pub(crate) mod stall;
+
 /// a new name for a file moved out of the way in its own folder, `.fetchloom-<16 hex>.old`.
 pub(crate) fn aside_name() -> String {
     format!(".fetchloom-{:016x}.old", fastrand::u64(..))
@@ -131,16 +133,16 @@ impl Volume {
     }
 
     pub(crate) fn hard_link(&self, original: &Path, link: &Path) -> io::Result<()> {
-        (self.hard_link)(original, link)
+        stall::naming(link, || (self.hard_link)(original, link))
     }
 
     pub(crate) fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
-        (self.rename)(from, to)
+        stall::naming(to, || (self.rename)(from, to))
     }
 
     /// renames `from` to `to`, refusing a taken name with `AlreadyExists`.
     pub(crate) fn rename_new(&self, from: &Path, to: &Path) -> io::Result<()> {
-        (self.rename_new)(from, to)
+        stall::naming(to, || (self.rename_new)(from, to))
     }
 
     /// renames a verified replacement over an old file without leaving its name empty, clearing a
@@ -282,7 +284,7 @@ impl Volume {
                 .join(format!(".fetchloom-{:016x}.{ending}", fastrand::u64(..)))
         });
         create_hidden(&probe).ok()?;
-        let linked = (self.hard_link)(&probe, &link);
+        let linked = self.hard_link(&probe, &link);
         let _ = fs::remove_file(&probe);
         let links = match linked {
             Ok(()) => {

@@ -296,6 +296,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/place/schedule.rs` | a cap on concurrent changes to one folder's entries, apart from the worker ceiling | `Folders` |  |
 | `src/place/synced.rs` | folders onedrive, dropbox, icloud drive or google drive keep in sync, where files are copied rather than linked | `client` |  |
 | `src/volume.rs` | what a volume allows: hardlinks, which FAT32 and exFAT lack, and the safe removal of read-only files, which they refuse on windows | `Volume` | `replace`, `remove`, `remove_hardlink`, `can_hardlink`, `is_plain`, `create_hidden` |
+| `src/volume/stall.rs` | the watch on links and renames that windows never finishes, as when ReFS deadlocks, which ends the run with what is stuck | `naming` | `when_stalled` |
 
 ## output
 
