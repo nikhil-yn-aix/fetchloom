@@ -355,15 +355,19 @@ impl ChangedOutput {
     /// as a run that cannot ask a person needs it.
     pub(crate) fn ways(&self, yes: bool) -> String {
         let reach = self.reach;
+        let pattern: String;
         let since = match (&self.left, &self.line_ends) {
             (Some(from), _) => Since::Left { from, reach },
             (None, _) if self.gone => Since::Gone { reach },
             // bytes that match but for line ends show the folder is the output's
-            (None, Some(ends)) => Since::LineEnds {
-                files: &self.tracked,
-                at: &self.at,
-                ends,
-            },
+            (None, Some(ends)) => {
+                pattern = crate::project::below_in_attributes(&self.at);
+                Since::LineEnds {
+                    files: &self.tracked,
+                    pattern: &pattern,
+                    ends,
+                }
+            }
             (None, None) if !self.placed_here => Since::Unplaced { yes },
             (None, None) if !self.tracked.is_empty() => Since::Tracked {
                 files: &self.tracked,

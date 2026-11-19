@@ -3541,6 +3541,55 @@ fn the_line_ends_checkout_names_only_the_pinned_files() -> Result {
     Ok(())
 }
 
+/// the .gitattributes line the line-ends fix tells names the output's folder as git reads a
+/// pattern: brackets and a space in its name are escaped and quoted, so git keeps that folder's
+/// bytes and goes on converting the line ends of a folder the brackets would otherwise match.
+#[test]
+fn the_told_attributes_line_keeps_just_the_outputs_folder() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    let at = "results/[run] 1";
+    fs::create_dir_all(author.join(at))?;
+    fs::write(author.join(at).join("a.csv"), b"a,b\n1,2\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", &format!("./{at}"), "--as", "run"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    for folder in [at, "results/r 1"] {
+        fs::create_dir_all(work.join(folder))?;
+        fs::write(work.join(folder).join("a.csv"), b"a,b\r\n1,2\r\n")?;
+    }
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    let stderr = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        stderr.contains("add `\"results/\\\\[run\\\\] 1/**\" -text` to the .gitattributes beside data.toml and commit it"),
+        "{stderr}"
+    );
+    let line = stderr
+        .split_once("add `")
+        .and_then(|(_, rest)| rest.split_once("` to the .gitattributes"))
+        .ok_or("the .gitattributes line is told")?
+        .0;
+    fs::write(work.join(".gitattributes"), format!("{line}\n"))?;
+    let files = ["results/[run] 1/a.csv", "results/r 1/a.csv"];
+    let mut args = vec!["check-attr", "text", "--"];
+    args.extend(files);
+    let checked = crate::merge::git(&sandbox, &work, &args)?.ok_or("git runs")?;
+    assert_eq!(
+        text(&checked.stdout)?,
+        "results/[run] 1/a.csv: text: unset\nresults/r 1/a.csv: text: unspecified\n"
+    );
+    Ok(())
+}
+
 /// push asks first, as no source says who may read an output, and then sends the files an output
 /// pins, never what its folder holds since, and says so when the folder changed, with the pin that
 /// sends the folder's files instead; a folder that is gone gets the ways back.

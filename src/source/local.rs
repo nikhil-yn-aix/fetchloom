@@ -59,10 +59,10 @@ pub(crate) enum Since<'a> {
     /// they are; `yes` as for [`Since::Changed`].
     Tracked { files: &'a [String], yes: bool },
     /// its files differ from the pin only in their line ends, `ends` here, and git tracks each of
-    /// `files`, in the folder data.toml names `at`.
+    /// `files`, in the folder whose files .gitattributes names by `pattern`.
     LineEnds {
         files: &'a [String],
-        at: &'a str,
+        pattern: &'a str,
         ends: &'a LineEnds,
     },
 }
@@ -95,12 +95,13 @@ pub(crate) enum LineEnds {
     Lf,
 }
 
-/// that `files`, which git tracks in the folder of the output `name`, `at` as data.toml names it,
-/// differ from the pin only in their line ends, `ends` here, with the fix: git keeping that
+/// that `files`, which git tracks in the folder of the output `name`, whose files .gitattributes
+/// names by `pattern`, differ from the pin only in their line ends, `ends` here, with the fix:
+/// git keeping that
 /// folder's bytes as they are, committed, then a checkout of just the files whose staged copy holds
 /// the pinned bytes, and LF line ends for the rest, which no command writes for them, or, where
 /// git kept them as LF, a commit of the pinned bytes where they are.
-fn line_ends_said(name: &str, at: &str, files: &[String], ends: &LineEnds) -> String {
+fn line_ends_said(name: &str, pattern: &str, files: &[String], ends: &LineEnds) -> String {
     let named = |files: &[String]| match files {
         [one] => one.clone(),
         _ => format!(
@@ -115,7 +116,8 @@ fn line_ends_said(name: &str, at: &str, files: &[String], ends: &LineEnds) -> St
     } else {
         ("differ", "their", "them")
     };
-    let rule = format!("add `{at}/** -text` to the .gitattributes beside data.toml and commit it");
+    let rule =
+        format!("add `{pattern} -text` to the .gitattributes beside data.toml and commit it");
     match ends {
         LineEnds::Crlf {
             checkout: Some(checkout),
@@ -238,7 +240,11 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             kept_by_git(name, files),
             git_ways(name, shown, yes)
         ),
-        Since::LineEnds { files, at, ends } => line_ends_said(name, at, files, ends),
+        Since::LineEnds {
+            files,
+            pattern,
+            ends,
+        } => line_ends_said(name, pattern, files, ends),
     }
 }
 

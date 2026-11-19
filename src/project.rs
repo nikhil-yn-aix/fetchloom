@@ -1430,6 +1430,21 @@ pub(crate) fn gitignore_escaped(path: &str) -> String {
     pattern
 }
 
+/// the .gitattributes pattern of every file below the folder `at`, a path from data.toml's folder,
+/// naming no other: `at` escaped as .gitignore reads a pattern, as .gitattributes reads one alike,
+/// with a leading `#` or `!` escaped too, and quoted where it holds a space, which would end the
+/// pattern there, or begins with a quote.
+pub(crate) fn below_in_attributes(at: &str) -> String {
+    let mut pattern = format!("{}/**", gitignore_escaped(at));
+    if pattern.starts_with(['#', '!']) {
+        pattern.insert(0, '\\');
+    }
+    if pattern.contains(' ') || pattern.starts_with('"') {
+        pattern = format!("\"{}\"", pattern.replace('\\', "\\\\").replace('"', "\\\""));
+    }
+    pattern
+}
+
 /// .gitignore's text, read without following a link and only up to [`GITIGNORE_CAP`]: a link a
 /// clone holds would have the file it names copied in, and a pipe or a device never ends.
 /// `InvalidInput` for a link or a special file, `FileTooLarge` past the cap.
@@ -1807,6 +1822,23 @@ mod tests {
 
     pub(super) fn flushing_file() {
         FILE_FLUSHES.set(FILE_FLUSHES.get() + 1);
+    }
+
+    #[test]
+    fn the_told_attributes_pattern_names_just_the_folder_below_it() {
+        for (at, pattern) in [
+            ("results", "results/**"),
+            ("results/[run]", "results/\\[run\\]/**"),
+            ("out/*?", "out/\\*\\?/**"),
+            ("my results", "\"my results/**\""),
+            ("results/[run] 1", "\"results/\\\\[run\\\\] 1/**\""),
+            ("#hash", "\\#hash/**"),
+            ("!bang", "\\!bang/**"),
+            ("q\"uote", "q\"uote/**"),
+            ("\"lead", "\"\\\"lead/**\""),
+        ] {
+            assert_eq!(below_in_attributes(at), pattern, "{at}");
+        }
     }
 
     /// a power cut leaves the flushed record whole for the next command; its folder is not flushed.
