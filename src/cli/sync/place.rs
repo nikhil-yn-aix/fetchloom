@@ -31,7 +31,7 @@ use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::{Look, Once, Placed, State, Synced, Told, Uncached};
 use crate::project::{Project, native};
-use crate::source::local::{LineEnds, Since};
+use crate::source::local::{LineEnds, Reach, Since};
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -184,42 +184,50 @@ impl Elsewhere {
         Elsewhere {
             name: name.to_owned(),
             shown,
-            pin: pinned_tree(name, lock),
+            pin: pinned_tree(name, pinned_files(lock, name)),
             told: false,
         }
     }
 }
 
-/// the output `name` and the tree of the files `lock` pins it with, as a run records that it found
-/// them in no cache or mirror, so a new pin is told of again.
-fn pinned_tree(name: &str, lock: &Lock) -> String {
-    let members: Vec<crate::cache::Member> = lock
-        .get(name)
-        .map(|locked| {
-            locked
-                .files
-                .iter()
-                .map(|file| crate::cache::Member {
-                    path: file.path.clone(),
-                    size: file.size,
-                    sha256: file.sha256,
-                })
-                .collect()
+/// the files `lock` pins the dataset `name` with, none if it pins no such dataset.
+pub(crate) fn pinned_files<'l>(lock: &'l Lock, name: &str) -> &'l [LockedFile] {
+    lock.get(name).map_or(&[], |locked| &locked.files)
+}
+
+/// the output `name` and the tree of `files`, the files its pin holds, as a run records that it
+/// found them in no cache or mirror, so a new pin is told of again.
+fn pinned_tree(name: &str, files: &[LockedFile]) -> String {
+    let members: Vec<crate::cache::Member> = files
+        .iter()
+        .map(|file| crate::cache::Member {
+            path: file.path.clone(),
+            size: file.size,
+            sha256: file.sha256,
         })
-        .unwrap_or_default();
+        .collect();
     format!("{name}:{}", crate::cache::tree_hash(&members).hex())
 }
 
-/// whether a mirror may hold the files `lock` pins a dataset with, by its name: one is set, as
-/// `mirrored` says, and no sync here asked the mirrors for them and found some lacking, as `told`
-/// records. a sync asks again each run for the files it must write, and one that finds them there
-/// places them and drops that record.
-pub(crate) fn mirrors_may_hold<'a>(
+/// how the mirrors may supply the files a dataset's pin holds, as `pins` gives them by its name:
+/// not at all when none is set, as `mirrored` says, else they may, unless a sync here asked them
+/// for those files and found some lacking, as `told` records. a sync asks again each run for the
+/// files it must write, as `--force` does for those it would, and one that finds them there places
+/// them and drops that record.
+pub(crate) fn mirror_reach<'a>(
     mirrored: bool,
     told: &'a Told,
-    lock: &'a Lock,
-) -> impl Fn(&str) -> bool + 'a {
-    move |name| mirrored && !told.has(Once::Elsewhere, &pinned_tree(name, lock))
+    pins: impl Fn(&str) -> &'a [LockedFile] + 'a,
+) -> impl Fn(&str) -> Reach + 'a {
+    move |name| {
+        if !mirrored {
+            Reach::Lost
+        } else if told.has(Once::Elsewhere, &pinned_tree(name, pins(name))) {
+            Reach::Lacked
+        } else {
+            Reach::Reachable
+        }
+    }
 }
 
 /// an output whose folder changed since it was pinned: files of other bytes, files no pin places
@@ -264,27 +272,17 @@ pub(crate) struct ChangedOutput {
     pub(crate) line_ends: Option<LineEnds>,
 }
 
-/// whether a `sync --force` here can write the pinned files an output's folder lacks or holds
-/// changed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Reach {
-    /// a cache here holds each, or a mirror to ask may.
-    Reachable,
-    /// no cache here holds one of them and no mirror set may, so no sync writes it.
-    Lost,
-}
-
 /// whether a sync here can write `files`, pinned files each with its SHA-256 and size: `cache`
-/// holds each, or a mirror may, as `mirrored` says, asked only when the cache lacks one.
+/// holds each, else as `mirrors` says, asked only when the cache lacks one.
 fn reach<'f>(
     mut files: impl Iterator<Item = (&'f Sha256, u64)>,
     cache: &Cache,
-    mirrored: impl FnOnce() -> bool,
+    mirrors: impl FnOnce() -> Reach,
 ) -> Reach {
-    if files.all(|(digest, size)| cache.find(digest, Some(size)).is_some()) || mirrored() {
+    if files.all(|(digest, size)| cache.find(digest, Some(size)).is_some()) {
         Reach::Reachable
     } else {
-        Reach::Lost
+        mirrors()
     }
 }
 
@@ -356,10 +354,10 @@ impl ChangedOutput {
     /// [`ChangedOutput::ways_on`], the pin of what its folder holds saying yes ahead for `yes`,
     /// as a run that cannot ask a person needs it.
     pub(crate) fn ways(&self, yes: bool) -> String {
-        let lost = self.reach == Reach::Lost;
+        let reach = self.reach;
         let since = match (&self.left, &self.line_ends) {
-            (Some(from), _) => Since::Left { from, lost },
-            (None, _) if self.gone => Since::Gone { lost },
+            (Some(from), _) => Since::Left { from, reach },
+            (None, _) if self.gone => Since::Gone { reach },
             // bytes that match but for line ends show the folder is the output's
             (None, Some(ends)) => Since::LineEnds {
                 files: &self.tracked,
@@ -371,7 +369,7 @@ impl ChangedOutput {
                 files: &self.tracked,
                 yes,
             },
-            (None, None) => Since::Changed { yes, lost },
+            (None, None) => Since::Changed { yes, reach },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -792,11 +790,18 @@ fn note_told(
     for output in &outputs {
         changed |= told.note(Once::Output, output);
     }
-    // an output this run placed, or pinned anew, is told of again once its files are elsewhere
+    // an output this run placed, or pinned anew, is told of again once its files are elsewhere.
+    // one it left whole asked no mirror, so what an earlier run found of its files stands
+    let left: HashSet<&str> = placement
+        .changed_outputs
+        .iter()
+        .map(|output| output.name.as_str())
+        .collect();
     changed |= told.retain(Once::Elsewhere, |pin| {
         elsewhere.contains(pin)
             || pin.rsplit_once(':').is_some_and(|(name, _)| {
-                manifest.datasets.contains_key(name) && !scope.includes(name)
+                manifest.datasets.contains_key(name)
+                    && (!scope.includes(name) || left.contains(name))
             })
     });
     for pin in &elsewhere {
@@ -1259,10 +1264,13 @@ impl<'a> Placing<'a> {
     }
 
     /// notes, for each output of the changes, whether a `sync --force` here can write the files it
-    /// would write in its folder, as [`note_lost`] does for `cache` and `mirrored`.
-    pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool) {
+    /// would write in its folder, as [`note_lost`] does for `cache` and the mirrors, set as
+    /// `mirrored` says, which may hold the files `lock` pins unless a sync found them lacking.
+    pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool, lock: &Lock) {
         let forced = self.forced.iter().map(|at| &self.targets[*at]);
-        note_lost(&mut self.changed, forced, (cache, mirrored));
+        let told = &self.survey.state.told;
+        let mirrors = mirror_reach(mirrored, told, |name| pinned_files(lock, name));
+        note_lost(&mut self.changed, forced, (cache, mirrors));
     }
 
     /// the datasets with a file placing needs whose bytes `holds` says the cache lacks, whatever was
@@ -2195,26 +2203,31 @@ pub(crate) fn forced_write(action: &Action) -> bool {
 }
 
 /// the datasets among `written`, files a run must write, whose bytes nothing here can supply,
-/// each with those files: an import's or an output's, which no link fetches, that [`reach`] finds
-/// lost for `cache` and `mirrored`, which says by a dataset's name whether a mirror may hold its
-/// files. status asks it of what a plain sync writes, as [`needs_bytes`] tells, and status and
-/// sync of what `--force` writes in a changed output's folder, as [`forced_writes`] picks, so each
+/// each with how [`reach`] finds them and those files: an import's or an output's, which no link
+/// fetches, out of reach of `cache` and of the mirrors as `mirrors` says by a dataset's name.
+/// status asks it of what a plain sync writes, as [`needs_bytes`] tells, and status, sync and add
+/// of what `--force` writes in a changed output's folder, as [`forced_writes`] picks, so each
 /// tells such a file the same way.
 pub(crate) fn unsupplied<'t, 'p: 't>(
     written: impl IntoIterator<Item = &'t Target<'p>>,
-    (cache, mirrored): (&Cache, impl Fn(&str) -> bool),
-) -> BTreeMap<&'p str, Vec<&'t Target<'p>>> {
+    (cache, mirrors): (&Cache, impl Fn(&str) -> Reach),
+) -> BTreeMap<&'p str, (Reach, Vec<&'t Target<'p>>)> {
     let mut by_dataset: BTreeMap<&'p str, Vec<&'t Target<'p>>> = BTreeMap::new();
     for target in written {
         if target.file.url.is_empty() {
             by_dataset.entry(target.dataset).or_default().push(target);
         }
     }
-    by_dataset.retain(|name, files| {
-        let files = files.iter().map(|target| (&target.sha256, target.size));
-        reach(files, cache, || mirrored(name)) == Reach::Lost
-    });
     by_dataset
+        .into_iter()
+        .filter_map(|(name, files)| {
+            let held = files.iter().map(|target| (&target.sha256, target.size));
+            match reach(held, cache, || mirrors(name)) {
+                Reach::Reachable => None,
+                out => Some((name, (out, files))),
+            }
+        })
+        .collect()
 }
 
 /// the targets of the output `name` whose folder is `at` for `files` of its pin, as a plan places
@@ -2255,16 +2268,16 @@ pub(crate) fn forced_writes(
 }
 
 /// notes each output of `changed` whose files of `forced`, those `--force` would write in its
-/// folder, nothing here can supply, as [`unsupplied`] finds for `cache` and `mirrored`.
+/// folder, nothing here can supply, as [`unsupplied`] finds for `cache` and `mirrors`.
 pub(crate) fn note_lost<'t, 'p: 't>(
     changed: &mut [ChangedOutput],
     forced: impl IntoIterator<Item = &'t Target<'p>>,
-    (cache, mirrored): (&Cache, bool),
+    (cache, mirrors): (&Cache, impl Fn(&str) -> Reach),
 ) {
-    let lost = unsupplied(forced, (cache, |_: &str| mirrored));
+    let out = unsupplied(forced, (cache, mirrors));
     for output in changed {
-        if lost.contains_key(output.name.as_str()) {
-            output.reach = Reach::Lost;
+        if let Some((reach, _)) = out.get(output.name.as_str()) {
+            output.reach = *reach;
         }
     }
 }

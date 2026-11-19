@@ -41,17 +41,17 @@ pub(crate) fn output_pin(name: &str, folder: &str) -> String {
 
 /// what became of an output's folder since it was pinned, as the ways on from it differ. `yes`
 /// when the add that pins what it holds must say yes ahead, as a run that cannot ask a person
-/// does, and `lost` when nothing here can write the pinned files it lacks or holds changed: no
-/// cache here holds one and no mirror is set to ask, so no `sync --force` puts them back.
+/// does, and `reach` whether a `sync --force` here can write the pinned files it lacks or holds
+/// changed, so none is offered that would put nothing back.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Since<'a> {
     /// it holds other files than the pin.
-    Changed { yes: bool, lost: bool },
+    Changed { yes: bool, reach: Reach },
     /// nothing is at it.
-    Gone { lost: bool },
+    Gone { reach: Reach },
     /// nothing is at it, and the folder data.toml named before, `from` as a command names it,
     /// still holds the pin.
-    Left { from: &'a str, lost: bool },
+    Left { from: &'a str, reach: Reach },
     /// it holds other files than the pin, and this machine placed none of the output there, as a
     /// clone whose data.toml may name a folder of code: nothing offered deletes them.
     Unplaced { yes: bool },
@@ -65,6 +65,19 @@ pub(crate) enum Since<'a> {
         at: &'a str,
         ends: &'a LineEnds,
     },
+}
+
+/// whether a sync here can write the pinned files an output's folder lacks or holds changed, as a
+/// `sync --force` would.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Reach {
+    /// a cache here holds each, or a mirror set may.
+    Reachable,
+    /// no cache here holds one of them and no mirror is set, so no sync writes it.
+    Lost,
+    /// no cache here holds one of them, and the mirrors set lacked one when a sync here asked, so
+    /// none writes it until a machine that has them pushes them there.
+    Lacked,
 }
 
 /// the line ends an output's file holds where its pin holds the other kind, the one difference
@@ -176,34 +189,44 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
         }
     };
     match since {
-        Since::Changed { yes, lost: false } => format!(
+        Since::Changed {
+            yes,
+            reach: Reach::Reachable,
+        } => format!(
             "`{}` pins what it holds now, or `{force}` makes it hold just the files {name} pins",
             pin(yes)
         ),
-        Since::Changed { yes, lost: true } => format!(
-            "{}, so {}",
+        Since::Changed { yes, reach } => format!(
+            "{}, so {}{}",
             unreached(&[name]),
-            reach_ways(&format!("`{}`", pin(yes)))
+            reach_ways(&format!("`{}`", pin(yes))),
+            way_back(
+                reach,
+                &format!("`{force}` makes it hold just the files {name} pins")
+            )
         ),
-        Since::Gone { lost: false } => format!(
+        Since::Gone {
+            reach: Reach::Reachable,
+        } => format!(
             "`{force}` puts back the files {name} pins, or if you moved it, {}",
             set_moved(name, true)
         ),
-        Since::Gone { lost: true } => format!(
-            "{}, so {}, or if you moved it, {}",
+        Since::Gone { reach } => format!(
+            "{}, so {}, or if you moved it, {}{}",
             unreached(&[name]),
             reach_ways(&format!("`{}`", pin(false))),
-            set_moved(name, true)
+            set_moved(name, true),
+            way_back(reach, &format!("`{force}` puts back the files {name} pins"))
         ),
-        Since::Left { from, lost } => {
+        Since::Left { from, reach } => {
             let moved = format!(
                 "{} moves it where data.toml puts it now",
                 crate::suggested::moving(from, shown)
             );
-            if lost {
-                moved
-            } else {
+            if reach == Reach::Reachable {
                 format!("{moved}, or `{force}` puts back the files {name} pins")
+            } else {
+                moved
             }
         }
         Since::Unplaced { yes } => format!(
@@ -362,6 +385,17 @@ fn reach_ways(pin: &str) -> String {
         crate::suggested::command("push --to <mirror>"),
         crate::suggested::command("settings set mirrors <mirror>"),
     )
+}
+
+/// what `sync --force` does once the files are pushed, `what` saying it, when the mirrors set
+/// lacked them as `reach` says: no sync asks them again for a folder it leaves whole, so the way
+/// back is named rather than offered.
+fn way_back(reach: Reach, what: &str) -> String {
+    if reach == Reach::Lacked {
+        format!("; once the files are pushed, {what}")
+    } else {
+        String::new()
+    }
 }
 
 /// where files no link fetches are not, `files` naming them: this machine's cache, and every

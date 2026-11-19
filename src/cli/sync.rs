@@ -245,7 +245,7 @@ impl<'a> Loop<'a> {
         // changed, stays small
         match Box::pin(self.prepare(manifest, lock, plan, force, survey)).await {
             Ok(mut placing) => {
-                self.leave_out(&mut placing, self.elsewhere(manifest, lock));
+                self.leave_out(&mut placing, self.elsewhere(manifest, lock), lock);
                 let placement = self.apply(manifest, lock, placing, synced)?;
                 self.warn_elsewhere(&placement.elsewhere);
                 Ok(placement)
@@ -287,10 +287,12 @@ impl<'a> Loop<'a> {
 
     /// leaves out of `placing` the outputs of `elsewhere`, whose files this machine lacks, and
     /// notes for its changed outputs whether a `sync --force` here can write the pinned files
-    /// their folders lack or hold changed, so their ways on offer none that would write nothing.
-    fn leave_out(&self, placing: &mut Placing<'_>, elsewhere: Vec<Elsewhere>) {
+    /// their folders lack or hold changed, as `lock` pins them, so their ways on offer none that
+    /// would write nothing.
+    fn leave_out(&self, placing: &mut Placing<'_>, elsewhere: Vec<Elsewhere>, lock: &Lock) {
         placing.leave_out(elsewhere);
-        placing.note_reach(&self.cache, !self.context.mirrors.mirrors.list.is_empty());
+        let mirrored = !self.context.mirrors.mirrors.list.is_empty();
+        placing.note_reach(&self.cache, mirrored, lock);
     }
 
     /// the folder of `name` as a command run here names it.
@@ -429,7 +431,7 @@ impl<'a> Loop<'a> {
         let plan = plan::from_cache(manifest, lock, &self.cache)?;
         let scope = Scope::Only(whole.clone());
         let mut placing = Placing::from_plan(self.project, manifest, plan, force, &scope, survey)?;
-        self.leave_out(&mut placing, self.elsewhere(manifest, lock));
+        self.leave_out(&mut placing, self.elsewhere(manifest, lock), lock);
         let placement = self.apply(manifest, lock, placing, synced)?;
         Ok(Some(Partial {
             placed: whole.into_iter().collect(),
@@ -1303,7 +1305,7 @@ impl<'a> Loop<'a> {
             .into_iter()
             .partition(|(dataset, _)| manifest.datasets.get(dataset).is_some_and(Entry::is_output));
         let (mirrored, elsewhere) = self.made_where(manifest, lock, made).await?;
-        self.leave_out(&mut placing, elsewhere);
+        self.leave_out(&mut placing, elsewhere, lock);
         let archives = archives::of(lock, wanted);
         for (dataset, archive) in &archives {
             if archive.file.unpacks_to.is_some() {

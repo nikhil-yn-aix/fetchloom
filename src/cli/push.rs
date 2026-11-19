@@ -426,7 +426,7 @@ fn tell_changed_outputs(
     let Ok(mut placing) = placing else {
         return;
     };
-    placing.note_reach(cache, !context.mirrors.mirrors.list.is_empty());
+    placing.note_reach(cache, !context.mirrors.mirrors.list.is_empty(), lock);
     for changed in placing.changed_outputs() {
         let name = &changed.name;
         let said = match changed.gone_said(&changed.at) {

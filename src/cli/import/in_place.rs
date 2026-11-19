@@ -12,8 +12,8 @@ use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
 use super::super::sync::place::{
-    ChangedOutput, Placement, git_tracked, is_marker_form, note_lost, output_targets, placed_here,
-    tell_marked,
+    ChangedOutput, Placement, git_tracked, is_marker_form, mirror_reach, note_lost, output_targets,
+    placed_here, tell_marked,
 };
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
@@ -706,7 +706,8 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
 /// `pinned`, as a sync finds a changed output, so a refused re-pin offers the ways on sync offers:
 /// none but the fix where git converted the line ends of files it tracks, no `sync --force` where
 /// this machine placed none of the output, as in a clone, or where nothing here can write the files
-/// the folder lacks or holds changed, since `cache` lacks one and no mirror is set.
+/// the folder lacks or holds changed, since `cache` lacks one and no mirror set may hold it, as
+/// none is or a sync here found them lacking.
 fn found_as_changed(
     context: &Context,
     (project, at): (&Project, &str),
@@ -718,7 +719,8 @@ fn found_as_changed(
     found.changed = count(changes.changed.len());
     found.added = count(changes.added.len());
     found.removed = count(changes.removed.len());
-    found.placed_here = placed_here(&project.state().0, name);
+    let (state, _) = project.state();
+    found.placed_here = placed_here(&state, name);
     let paths: Vec<String> = changes
         .changed
         .iter()
@@ -739,11 +741,8 @@ fn found_as_changed(
         .filter(|file| needed.contains(file.path.as_str()));
     let written = output_targets(name, at, files);
     let mirrored = !context.mirrors.mirrors.list.is_empty();
-    note_lost(
-        std::slice::from_mut(&mut found),
-        &written,
-        (cache, mirrored),
-    );
+    let mirrors = mirror_reach(mirrored, &state.told, |_| pinned);
+    note_lost(std::slice::from_mut(&mut found), &written, (cache, mirrors));
     found.note_line_ends(&project.root, |_| {
         pinned
             .iter()

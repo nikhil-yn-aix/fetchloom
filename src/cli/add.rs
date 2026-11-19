@@ -379,7 +379,8 @@ fn names_project_folder(word: &str, project: &Project) -> bool {
 /// the refusal of `word`, typed here, when it names the folder of an output of `project` with
 /// nothing there, as after a move or a failed run: an add of it says so, whatever its spelling,
 /// rather than send the folder's name off as search words. its ways on offer no `sync --force`
-/// when no cache here holds the files it pins and no mirror is set, as `mirrored` says.
+/// when no cache here holds the files it pins and no mirror set may, as `mirrored` says and the
+/// state records of a sync that asked them.
 fn output_gone(word: &str, project: &Project, mirrored: bool) -> Option<Error> {
     if word.contains(':') && !local::is_path(word) {
         return None;
@@ -420,18 +421,18 @@ fn output_gone(word: &str, project: &Project, mirrored: bool) -> Option<Error> {
         .map(|from| super::folder_from_here(&project.root, &from));
     // nothing is there, so a `sync --force` would put back every file it pins
     let files = lock
-        .iter()
-        .flat_map(|lock| &lock.datasets)
-        .filter(|locked| locked.name == *output)
-        .flat_map(|locked| &locked.files);
-    let written = crate::cli::sync::place::output_targets(output, at, files);
-    let lost = super::peek_cache().is_ok_and(|cache| {
-        crate::cli::sync::place::unsupplied(&written, (&cache, |_: &str| mirrored))
-            .contains_key(output.as_str())
+        .as_ref()
+        .map_or(&[][..], |lock| place::pinned_files(lock, output));
+    let written = place::output_targets(output, at, files);
+    let reach = super::peek_cache().map_or(local::Reach::Reachable, |cache| {
+        let mirrors = place::mirror_reach(mirrored, &state.told, |_| files);
+        place::unsupplied(&written, (&cache, mirrors))
+            .get(output.as_str())
+            .map_or(local::Reach::Reachable, |(reach, _)| *reach)
     });
     let since = match left.as_deref() {
-        Some(from) => local::Since::Left { from, lost },
-        None => local::Since::Gone { lost },
+        Some(from) => local::Since::Left { from, reach },
+        None => local::Since::Gone { reach },
     };
     Some(
         Error::new(

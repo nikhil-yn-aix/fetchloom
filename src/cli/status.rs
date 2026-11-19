@@ -851,9 +851,9 @@ fn downloads(
 
 /// notes in `status` what nothing here can supply, as sync finds it among the writes `actions`
 /// decide for the targets `planned` lists from `lock`: those a plain sync makes, by import and
-/// output, which a mirror set, as `mirrored` says, may supply unless a sync here asked it for the
-/// files `lock` pins and found some lacking, as the state `survey` read records, and those
-/// `--force` makes in a changed output's folder, which mark the output lost.
+/// output, and those `--force` makes in a changed output's folder, which mark the output out of
+/// reach. a mirror set, as `mirrored` says, may supply either, unless a sync here asked it for the
+/// files `lock` pins and found some lacking, as the state `survey` read records.
 fn note_unsupplied(
     status: &mut Status,
     (lock, planned, actions): (&Lock, &plan::Plan<'_>, &[Action]),
@@ -865,17 +865,19 @@ fn note_unsupplied(
         .zip(actions)
         .filter(|(_, action)| place::needs_bytes(action))
         .map(|(target, _)| target);
-    let may_hold = place::mirrors_may_hold(mirrored, &survey.state.told, lock);
-    status.imported_elsewhere = place::unsupplied(plain, (cache, may_hold))
+    let mirrors = place::mirror_reach(mirrored, &survey.state.told, |name| {
+        place::pinned_files(lock, name)
+    });
+    status.imported_elsewhere = place::unsupplied(plain, (cache, &mirrors))
         .into_iter()
-        .map(|(name, files)| {
+        .map(|(name, (_, files))| {
             let paths = files.iter().map(|target| target.path.clone()).collect();
             (name.to_owned(), paths)
         })
         .collect();
     let forced = place::forced_writes(targets, actions, &status.changed_outputs);
     let forced = forced.iter().map(|at| &targets[*at]);
-    place::note_lost(&mut status.changed_outputs, forced, (cache, mirrored));
+    place::note_lost(&mut status.changed_outputs, forced, (cache, &mirrors));
 }
 
 /// the files of `missing` in a folder that holds no file now, as one deleted whole, each with

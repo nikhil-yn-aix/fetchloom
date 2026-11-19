@@ -2,7 +2,7 @@
 //! writable for a teammate, and never partly healed once it changed.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::project::{IRIS, PATH};
 use crate::support::{
@@ -1258,6 +1258,75 @@ fn an_outdated_output_no_cache_holds_reads_alike_in_status_and_sync() -> Result 
     Ok(())
 }
 
+/// a teammate of an author who pinned an output's first run, `results`, and pushed it to the team's
+/// mirror, from which the teammate's sync placed it; the author then pinned a second run with a
+/// cache only they hold, pushed nothing, and the teammate took the new data.lock.
+struct Teammate<'s> {
+    sandbox: &'s Sandbox,
+    folder: PathBuf,
+    cache: PathBuf,
+    mirror: String,
+    /// the author's cache, which alone holds their runs since the first.
+    other: PathBuf,
+}
+
+impl<'s> Teammate<'s> {
+    fn new(sandbox: &'s Sandbox) -> Result<Teammate<'s>> {
+        let work = sandbox.work();
+        fs::create_dir_all(work.join("results"))?;
+        fs::write(work.join("results/a.csv"), b"v1\n")?;
+        ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+        let mirror = sandbox.folder("mirror")?.to_string_lossy().into_owned();
+        ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+        let folder = sandbox.folder("teammate")?;
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(work.join(file), folder.join(file))?;
+        }
+        let teammate = Teammate {
+            sandbox,
+            folder,
+            cache: sandbox.folder("teammate-cache")?,
+            mirror,
+            other: sandbox.folder("other-cache")?,
+        };
+        let (code, synced) = teammate.run(&["sync"])?;
+        assert_eq!(code, Some(0), "{synced}");
+        assert_eq!(fs::read(teammate.folder.join("results/a.csv"))?, b"v1\n");
+        teammate.pin(b"v2\n")?;
+        Ok(teammate)
+    }
+
+    /// `args` run in the teammate's folder with their cache and the mirror set: the exit code and
+    /// what the run wrote to stderr.
+    fn run(&self, args: &[&str]) -> Result<(Option<i32>, String)> {
+        let output = self
+            .sandbox
+            .command_in(&self.folder, args)
+            .env("FETCHLOOM_CACHE", &self.cache)
+            .env("FETCHLOOM_MIRRORS", &self.mirror)
+            .output()?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    }
+
+    /// `args` run by the author with the cache that holds their later runs.
+    fn author(&self, args: &[&str]) -> Result {
+        ok(&self
+            .sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &self.other)
+            .output()?)
+    }
+
+    /// the author pins `bytes` as the output's next run, and the teammate takes the new data.lock.
+    fn pin(&self, bytes: &[u8]) -> Result {
+        let work = self.sandbox.work();
+        fs::write(work.join("results/a.csv"), bytes)?;
+        self.author(&["add", "./results", "--as", "results", "--yes"])?;
+        fs::copy(work.join("data.lock"), self.folder.join("data.lock"))?;
+        Ok(())
+    }
+}
+
 /// the c4 case with the team's mirror set: the author pushed the first pin there, pinned a second
 /// run and pushed nothing. until a sync asks the mirror, `status --check` names sync, as the
 /// mirror may hold the files; once a sync found them in no cache or mirror, status and `status
@@ -1267,49 +1336,20 @@ fn an_outdated_output_no_cache_holds_reads_alike_in_status_and_sync() -> Result 
 #[test]
 fn status_names_sync_until_a_sync_finds_the_mirror_lacks_the_pin() -> Result {
     let sandbox = Sandbox::new()?;
-    let work = sandbox.work();
-    fs::create_dir_all(work.join("results"))?;
-    fs::write(work.join("results/a.csv"), b"v1\n")?;
-    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
-    let mirror = sandbox.folder("mirror")?;
-    let mirror = mirror.to_string_lossy().into_owned();
-    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
-    let teammate = sandbox.folder("teammate")?;
-    for file in ["data.toml", "data.lock"] {
-        fs::copy(work.join(file), teammate.join(file))?;
-    }
-    let cache = sandbox.folder("teammate-cache")?;
-    let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
-        let output = sandbox
-            .command_in(&teammate, args)
-            .env("FETCHLOOM_CACHE", &cache)
-            .env("FETCHLOOM_MIRRORS", &mirror)
-            .output()?;
-        Ok((output.status.code(), text(&output.stderr)?))
-    };
-    let (code, synced) = run(&["sync"])?;
-    assert_eq!(code, Some(0), "{synced}");
-    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
-    let other = sandbox.folder("other-cache")?;
-    fs::write(work.join("results/a.csv"), b"v2\n")?;
-    ok(&sandbox
-        .command(&["add", "./results", "--as", "results", "--yes"])
-        .env("FETCHLOOM_CACHE", &other)
-        .output()?)?;
-    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
+    let teammate = Teammate::new(&sandbox)?;
     let replaces = "  results/a.csv is from an older data.lock: `fetchloom sync` replaces it\n";
     let unreached = "the files results pins are in no cache or mirror here";
-    let (code, before) = run(&["status", "--check"])?;
+    let (code, before) = teammate.run(&["status", "--check"])?;
     assert_eq!(code, Some(1), "{before}");
     assert!(before.contains(replaces), "{before}");
     assert!(!before.contains(unreached), "{before}");
-    let (code, synced) = run(&["sync"])?;
+    let (code, synced) = teammate.run(&["sync"])?;
     assert_eq!(code, Some(0), "{synced}");
     assert!(
         synced.contains(&format!("warning: {unreached}\n")),
         "{synced}"
     );
-    let (code, after) = run(&["status", "--check"])?;
+    let (code, after) = teammate.run(&["status", "--check"])?;
     assert_eq!(code, Some(1), "{after}");
     assert!(
         after.contains(&format!(
@@ -1318,7 +1358,7 @@ fn status_names_sync_until_a_sync_finds_the_mirror_lacks_the_pin() -> Result {
         "{after}"
     );
     assert!(!after.contains("replaces it"), "{after}");
-    let (_, status) = run(&["status"])?;
+    let (_, status) = teammate.run(&["status"])?;
     assert!(
         status.contains(&format!(
             "  hint: {unreached}: push them from a machine that has them"
@@ -1329,24 +1369,95 @@ fn status_names_sync_until_a_sync_finds_the_mirror_lacks_the_pin() -> Result {
         !status.contains("places missing or updated files"),
         "{status}"
     );
-    fs::write(work.join("results/a.csv"), b"v3\n")?;
-    for args in [
-        &["add", "./results", "--as", "results", "--yes"][..],
-        &["push", "--to", &mirror, "--yes"],
-    ] {
-        ok(&sandbox
-            .command(args)
-            .env("FETCHLOOM_CACHE", &other)
-            .output()?)?;
-    }
-    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
-    let (code, pinned) = run(&["status", "--check"])?;
+    teammate.pin(b"v3\n")?;
+    teammate.author(&["push", "--to", &teammate.mirror, "--yes"])?;
+    let (code, pinned) = teammate.run(&["status", "--check"])?;
     assert_eq!(code, Some(1), "{pinned}");
     assert!(pinned.contains(replaces), "{pinned}");
-    let (code, placed) = run(&["sync"])?;
+    let (code, placed) = teammate.run(&["sync"])?;
     assert_eq!(code, Some(0), "{placed}");
-    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v3\n");
-    let (code, settled) = run(&["status", "--check"])?;
+    assert_eq!(fs::read(teammate.folder.join("results/a.csv"))?, b"v3\n");
+    let (code, settled) = teammate.run(&["status", "--check"])?;
+    assert_eq!(code, Some(0), "{settled}");
+    Ok(())
+}
+
+/// the ways on from an output's files a sync found in no cache or mirror here, `pin` the add that
+/// pins what its pipeline makes, ending in what `sync --force` does once the files are pushed.
+fn lacked_ways(pin: &str, back: &str) -> String {
+    format!(
+        "the files results pins are in no cache or mirror here, so push them from a machine that has them with `fetchloom push --to <mirror>` and add that mirror here with `fetchloom settings set mirrors <mirror>`, or run your pipeline here, then `{pin}`{back}"
+    )
+}
+
+/// the c4m case where the teammate then adds a file of their own to the output's folder, which a
+/// plain sync leaves whole and asks no mirror about: once a sync found the new pin's files in no
+/// cache or mirror, status, sync and an add offer no `sync --force`, which would place nothing,
+/// across plain syncs too, and name the way back instead. `sync --force` asks the mirror again,
+/// and once the author pushed the pin, places it.
+#[test]
+fn a_changed_output_a_sync_found_lacking_offers_force_once_pushed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let teammate = Teammate::new(&sandbox)?;
+    let (code, synced) = teammate.run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    let notes = teammate.folder.join("results/notes.txt");
+    fs::write(&notes, b"mine\n")?;
+    let back = "; once the files are pushed, `fetchloom sync --force results` makes it hold just the files results pins";
+    let ways = lacked_ways("fetchloom add ./results --as results", back);
+    let told = format!("  hint: results changed since results was pinned, 1 extra file: {ways}\n");
+    let (_, status) = teammate.run(&["status"])?;
+    assert!(status.contains(&told), "{status}");
+    let (code, synced) = teammate.run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    assert!(synced.contains(&format!("  help: {ways}\n")), "{synced}");
+    let (_, status) = teammate.run(&["status"])?;
+    assert!(status.contains(&told), "{status}");
+    let (code, added) = teammate.run(&["add", "./results", "--as", "results"])?;
+    assert_ne!(code, Some(0), "{added}");
+    let yes = lacked_ways("fetchloom add ./results --as results --yes", back);
+    assert!(added.contains(&yes), "{added}");
+    let (code, forced) = teammate.run(&["sync", "--force", "results"])?;
+    assert_eq!(code, Some(0), "{forced}");
+    assert!(notes.is_file(), "{forced}");
+    let (_, status) = teammate.run(&["status"])?;
+    assert!(status.contains(&told), "{status}");
+    teammate.author(&["push", "--to", &teammate.mirror, "--yes"])?;
+    let (code, forced) = teammate.run(&["sync", "--force", "results"])?;
+    assert_eq!(code, Some(0), "{forced}");
+    assert_eq!(fs::read(teammate.folder.join("results/a.csv"))?, b"v2\n");
+    assert!(!notes.exists(), "{forced}");
+    let (code, settled) = teammate.run(&["status", "--check"])?;
+    assert_eq!(code, Some(0), "{settled}");
+    Ok(())
+}
+
+/// as above with the output's folder deleted: status and an add of the folder offer no `sync
+/// --force` and name the way back, which puts the pinned files back once the author pushed them.
+#[test]
+fn a_gone_output_a_sync_found_lacking_names_the_way_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let teammate = Teammate::new(&sandbox)?;
+    let (code, synced) = teammate.run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    delete_folder(&teammate.folder.join("results"))?;
+    let ways = lacked_ways(
+        "fetchloom add ./results --as results",
+        ", or if you moved it, set at = \"<new folder>\" for results in data.toml; once the files are pushed, `fetchloom sync --force results` puts back the files results pins",
+    );
+    let (_, status) = teammate.run(&["status"])?;
+    assert!(
+        status.contains(&format!("  hint: results is gone: {ways}\n")),
+        "{status}"
+    );
+    let (code, added) = teammate.run(&["add", "./results", "--as", "results"])?;
+    assert_ne!(code, Some(0), "{added}");
+    assert!(added.contains(&ways), "{added}");
+    teammate.author(&["push", "--to", &teammate.mirror, "--yes"])?;
+    let (code, forced) = teammate.run(&["sync", "--force", "results"])?;
+    assert_eq!(code, Some(0), "{forced}");
+    assert_eq!(fs::read(teammate.folder.join("results/a.csv"))?, b"v2\n");
+    let (code, settled) = teammate.run(&["status", "--check"])?;
     assert_eq!(code, Some(0), "{settled}");
     Ok(())
 }
