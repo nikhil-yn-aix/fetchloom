@@ -307,13 +307,43 @@ pub(crate) fn distrust(folder: PathBuf) {
     let _ = UNTRUSTED.set(folder);
 }
 
+#[cfg(test)]
+thread_local! {
+    /// a test's own folder in place of [`UNTRUSTED`], on its thread alone, as [`distrusting`]
+    /// scopes it, since a folder the whole process kept would outlive the test that named it.
+    static SCOPED: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// never runs a program inside `folder` on this test's thread until what it returns goes, and
+/// leaves the process's own folder as it was.
+#[cfg(test)]
+pub(crate) fn distrusting(folder: PathBuf) -> impl Drop {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            SCOPED.with_borrow_mut(|scoped| *scoped = None);
+        }
+    }
+    SCOPED.with_borrow_mut(|scoped| *scoped = Some(folder));
+    Scope
+}
+
+/// the folder [`distrust`] names, or a test's own while `distrusting` scopes one.
+fn untrusted() -> Option<PathBuf> {
+    #[cfg(test)]
+    if let Some(folder) = SCOPED.with_borrow(Clone::clone) {
+        return Some(folder);
+    }
+    UNTRUSTED.get().cloned()
+}
+
 /// the program `file` on the PATH `var` gives, past one inside the folder [`distrust`] names,
 /// when there is one; else the one inside it passed over, if any, for help to name. every program
 /// fetchloom runs is found here, by that one folder for the whole run.
 pub(crate) fn program(var: Var<'_>, file: &str) -> Result<PathBuf, Option<PathBuf>> {
     let path = var("PATH").ok_or(None)?;
-    let found = match UNTRUSTED.get() {
-        Some(project) => outside(&path, file, project),
+    let found = match untrusted() {
+        Some(project) => outside(&path, file, &project),
         None => installed(&path, file),
     };
     found.ok_or_else(|| installed(&path, file))
@@ -855,6 +885,28 @@ mod tests {
             "the project's program hides none later on PATH"
         );
         assert_eq!(program(&|_| None, "tool"), Err(None));
+    }
+
+    /// a test's distrusted folder holds on its thread while what `distrusting` returns lives, and
+    /// leaves nothing behind for the process: a later test finds the program there again.
+    #[test]
+    fn a_tests_distrusted_folder_ends_with_it() {
+        let project = tempfile::tempdir().unwrap();
+        let bin = project.path().join("bin");
+        fs::create_dir(&bin).unwrap();
+        let planted = bin.join("tool");
+        fs::write(&planted, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&planted, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let var = |name: &str| (name == "PATH").then(|| bin.clone().into_os_string());
+        {
+            let _distrusted = distrusting(project.path().to_path_buf());
+            assert_eq!(program(&var, "tool"), Err(Some(planted.clone())));
+        }
+        assert_eq!(program(&var, "tool"), Ok(planted));
     }
 
     #[cfg(target_os = "linux")]

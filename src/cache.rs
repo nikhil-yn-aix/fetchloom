@@ -2532,8 +2532,7 @@ pub(crate) mod tests {
         }
         let path = std::env::join_paths([&planted, &outside]).unwrap();
         let var = |name: &str| (name == "PATH").then(|| path.clone());
-        // the run's project, as a run's start names it: nextest runs each test in a process of its own
-        crate::machine::distrust(project);
+        let _distrusted = crate::machine::distrusting(project);
         assert_eq!(
             id_program(system.as_os_str(), &var),
             Some(outside.join("id"))
