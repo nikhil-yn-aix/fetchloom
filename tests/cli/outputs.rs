@@ -2976,10 +2976,11 @@ fn force_updates_a_tracked_copy_sync_placed_as_a_plain_sync_does() -> Result {
 }
 
 /// an output git tracks, pinned with LF line ends and checked out where git makes them CRLF, as git
-/// for windows does by default, differs from its pin only in those line ends: status, its check and
-/// a forced sync say so, with the .gitattributes line and the checkout that write the bytes git
-/// keeps, never a re-pin, which would only move the difference to the other system, nor a doubt
-/// about `at`. it stays not ready, as a pin is exact bytes, until that checkout.
+/// for windows does by default, differs from its pin only in those line ends: status, its check, the
+/// re-pin's refusal and a forced sync say so, with the .gitattributes line and the checkout that
+/// write the bytes git keeps, never a re-pin, which would only move the difference to the other
+/// system, nor a doubt about `at`. it stays not ready, as a pin is exact bytes, until that
+/// checkout.
 #[test]
 fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     let sandbox = Sandbox::new()?;
@@ -3006,6 +3007,7 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     for (args, code) in [
         (&["status"][..], 0),
         (&["status", "--check"], 1),
+        (&["add", "./results", "--as", "results"], 1),
         (&["sync", "--force"], 0),
     ] {
         let output = sandbox.run(args)?;
@@ -3013,6 +3015,7 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
         assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
         assert!(stderr.contains(told), "{args:?}: {stderr}");
         assert!(!stderr.contains("fetchloom add"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("--yes"), "{args:?}: {stderr}");
         assert!(!stderr.contains("`at`"), "{args:?}: {stderr}");
     }
     let rows = text(&sandbox.run(&["status"])?.stdout)?;

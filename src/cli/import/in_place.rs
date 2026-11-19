@@ -12,7 +12,7 @@ use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
 use super::super::sync::place::{
-    Placement, Reach, is_marker_form, placed_here, reach, tell_marked,
+    ChangedOutput, Placement, git_tracked, is_marker_form, placed_here, reach, tell_marked,
 };
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
@@ -701,21 +701,32 @@ fn preview(work: &Loop<'_>, (name, shown): (&str, &str), changes: Option<&Change
     }
 }
 
-/// the ways on a refused re-pin of the output `name` offers, as sync's for its folder: no
-/// `sync --force` where this machine placed none of the output, as in a clone, or where nothing
-/// here can write the files of `pinned` the folder lacks or holds changed, as `changes` names
-/// them, since `cache` lacks one and no mirror is set, as `mirrored` says.
-fn repinned(
-    project: &Project,
-    name: &str,
-    pinned: &[LockedFile],
-    changes: &Changes,
-    (cache, mirrored): (&Cache, bool),
-) -> local::Since<'static> {
-    let (state, _) = project.state();
-    if !placed_here(&state, name) {
-        return local::Since::Unplaced { yes: true };
-    }
+/// the output `name` as its folder `at`, `shown` as typed, holds `changes` from its pin of
+/// `pinned`, as a sync finds a changed output, so a refused re-pin offers the ways on sync offers:
+/// none but the fix where git converted the line ends of files it tracks, no `sync --force` where
+/// this machine placed none of the output, as in a clone, or where nothing here can write the files
+/// the folder lacks or holds changed, since `cache` lacks one and no mirror is set.
+fn found_as_changed(
+    context: &Context,
+    (project, at): (&Project, &str),
+    (name, shown): (&str, &str),
+    (changes, pinned, cache): (&Changes, &[LockedFile], &Cache),
+) -> ChangedOutput {
+    let count = |files: usize| u64::try_from(files).unwrap_or(u64::MAX);
+    let mut found = ChangedOutput::new(name, at, shown.to_owned());
+    found.changed = count(changes.changed.len());
+    found.added = count(changes.added.len());
+    found.removed = count(changes.removed.len());
+    found.placed_here = placed_here(&project.state().0, name);
+    let paths: Vec<String> = changes
+        .changed
+        .iter()
+        .map(|(path, ..)| path)
+        .chain(changes.added.iter().map(|(path, _)| path))
+        .map(|path| name::joined(at, path))
+        .collect();
+    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
+    found.tracked = git_tracked(&project.root, at, &paths);
     let needed: HashSet<&str> = changes
         .changed
         .iter()
@@ -726,8 +737,14 @@ fn repinned(
         .iter()
         .filter(|file| needed.contains(file.path.as_str()))
         .map(|file| (&file.sha256, file.size));
-    let lost = reach(files, cache, mirrored) == Reach::Lost;
-    local::Since::Changed { yes: true, lost }
+    found.reach = reach(files, cache, !context.mirrors.mirrors.list.is_empty());
+    found.note_line_ends(&project.root, |_| {
+        pinned
+            .iter()
+            .map(|file| (name::joined(at, &file.path), (file.sha256, file.size)))
+            .collect()
+    });
+    found
 }
 
 /// asks to pin `changes`, what the folder `at` read holds, in place of the output's pin of
@@ -765,25 +782,13 @@ fn approved(
             for line in changes.lines() {
                 error = error.detail(line);
             }
-            // `--force` never changes a file git tracks, so it is no way on for one
-            let paths: Vec<String> = changes
-                .changed
-                .iter()
-                .map(|(path, ..)| path)
-                .chain(changes.added.iter().map(|(path, _)| path))
-                .map(|path| format!("{at}/{path}"))
-                .collect();
-            let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-            let tracked = crate::cli::sync::place::git_tracked(&project.root, at, &paths);
-            let mirrored = !context.mirrors.mirrors.list.is_empty();
-            let since = match repinned(project, name, pinned, changes, (cache, mirrored)) {
-                local::Since::Changed { .. } if !tracked.is_empty() => local::Since::Tracked {
-                    files: &tracked,
-                    yes: true,
-                },
-                since => since,
-            };
-            Err(error.help(local::ways_on(name, shown, since)))
+            let found = found_as_changed(
+                context,
+                (project, at),
+                (name, shown),
+                (changes, pinned, cache),
+            );
+            Err(error.help(found.ways(true)))
         }
     }
 }

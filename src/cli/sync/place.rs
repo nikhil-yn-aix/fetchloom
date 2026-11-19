@@ -350,6 +350,12 @@ impl ChangedOutput {
 
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
+        self.ways(false)
+    }
+
+    /// [`ChangedOutput::ways_on`], the pin of what its folder holds saying yes ahead for `yes`,
+    /// as a run that cannot ask a person needs it.
+    pub(crate) fn ways(&self, yes: bool) -> String {
         let lost = self.reach == Reach::Lost;
         let since = match (&self.left, &self.line_ends) {
             (Some(from), _) => Since::Left { from, lost },
@@ -360,14 +366,39 @@ impl ChangedOutput {
                 at: &self.at,
                 ends,
             },
-            (None, None) if !self.placed_here => Since::Unplaced { yes: false },
+            (None, None) if !self.placed_here => Since::Unplaced { yes },
             (None, None) if !self.tracked.is_empty() => Since::Tracked {
                 files: &self.tracked,
-                yes: false,
+                yes,
             },
-            (None, None) => Since::Changed { yes: false, lost },
+            (None, None) => Since::Changed { yes, lost },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
+    }
+
+    /// notes the line ends git converted in this output's files, as [`line_ends`] finds them, when
+    /// every file it differs in is one git tracks, `pins`, given the output's name, saying what the
+    /// pin holds at each path, as its SHA-256 and size.
+    pub(crate) fn note_line_ends(
+        &mut self,
+        root: &Path,
+        pins: impl FnOnce(&str) -> HashMap<String, (Sha256, u64)>,
+    ) {
+        if self.added + self.removed > 0
+            || usize::try_from(self.changed).ok() != Some(self.tracked.len())
+        {
+            return;
+        }
+        let pins = pins(&self.name);
+        let files: Option<Vec<(&str, Sha256, u64)>> = self
+            .tracked
+            .iter()
+            .map(|path| {
+                pins.get(path)
+                    .map(|(sha256, size)| (path.as_str(), *sha256, *size))
+            })
+            .collect();
+        self.line_ends = files.and_then(|files| line_ends(root, &self.at, &files));
     }
 
     /// what became of this output's folder and the ways on, as a line of status says it.
@@ -3595,7 +3626,7 @@ pub(crate) fn changed_outputs(
             let pinned = targets.iter().map(|target| (target.dataset, target.file));
             let mut output = output.told_of(changes, told).looked_at(survey, pinned);
             output.tracked = git_tracked(root, &output.at, &differ);
-            output.line_ends = only_line_ends(root, &output, targets);
+            output.note_line_ends(root, pinned_in(targets));
             output
         })
         .collect();
@@ -3730,29 +3761,32 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
     tracked
 }
 
-/// which line ends every file `output` differs in holds where its pin holds the other kind, when
-/// that is all that differs and git tracks each, as `targets` pin them: none otherwise. it reads
-/// only those files.
-fn only_line_ends(root: &Path, output: &ChangedOutput, targets: &[Target]) -> Option<LineEnds> {
-    if output.added + output.removed > 0
-        || usize::try_from(output.changed).ok() != Some(output.tracked.len())
-    {
-        return None;
+/// the pins of the files of an output among `targets`, given its name, by path in the project.
+fn pinned_in<'a>(
+    targets: &'a [Target<'a>],
+) -> impl FnOnce(&str) -> HashMap<String, (Sha256, u64)> + 'a {
+    move |name| {
+        targets
+            .iter()
+            .filter(|target| target.dataset == name)
+            .map(|target| (target.path.clone(), (target.sha256, target.size)))
+            .collect()
     }
-    let pinned: HashMap<&str, &Target> = targets
-        .iter()
-        .filter(|target| target.dataset == output.name)
-        .map(|target| (target.path.as_str(), target))
-        .collect();
+}
+
+/// which line ends each of `files`, at its path in the project with the SHA-256 and size its pin
+/// holds, holds where the pin holds the other kind, when each differs only so, and when they are
+/// CRLF with the git command that checks the output folder `at` out again: none otherwise. it
+/// reads each once.
+pub(crate) fn line_ends(root: &Path, at: &str, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
     // whether each holds CRLF where its pin holds LF, rather than the other way
     let mut crlf = None;
-    for path in &output.tracked {
-        let target = pinned.get(path.as_str())?;
+    for (path, sha256, size) in files {
         let file = fs::File::open(native(root, path)).ok()?;
         let [as_lf, as_crlf] = crate::digest::with_other_line_ends(file).ok()?;
-        let here = if as_lf == (target.sha256, target.size) {
+        let here = if as_lf == (*sha256, *size) {
             true
-        } else if as_crlf == (target.sha256, target.size) {
+        } else if as_crlf == (*sha256, *size) {
             false
         } else {
             return None;
@@ -3763,7 +3797,7 @@ fn only_line_ends(root: &Path, output: &ChangedOutput, targets: &[Target]) -> Op
         crlf = Some(here);
     }
     Some(if crlf? {
-        let folder = crate::suggested::shell_word(&output.at);
+        let folder = crate::suggested::shell_word(at);
         LineEnds::Crlf {
             checkout: crate::suggested::git(root, &format!("checkout -- {folder}")),
         }
