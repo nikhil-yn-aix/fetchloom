@@ -2975,6 +2975,109 @@ fn force_updates_a_tracked_copy_sync_placed_as_a_plain_sync_does() -> Result {
     Ok(())
 }
 
+/// an output git tracks, pinned with LF line ends and checked out where git makes them CRLF, as git
+/// for windows does by default, differs from its pin only in those line ends: status, its check and
+/// a forced sync say so, with the .gitattributes line and the checkout that write the bytes git
+/// keeps, never a re-pin, which would only move the difference to the other system, nor a doubt
+/// about `at`. it stays not ready, as a pin is exact bytes, until that checkout.
+#[test]
+fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/a.csv"), b"a,b\n1,2\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    // as a clone where git converts line ends has it: LF committed, CRLF checked out
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"a,b\r\n1,2\r\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    let told = "results/a.csv differs from the pin only in its line ends, made CRLF by git's checkout; add `results/** -text` to the .gitattributes beside data.toml, then `git checkout -- results` writes the bytes git keeps, which the pin holds";
+    for (args, code) in [
+        (&["status"][..], 0),
+        (&["status", "--check"], 1),
+        (&["sync", "--force"], 0),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(stderr.contains(told), "{args:?}: {stderr}");
+        assert!(!stderr.contains("fetchloom add"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("`at`"), "{args:?}: {stderr}");
+    }
+    let rows = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        rows.contains("Committed results/a.csv · git's copy differs from the pinned bytes only in its line ends"),
+        "{rows}"
+    );
+    // line ends are told as the fix only when they are all that differs
+    fs::write(work.join("results/extra.csv"), b"x\n")?;
+    let mixed = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(!mixed.contains(told), "{mixed}");
+    fs::remove_file(work.join("results/extra.csv"))?;
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["checkout", "--", "results"])?;
+    assert_eq!(fs::read(work.join("results/a.csv"))?, b"a,b\n1,2\n");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// the other way round: an output pinned with CRLF line ends, which git keeps as LF where it
+/// converts them on commit, differs from its pin only in those line ends wherever git checks it out
+/// as kept. no checkout here can bring the pinned bytes, so the fix is git keeping them as they
+/// are, committed where they are, which a checkout then writes.
+#[test]
+fn an_outputs_line_ends_git_kept_as_lf_are_told_with_their_fix() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/a.csv"), b"a,b\r\n1,2\r\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "false"])?;
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"a,b\n1,2\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("results/a.csv differs from the pin only in its line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, add `results/** -text` to the .gitattributes beside data.toml, then `git add --renormalize results` and commit, so a pull brings them as pinned"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("fetchloom add"), "{stderr}");
+    // the commit the fix names, made where the pinned bytes are, then the checkout a pull makes
+    fs::write(work.join("results/a.csv"), b"a,b\r\n1,2\r\n")?;
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["add", "--renormalize", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the pinned bytes"])?;
+    fs::remove_file(work.join("results/a.csv"))?;
+    crate::merge::ok(&sandbox, &["checkout", "--", "results"])?;
+    assert_eq!(fs::read(work.join("results/a.csv"))?, b"a,b\r\n1,2\r\n");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
 /// push asks first, as no source says who may read an output, and then sends the files an output
 /// pins, never what its folder holds since, and says so when the folder changed, with the pin that
 /// sends the folder's files instead; a folder that is gone gets the ways back.

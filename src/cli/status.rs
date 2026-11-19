@@ -1210,11 +1210,17 @@ fn in_the_way(blocker: &Blocker) -> &'static str {
 
 impl Status {
     /// each kind of file difference with its verb and what follows each path, if anything.
-    fn lists(&self) -> [(&'static str, Vec<&String>, Option<String>); 8] {
-        let (committed, untracked) = self
+    fn lists(&self) -> [(&'static str, Vec<&String>, Option<String>); 9] {
+        let (committed, untracked): (Vec<&String>, _) = self
             .untracked
             .iter()
             .partition(|path| self.committed.contains(*path));
+        // git's copy that holds the pinned bytes but for the line ends git converted
+        let (converted, committed) = committed.into_iter().partition(|path| {
+            self.changed_outputs
+                .iter()
+                .any(|output| output.line_ends.is_some() && output.tracked.contains(*path))
+        });
         [
             ("Missing", self.missing.iter().collect(), None),
             ("Edited", self.edited.iter().collect(), None),
@@ -1228,6 +1234,14 @@ impl Status {
                 committed,
                 Some(format!(
                     "git's copy holds other bytes than data.lock pins, and it stays, as {}",
+                    crate::source::local::FORCE_KEEPS_GIT
+                )),
+            ),
+            (
+                "Committed",
+                converted,
+                Some(format!(
+                    "git's copy differs from the pinned bytes only in its line ends, and it stays, as {}",
                     crate::source::local::FORCE_KEEPS_GIT
                 )),
             ),

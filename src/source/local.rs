@@ -58,6 +58,52 @@ pub(crate) enum Since<'a> {
     /// it holds other files than the pin, and git tracks `files` of them, which `--force` leaves as
     /// they are; `yes` as for [`Since::Changed`].
     Tracked { files: &'a [String], yes: bool },
+    /// its files differ from the pin only in their line ends, `ends` here, and git tracks each of
+    /// `files`, in the folder data.toml names `at`.
+    LineEnds {
+        files: &'a [String],
+        at: &'a str,
+        ends: &'a LineEnds,
+    },
+}
+
+/// the line ends an output's file holds where its pin holds the other kind, the one difference
+/// between them, as git converts line ends when it checks a file out or keeps it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum LineEnds {
+    /// CRLF where the pin has LF, as a checkout writes them where git converts line ends, with
+    /// the git command that checks the folder out again.
+    Crlf { checkout: String },
+    /// LF where the pin has CRLF, as git keeps the CRLF file it was given where it converts them.
+    Lf,
+}
+
+/// that `files`, which git tracks in the folder of the output `name`, `at` as data.toml names it,
+/// differ from the pin only in their line ends, `ends` here, with the fix: git keeping that
+/// folder's bytes as they are, then a checkout that writes the bytes git keeps, which the pin
+/// holds, or, where git kept them as LF, a commit of the pinned bytes where they are.
+fn line_ends_said(name: &str, at: &str, files: &[String], ends: &LineEnds) -> String {
+    let (these, differ, its) = match files {
+        [one] => (one.clone(), "differs", "its"),
+        _ => (
+            format!(
+                "{} files git tracks in {name}'s folder, such as {}",
+                files.len(),
+                files.first().map_or("", String::as_str)
+            ),
+            "differ",
+            "their",
+        ),
+    };
+    let rule = format!("add `{at}/** -text` to the .gitattributes beside data.toml");
+    match ends {
+        LineEnds::Crlf { checkout } => format!(
+            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{checkout}` writes the bytes git keeps, which the pin holds"
+        ),
+        LineEnds::Lf => format!(
+            "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git add --renormalize {at}` and commit, so a pull brings them as pinned"
+        ),
+    }
 }
 
 /// why `sync --force` leaves a file git tracks in an output's folder as it is, in every line that
@@ -142,6 +188,7 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             kept_by_git(name, files),
             git_ways(name, shown, yes)
         ),
+        Since::LineEnds { files, at, ends } => line_ends_said(name, at, files, ends),
     }
 }
 

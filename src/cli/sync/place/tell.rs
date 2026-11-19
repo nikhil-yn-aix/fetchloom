@@ -590,7 +590,9 @@ fn tell_cleared(output: &Output, verb: &str, cleared: &[(String, String)]) {
 /// a folder of code data.toml names as an output's.
 fn warn_tracked(output: &Output, placement: &Placement) {
     for held in &placement.tracked {
-        let help = if held.placed_here {
+        let help = if held.line_ends.is_some() {
+            held.ways_on()
+        } else if held.placed_here {
             local::git_ways(&held.name, &held.shown, false)
         } else {
             format!(

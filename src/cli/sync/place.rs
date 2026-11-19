@@ -31,7 +31,7 @@ use crate::project::lock::{Lock, LockedFile};
 use crate::project::manifest::{self, Manifest};
 use crate::project::state::{Look, Once, Placed, State, Synced, Uncached};
 use crate::project::{Project, native};
-use crate::source::local::Since;
+use crate::source::local::{LineEnds, Since};
 use crate::stop::Stop;
 use crate::work::Work;
 
@@ -243,6 +243,9 @@ pub(crate) struct ChangedOutput {
     pub(crate) needed: Vec<(Sha256, u64)>,
     /// whether a `sync --force` here can write `needed`.
     pub(crate) reach: Reach,
+    /// the line ends its files hold where the pin holds the other kind, when that is all that
+    /// differs and git tracks each of them, as `tracked` lists them: git converted them.
+    pub(crate) line_ends: Option<LineEnds>,
 }
 
 /// whether a `sync --force` here can write the pinned files an output's folder lacks or holds
@@ -288,6 +291,7 @@ impl ChangedOutput {
             tracked: Vec::new(),
             needed: Vec::new(),
             reach: Reach::Reachable,
+            line_ends: None,
         }
     }
 
@@ -347,15 +351,21 @@ impl ChangedOutput {
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
     pub(crate) fn ways_on(&self) -> String {
         let lost = self.reach == Reach::Lost;
-        let since = match &self.left {
-            Some(from) => Since::Left { from, lost },
-            None if self.gone => Since::Gone { lost },
-            None if !self.placed_here => Since::Unplaced { yes: false },
-            None if !self.tracked.is_empty() => Since::Tracked {
+        let since = match (&self.left, &self.line_ends) {
+            (Some(from), _) => Since::Left { from, lost },
+            (None, _) if self.gone => Since::Gone { lost },
+            // bytes that match but for line ends show the folder is the output's
+            (None, Some(ends)) => Since::LineEnds {
+                files: &self.tracked,
+                at: &self.at,
+                ends,
+            },
+            (None, None) if !self.placed_here => Since::Unplaced { yes: false },
+            (None, None) if !self.tracked.is_empty() => Since::Tracked {
                 files: &self.tracked,
                 yes: false,
             },
-            None => Since::Changed { yes: false, lost },
+            (None, None) => Since::Changed { yes: false, lost },
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
@@ -3585,6 +3595,7 @@ pub(crate) fn changed_outputs(
             let pinned = targets.iter().map(|target| (target.dataset, target.file));
             let mut output = output.told_of(changes, told).looked_at(survey, pinned);
             output.tracked = git_tracked(root, &output.at, &differ);
+            output.line_ends = only_line_ends(root, &output, targets);
             output
         })
         .collect();
@@ -3679,8 +3690,10 @@ fn keep_tracked(
     // every file that stays changed its output, so the output is one of `changed`
     let mut held = Vec::new();
     for output in changed {
+        // an output differing only in line ends git converted keeps just those files
         let mut kept = ChangedOutput {
             placed_here: output.placed_here,
+            line_ends: output.line_ends.clone(),
             ..ChangedOutput::new(&output.name, &output.at, output.shown.clone())
         };
         for (_, path, extra) in stay.iter().filter(|(name, ..)| *name == output.name) {
@@ -3715,6 +3728,48 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
         .collect();
     tracked.sort_unstable();
     tracked
+}
+
+/// which line ends every file `output` differs in holds where its pin holds the other kind, when
+/// that is all that differs and git tracks each, as `targets` pin them: none otherwise. it reads
+/// only those files.
+fn only_line_ends(root: &Path, output: &ChangedOutput, targets: &[Target]) -> Option<LineEnds> {
+    if output.added + output.removed > 0
+        || usize::try_from(output.changed).ok() != Some(output.tracked.len())
+    {
+        return None;
+    }
+    let pinned: HashMap<&str, &Target> = targets
+        .iter()
+        .filter(|target| target.dataset == output.name)
+        .map(|target| (target.path.as_str(), target))
+        .collect();
+    // whether each holds CRLF where its pin holds LF, rather than the other way
+    let mut crlf = None;
+    for path in &output.tracked {
+        let target = pinned.get(path.as_str())?;
+        let file = fs::File::open(native(root, path)).ok()?;
+        let [as_lf, as_crlf] = crate::digest::with_other_line_ends(file).ok()?;
+        let here = if as_lf == (target.sha256, target.size) {
+            true
+        } else if as_crlf == (target.sha256, target.size) {
+            false
+        } else {
+            return None;
+        };
+        if crlf.is_some_and(|crlf| crlf != here) {
+            return None;
+        }
+        crlf = Some(here);
+    }
+    Some(if crlf? {
+        let folder = crate::suggested::shell_word(&output.at);
+        LineEnds::Crlf {
+            checkout: crate::suggested::git(root, &format!("checkout -- {folder}")),
+        }
+    } else {
+        LineEnds::Lf
+    })
 }
 
 /// `at`, a folder in the project at `root`, as a command run in the current folder names it.

@@ -299,9 +299,84 @@ pub(crate) fn sha256(bytes: &[u8]) -> Sha256 {
     hasher.finish().0
 }
 
+/// the SHA-256 and count of the bytes `reader` holds with their line ends made the other kind, as
+/// git converts them: each CRLF made LF, then each LF with no CR before it made CRLF.
+pub(crate) fn with_other_line_ends(mut reader: impl Read) -> io::Result<[(Sha256, u64); 2]> {
+    let (mut lf, mut crlf) = ((Hasher::default(), 0_u64), (Hasher::default(), 0_u64));
+    let mut block = Block::sized(BLOCK as u64);
+    let (mut to_lf, mut to_crlf) = (Vec::new(), Vec::new());
+    // a CR waits for the next byte, which tells whether it ends a line
+    let (mut held, mut last) = (false, 0_u8);
+    loop {
+        let buffer = block.get();
+        let read = reader.read(buffer)?;
+        if read == 0 {
+            break;
+        }
+        to_lf.clear();
+        to_crlf.clear();
+        for &byte in &buffer[..read] {
+            if std::mem::take(&mut held) && byte != b'\n' {
+                to_lf.push(b'\r');
+            }
+            if byte == b'\r' {
+                held = true;
+            } else {
+                to_lf.push(byte);
+            }
+            if byte == b'\n' && last != b'\r' {
+                to_crlf.push(b'\r');
+            }
+            to_crlf.push(byte);
+            last = byte;
+        }
+        lf.0.update(&to_lf);
+        lf.1 += to_lf.len() as u64;
+        crlf.0.update(&to_crlf);
+        crlf.1 += to_crlf.len() as u64;
+    }
+    if held {
+        lf.0.update(b"\r");
+        lf.1 += 1;
+    }
+    Ok([(lf.0.finish().0, lf.1), (crlf.0.finish().0, crlf.1)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a byte at a time, so every CR falls at the end of a read.
+    struct Trickle<'a>(&'a [u8]);
+
+    impl Read for Trickle<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            let Some((first, rest)) = self.0.split_first() else {
+                return Ok(0);
+            };
+            buffer[0] = *first;
+            self.0 = rest;
+            Ok(1)
+        }
+    }
+
+    /// CRLF becomes LF and a lone LF becomes CRLF, either way the line ends git converts, while a
+    /// lone CR stays, however the reads fall.
+    #[test]
+    fn other_line_ends_are_hashed_as_git_converts_them() {
+        let held = b"a\r\nb\rc\r\r\nd\n\r";
+        let expected = [
+            (sha256(b"a\nb\rc\r\nd\n\r"), 10),
+            (sha256(b"a\r\nb\rc\r\r\nd\r\n\r"), 13),
+        ];
+        for (name, read) in [
+            ("at once", with_other_line_ends(&held[..])),
+            ("a byte at a time", with_other_line_ends(Trickle(held))),
+        ] {
+            let read = read.expect("a slice reads");
+            assert_eq!(read, expected, "{name}");
+        }
+    }
 
     #[test]
     fn match_the_published_test_vectors() {
