@@ -282,10 +282,11 @@ impl Folder {
     /// reads it now. the system that wrote the record decides how: this one, by
     /// [`Folder::matches`]; another, by the folder's path on a windows drive, as windows and wsl
     /// both name it, since neither its number nor its creation time is the same across them. a
-    /// record that names no folder was written for another, since every one this build writes
+    /// record whose folder names no system was written by this one, before folders named theirs.
+    /// a record that names no folder was written for another, since every one this build writes
     /// names its folder wherever the folder can be told. `untold` says what a record is when no
-    /// comparison can be made: this folder cannot be told, the record names no system or no path,
-    /// or either path is off a windows drive, as another mount or wsl's own folders are.
+    /// comparison can be made: this folder cannot be told, the record names no path, or either
+    /// path is off a windows drive, as another mount or wsl's own folders are.
     pub(crate) fn written_here(
         recorded: Option<&Folder>,
         here: Option<&Folder>,
@@ -296,13 +297,22 @@ impl Folder {
             (None, Some(_)) => return false,
             (_, None) => return untold == Untold::Here,
         };
-        match (recorded.os.as_deref(), here.os.as_deref()) {
-            (Some(written), Some(reading)) if written == reading => recorded.matches(here),
-            (Some(_), Some(_)) => match (recorded.on_drive(), here.on_drive()) {
-                (Some(written), Some(found)) => written == found,
-                _ => untold == Untold::Here,
-            },
+        let reading = here.os.as_deref();
+        if recorded.os.as_deref().or(reading) == reading {
+            return recorded.matches(here);
+        }
+        match (recorded.on_drive(), here.on_drive()) {
+            (Some(written), Some(found)) => written == found,
             _ => untold == Untold::Here,
+        }
+    }
+
+    /// this view of the folder as the system `os` read it, where it names no system itself, as an
+    /// owner record's folder from before folders named theirs does: the record names its own.
+    pub(crate) fn read_on(&self, os: &str) -> Folder {
+        Folder {
+            os: self.os.clone().or_else(|| Some(os.to_owned())),
+            ..self.clone()
         }
     }
 
@@ -1354,7 +1364,7 @@ mod tests {
             // windows' record read in wsl
             (windows(r"C:\x"), linux("/mnt/c/x"), owner, true),
             (windows(r"C:\x"), linux("/mnt/c/y"), owner, false),
-            // no comparison: no path, another mount, wsl's own folder through \\wsl$, no system
+            // no comparison: no path, another mount, wsl's own folder through \\wsl$
             (
                 folder(Some("linux"), None, 5),
                 windows(r"C:\x"),
@@ -1380,16 +1390,18 @@ mod tests {
                 false,
             ),
             (linux("/mnt/wsl/x"), windows(r"C:\x"), state, false),
+            // a record naming no system, from before records named theirs: this one's, so its
+            // number and creation time decide, path aside
             (
-                folder(None, Some("/mnt/c/x"), 5),
+                folder(None, Some("/mnt/c/y"), 9),
                 windows(r"C:\x"),
-                owner,
+                state,
                 true,
             ),
             (
                 folder(None, Some("/mnt/c/x"), 5),
                 windows(r"C:\x"),
-                state,
+                owner,
                 false,
             ),
             // one system's own: its number and creation time, never its path

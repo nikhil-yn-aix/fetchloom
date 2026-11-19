@@ -223,7 +223,11 @@ impl Held {
             // a record written for another folder, as a clone or a copy carries, or naming none, as
             // one written by hand, does neither
             let elsewhere = owner.as_ref().is_some_and(|owner| {
-                !Folder::written_here(owner.folder.as_ref(), self.here.as_ref(), Untold::Here)
+                let written = owner
+                    .folder
+                    .as_ref()
+                    .map(|folder| folder.read_on(&owner.os));
+                !Folder::written_here(written.as_ref(), self.here.as_ref(), Untold::Here)
             });
             if elsewhere {
                 remove_stale_owner(path, &bytes, modified)?;
@@ -2093,7 +2097,9 @@ mod tests {
     /// wsl and windows share a project on a windows drive: a record wsl wrote there is this
     /// folder's on windows by its path, mapped between /mnt/c/... and C:\..., in any case, and a
     /// copy's at another path; a record of another system's naming no path holds, since nothing
-    /// tells it apart. the folder's number and creation time differ across the two.
+    /// tells it apart, and so does one whose folder names no system, as records from before
+    /// folders named theirs: the record's own system is the folder's. the folder's number and
+    /// creation time differ across the two.
     #[test]
     fn another_systems_owner_record_is_this_folders_by_its_path() {
         let windows = |path: &str| -> Folder {
@@ -2129,6 +2135,11 @@ mod tests {
                 false,
             ),
             (windows(r"C:\Users\me\proj"), wsl(None), true),
+            (
+                windows(r"C:\Users\me\proj"),
+                serde_json::json!({ "inode": 5 }),
+                true,
+            ),
         ] {
             let (_dir, project) = project(&[(".fetchloom/owner", "")]);
             let path = project.own_folder().join("owner");
@@ -2976,14 +2987,22 @@ mod tests {
         state.id = Some("ab12".to_owned());
         state.told.note(Once::Edit, "data/set/a:1:42");
         project.write_state(&state).unwrap();
-        let (own, _) = project.state();
-        assert_eq!(own.id.as_deref(), Some("ab12"));
-        assert_eq!(own.files.len(), 1);
-        assert!(own.copied.files.is_empty() && own.copied.id.is_none());
-        // the same state as another folder holds it: another number and creation time, or no
-        // folder at all, which says of no folder that it is this one
         let path = project.own_folder().join("state");
         let ours: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        // as written, and as a state from before states named their system and path holds it
+        let mut old = ours.clone();
+        for field in ["os", "path"] {
+            old["folder"].as_object_mut().unwrap().remove(field);
+        }
+        for written in [&ours, &old] {
+            fs::write(&path, written.to_string()).unwrap();
+            let (own, _) = project.state();
+            assert_eq!(own.id.as_deref(), Some("ab12"), "{written}");
+            assert_eq!(own.files.len(), 1, "{written}");
+            assert!(own.copied.files.is_empty() && own.copied.id.is_none());
+        }
+        // the same state as another folder holds it: another number and creation time, or no
+        // folder at all, which says of no folder that it is this one
         let mut moved = ours.clone();
         for number in ["inode", "created"] {
             if let Some(value) = moved["folder"][number].as_u64() {
