@@ -740,10 +740,12 @@ fn check(
         status.dataset_of = datasets_of(&planned, &status.not_unpacked);
     }
     survey.retarget(&project.root, &planned.targets);
-    compare(&mut status, project, &manifest, &survey, &planned)?;
-    for changed in &mut status.changed_outputs {
-        changed.note_reach(&cache, mirrored);
-    }
+    let actions = compare(&mut status, (project, &manifest), (&survey, &planned))?;
+    note_unsupplied(
+        &mut status,
+        (&planned.targets, &actions),
+        (&cache, mirrored),
+    );
     // a dataset dropped here whose files a drop cut short left is told in one line
     let dropped: HashSet<&str> = status.dropped.iter().map(String::as_str).collect();
     for path in &status.unneeded {
@@ -759,8 +761,6 @@ fn check(
         }
     }
     status.downloads = downloads(&status, &planned, &cache);
-    status.imported_elsewhere =
-        imported_elsewhere((&status, &manifest), &planned, &cache, mirrored);
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -849,39 +849,29 @@ fn downloads(
         .collect()
 }
 
-/// the imports of `planned` with a file of `status` this machine cannot give back, each with those
-/// files: a missing or damaged one whose bytes `cache` lacks, as when an edit through a link
-/// changed the cache's copy with it, with no mirror to ask. as [`place::reach`] decides, a mirror
-/// set, as `mirrored` says, may hold them, so a sync may bring them and none is listed.
-fn imported_elsewhere(
-    (status, manifest): (&Status, &Manifest),
-    planned: &plan::Plan<'_>,
-    cache: &Cache,
-    mirrored: bool,
-) -> BTreeMap<String, Vec<String>> {
-    if mirrored {
-        return BTreeMap::new();
-    }
-    let missing: HashSet<&str> = status.missing.iter().map(String::as_str).collect();
-    let damaged: HashSet<&str> = status.damaged.iter().map(String::as_str).collect();
-    let mut lacking: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for target in &planned.targets {
-        let path = target.path.as_str();
-        let lost = (missing.contains(path) || damaged.contains(path))
-            && cache.find(&target.sha256, Some(target.size)).is_none();
-        if lost
-            && manifest
-                .datasets
-                .get(target.dataset)
-                .is_some_and(manifest::Entry::is_import)
-        {
-            lacking
-                .entry(target.dataset.to_owned())
-                .or_default()
-                .push(target.path.clone());
-        }
-    }
-    lacking
+/// notes in `status` what nothing here can supply, as sync finds it among the writes `actions`
+/// decide for `targets`: those a plain sync makes, by import and output, and those `--force` makes
+/// in a changed output's folder, which mark the output lost.
+fn note_unsupplied(
+    status: &mut Status,
+    (targets, actions): (&[plan::Target<'_>], &[Action]),
+    (cache, mirrored): (&Cache, bool),
+) {
+    let plain = targets
+        .iter()
+        .zip(actions)
+        .filter(|(_, action)| place::needs_bytes(action))
+        .map(|(target, _)| target);
+    status.imported_elsewhere = place::unsupplied(plain, (cache, mirrored))
+        .into_iter()
+        .map(|(name, files)| {
+            let paths = files.iter().map(|target| target.path.clone()).collect();
+            (name.to_owned(), paths)
+        })
+        .collect();
+    let forced = place::forced_writes(targets, actions, &status.changed_outputs);
+    let forced = forced.iter().map(|at| &targets[*at]);
+    place::note_lost(&mut status.changed_outputs, forced, (cache, mirrored));
 }
 
 /// the files of `missing` in a folder that holds no file now, as one deleted whole, each with
@@ -912,14 +902,13 @@ fn gone(
 }
 
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and
-/// lists as extra every other file in the data folder.
+/// lists as extra every other file in the data folder. it hands back what a sync would do with
+/// each target.
 fn compare(
     status: &mut Status,
-    project: &Project,
-    manifest: &Manifest,
-    survey: &Survey,
-    planned: &plan::Plan<'_>,
-) -> Result<(), Error> {
+    (project, manifest): (&Project, &Manifest),
+    (survey, planned): (&Survey, &plan::Plan<'_>),
+) -> Result<Vec<Action>, Error> {
     let targets = &planned.targets;
     let going = OnceCell::new();
     let going_now = || {
@@ -1028,7 +1017,7 @@ fn compare(
     status.committed = committed(&project.root, manifest, &status.untracked);
     status.refused =
         place::refuse_first_follows(project, manifest, (targets, &actions), survey).err();
-    Ok(())
+    Ok(actions)
 }
 
 /// sorts `extra` of `status`, the files no dataset places, `wanted` naming those placed: a changed
@@ -1352,7 +1341,7 @@ impl Status {
             })
             || self.fetchable(&self.missing)
             || !self.not_unpacked.is_empty()
-            || self.outdated.iter().any(|path| !self.left_whole(path))
+            || self.fetchable(&self.outdated)
             || self.fetchable(&self.damaged)
     }
 }

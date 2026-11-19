@@ -238,10 +238,8 @@ pub(crate) struct ChangedOutput {
     /// its changed or added files git tracks, which `--force` leaves as they are, so none is
     /// offered.
     pub(crate) tracked: Vec<String>,
-    /// the pinned files a `sync --force` would write there, as [`forced_write`] tells, outdated
-    /// ones too, whatever the summary counts, each with its SHA-256 and size.
-    pub(crate) needed: Vec<(Sha256, u64)>,
-    /// whether a `sync --force` here can write `needed`.
+    /// whether a `sync --force` here can write the files it would write there, as [`note_lost`]
+    /// notes.
     pub(crate) reach: Reach,
     /// the line ends its files hold where the pin holds the other kind, when that is all that
     /// differs and git tracks each of them, as `tracked` lists them: git converted them.
@@ -260,7 +258,7 @@ pub(crate) enum Reach {
 
 /// whether a sync here can write `files`, pinned files each with its SHA-256 and size, as `sync
 /// --force` would: `cache` holds each, or a mirror is set to ask, as `mirrored` says, which may.
-pub(crate) fn reach<'f>(
+fn reach<'f>(
     mut files: impl Iterator<Item = (&'f Sha256, u64)>,
     cache: &Cache,
     mirrored: bool,
@@ -289,7 +287,6 @@ impl ChangedOutput {
             left: None,
             placed_here: false,
             tracked: Vec::new(),
-            needed: Vec::new(),
             reach: Reach::Reachable,
             line_ends: None,
         }
@@ -331,13 +328,6 @@ impl ChangedOutput {
     /// that this output's folder, as `folder` names it, is gone, when nothing is at it.
     pub(crate) fn gone_said(&self, folder: &str) -> Option<String> {
         self.gone.then(|| format!("{folder} is gone"))
-    }
-
-    /// notes whether a `sync --force` here can write the pinned files its folder lacks or holds
-    /// changed, as [`reach`] says for `cache` and `mirrored`.
-    pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool) {
-        let needed = self.needed.iter().map(|(digest, size)| (digest, *size));
-        self.reach = reach(needed, cache, mirrored);
     }
 
     /// the ways on from this output's folder, as it changed, is gone, or was left elsewhere.
@@ -1043,6 +1033,9 @@ pub(crate) struct Placing<'a> {
     still_marked: Vec<String>,
     /// the outputs left out, as no cache or mirror this machine reaches holds their files.
     elsewhere: Vec<Elsewhere>,
+    /// where in `targets` the files are that `--force` would write in the folders of `changed`,
+    /// as decided before the run left those outputs whole.
+    forced: Vec<usize>,
 }
 
 impl<'a> Placing<'a> {
@@ -1121,6 +1114,7 @@ impl<'a> Placing<'a> {
             &survey,
             scope,
         );
+        let forced = forced_writes(&plan.targets, &actions, &changed);
         if force {
             outputs.left.clear();
         } else {
@@ -1157,6 +1151,7 @@ impl<'a> Placing<'a> {
             unmarking: Vec::new(),
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
+            forced,
         })
     }
 
@@ -1245,12 +1240,11 @@ impl<'a> Placing<'a> {
         })
     }
 
-    /// notes, for each output of the changes, whether a `sync --force` here can write the pinned
-    /// files its folder lacks or holds changed, as [`reach`] says for `cache` and `mirrored`.
+    /// notes, for each output of the changes, whether a `sync --force` here can write the files it
+    /// would write in its folder, as [`note_lost`] does for `cache` and `mirrored`.
     pub(crate) fn note_reach(&mut self, cache: &Cache, mirrored: bool) {
-        for changed in &mut self.changed {
-            changed.note_reach(cache, mirrored);
-        }
+        let forced = self.forced.iter().map(|at| &self.targets[*at]);
+        note_lost(&mut self.changed, forced, (cache, mirrored));
     }
 
     /// the datasets with a file placing needs whose bytes `holds` says the cache lacks, whatever was
@@ -1792,6 +1786,7 @@ impl<'a> Placing<'a> {
             unmarking: _,
             still_marked: _,
             elsewhere,
+            forced: _,
         } = self;
         let root = placing_root(project, manifest)?;
         let mut placement = Placement {
@@ -2158,7 +2153,7 @@ pub(crate) struct Seen {
     pub(crate) lock: Option<Sha256>,
 }
 
-fn needs_bytes(action: &Action) -> bool {
+pub(crate) fn needs_bytes(action: &Action) -> bool {
     matches!(
         action,
         Action::Place
@@ -2172,13 +2167,87 @@ fn needs_bytes(action: &Action) -> bool {
 /// whether `sync --force` writes the pinned file whose action, decided without `--force`, is
 /// `action`: one a plain sync writes as well, or one it leaves that `--force` overwrites or clears
 /// the way for, as [`decide`] decides with it.
-fn forced_write(action: &Action) -> bool {
+pub(crate) fn forced_write(action: &Action) -> bool {
     needs_bytes(action)
         || matches!(
             action,
             Action::Leave(Reason::Changed | Reason::Shared | Reason::Foreign)
         )
         || matches!(action, Action::Blocked(blocker) if blocker.clearable)
+}
+
+/// the datasets among `written`, files a run must write, whose bytes nothing here can supply,
+/// each with those files: an import's or an output's, which no link fetches, that [`reach`] finds
+/// lost for `cache` and `mirrored`. status asks it of what a plain sync writes, as
+/// [`needs_bytes`] tells, and status and sync of what `--force` writes in a changed output's
+/// folder, as [`forced_writes`] picks, so each tells such a file the same way.
+pub(crate) fn unsupplied<'t, 'p: 't>(
+    written: impl IntoIterator<Item = &'t Target<'p>>,
+    (cache, mirrored): (&Cache, bool),
+) -> BTreeMap<&'p str, Vec<&'t Target<'p>>> {
+    let mut by_dataset: BTreeMap<&'p str, Vec<&'t Target<'p>>> = BTreeMap::new();
+    for target in written {
+        if target.file.url.is_empty() {
+            by_dataset.entry(target.dataset).or_default().push(target);
+        }
+    }
+    by_dataset.retain(|_, files| {
+        let files = files.iter().map(|target| (&target.sha256, target.size));
+        reach(files, cache, mirrored) == Reach::Lost
+    });
+    by_dataset
+}
+
+/// the targets of the output `name` whose folder is `at` for `files` of its pin, as a plan places
+/// them, for a command that has no plan to ask [`unsupplied`] of them.
+pub(crate) fn output_targets<'f>(
+    name: &'f str,
+    at: &str,
+    files: impl IntoIterator<Item = &'f LockedFile>,
+) -> Vec<Target<'f>> {
+    files
+        .into_iter()
+        .map(|file| Target {
+            dataset: name,
+            path: crate::name::joined(at, &file.path),
+            sha256: file.sha256,
+            size: file.size,
+            copy: false,
+            file,
+        })
+        .collect()
+}
+
+/// where in `targets` the files are that `--force` would write in the folders of `changed`, as
+/// their `actions`, decided without `--force`, tell.
+pub(crate) fn forced_writes(
+    targets: &[Target],
+    actions: &[Action],
+    changed: &[ChangedOutput],
+) -> Vec<usize> {
+    let left: HashSet<&str> = changed.iter().map(|output| output.name.as_str()).collect();
+    targets
+        .iter()
+        .zip(actions)
+        .enumerate()
+        .filter(|(_, (target, action))| left.contains(target.dataset) && forced_write(action))
+        .map(|(at, _)| at)
+        .collect()
+}
+
+/// notes each output of `changed` whose files of `forced`, those `--force` would write in its
+/// folder, nothing here can supply, as [`unsupplied`] finds for `cache` and `mirrored`.
+pub(crate) fn note_lost<'t, 'p: 't>(
+    changed: &mut [ChangedOutput],
+    forced: impl IntoIterator<Item = &'t Target<'p>>,
+    (cache, mirrored): (&Cache, bool),
+) {
+    let lost = unsupplied(forced, (cache, mirrored));
+    for output in changed {
+        if lost.contains_key(output.name.as_str()) {
+            output.reach = Reach::Lost;
+        }
+    }
 }
 
 /// the targets of each dataset `wanted` names, gathered in one pass over `targets`, so each
@@ -3569,9 +3638,6 @@ pub(crate) fn changed_outputs(
         };
         let path = target.path.as_str();
         let ours = authored.contains(target.dataset);
-        if forced_write(action) {
-            output.needed.push((target.sha256, target.size));
-        }
         let (how, count) = match action {
             Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
             | Action::Overwrite(_)
@@ -4634,6 +4700,7 @@ mod tests {
             unmarking: Vec::new(),
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
+            forced: Vec::new(),
         };
 
         placing
@@ -4833,6 +4900,7 @@ mod tests {
             unmarking: Vec::new(),
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
+            forced: Vec::new(),
         };
         placing
             .apply(
@@ -4906,6 +4974,7 @@ mod tests {
                 unmarking: Vec::new(),
                 still_marked: Vec::new(),
                 elsewhere: Vec::new(),
+                forced: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -4984,6 +5053,7 @@ mod tests {
                 unmarking: Vec::new(),
                 still_marked: Vec::new(),
                 elsewhere: Vec::new(),
+                forced: Vec::new(),
             };
 
             let placed = placing.apply(
@@ -5066,6 +5136,7 @@ mod tests {
             unmarking: Vec::new(),
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
+            forced: Vec::new(),
         };
 
         placing
@@ -5266,6 +5337,7 @@ mod tests {
             unmarking: Vec::new(),
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
+            forced: Vec::new(),
         };
         let holding: Vec<String> = placing
             .holding()

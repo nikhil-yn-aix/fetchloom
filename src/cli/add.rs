@@ -423,11 +423,11 @@ fn output_gone(word: &str, project: &Project, mirrored: bool) -> Option<Error> {
         .iter()
         .flat_map(|lock| &lock.datasets)
         .filter(|locked| locked.name == *output)
-        .flat_map(|locked| &locked.files)
-        .map(|file| (&file.sha256, file.size));
+        .flat_map(|locked| &locked.files);
+    let written = crate::cli::sync::place::output_targets(output, at, files);
     let lost = super::peek_cache().is_ok_and(|cache| {
-        crate::cli::sync::place::reach(files, &cache, mirrored)
-            == crate::cli::sync::place::Reach::Lost
+        crate::cli::sync::place::unsupplied(&written, (&cache, mirrored))
+            .contains_key(output.as_str())
     });
     let since = match left.as_deref() {
         Some(from) => local::Since::Left { from, lost },

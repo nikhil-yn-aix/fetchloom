@@ -1207,6 +1207,57 @@ fn status_names_the_outputs_out_of_reach_in_one_hint() -> Result {
     Ok(())
 }
 
+/// a teammate's sync placed an output's first pin; the author pinned a second run with another
+/// cache and pushed nothing. the teammate's outdated copy is one a sync must replace, and nothing
+/// here holds the new pin's bytes, so sync and `status --check` name it in the same neutral words,
+/// and nothing sends the person to a sync that places nothing.
+#[test]
+fn an_outdated_output_no_cache_holds_reads_alike_in_status_and_sync() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"v1\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    ok(&sandbox.command_in(&teammate, &["sync"]).output()?)?;
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
+    let other = sandbox.folder("other-cache")?;
+    fs::write(work.join("results/a.csv"), b"v2\n")?;
+    ok(&sandbox
+        .command(&["add", "./results", "--as", "results", "--yes"])
+        .env("FETCHLOOM_CACHE", &other)
+        .output()?)?;
+    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
+    let unreached = "the files results pins are in no cache or mirror here";
+    let synced = sandbox.command_in(&teammate, &["sync"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("warning: {unreached}\n")),
+        "{stderr}"
+    );
+    let checked = sandbox
+        .command_in(&teammate, &["status", "--check"])
+        .output()?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "  {unreached}: push them from a machine that has them"
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("replaces it"), "{stderr}");
+    assert!(
+        !stderr.contains("places missing or updated files"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a teammate whose mirror holds an output's files, named by `--mirror` or by the settings, is
 /// told of them as of any dataset's missing files, which `fetchloom sync` places, as it does from
 /// that mirror; without a mirror, nothing here can, and status says so in the neutral words.

@@ -12,7 +12,8 @@ use super::super::diff::{self, Change, Pinned};
 use super::super::project::{Outcome, Report, dry_run_done};
 use super::super::sync::disk;
 use super::super::sync::place::{
-    ChangedOutput, Placement, git_tracked, is_marker_form, placed_here, reach, tell_marked,
+    ChangedOutput, Placement, git_tracked, is_marker_form, note_lost, output_targets, placed_here,
+    tell_marked,
 };
 use super::super::sync::{Given, Loop};
 use super::super::{Context, open_cache, peek_cache};
@@ -735,9 +736,14 @@ fn found_as_changed(
         .collect();
     let files = pinned
         .iter()
-        .filter(|file| needed.contains(file.path.as_str()))
-        .map(|file| (&file.sha256, file.size));
-    found.reach = reach(files, cache, !context.mirrors.mirrors.list.is_empty());
+        .filter(|file| needed.contains(file.path.as_str()));
+    let written = output_targets(name, at, files);
+    let mirrored = !context.mirrors.mirrors.list.is_empty();
+    note_lost(
+        std::slice::from_mut(&mut found),
+        &written,
+        (cache, mirrored),
+    );
     found.note_line_ends(&project.root, |_| {
         pinned
             .iter()
