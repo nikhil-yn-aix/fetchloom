@@ -4,7 +4,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::support::{Result, Sandbox, edit, json, look, skipped, text, warned, zip_of};
+use crate::support::{Result, Sandbox, edit, json, look, ok, skipped, text, warned, zip_of};
 
 /// a folder of two files, one of them in a folder of its own.
 fn flowers(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
@@ -674,6 +674,46 @@ fn an_import_from_inside_the_work_tree_says_git_takes_it() -> Result {
     fs::write(work.join(".gitignore"), "/sepals.csv\n")?;
     let ignored = run(&["--json", "add", "./sepals.csv"])?;
     assert_eq!(warned(&ignored), Vec::<String>::new());
+    Ok(())
+}
+
+/// the git command an import from a folder inside the project tells starts in the project's
+/// folder and names the file from there, so run as told in that folder it takes that file out of
+/// git's index, never one of the same name in the project's folder.
+#[test]
+fn an_import_in_a_subfolder_tells_git_to_untrack_its_own_file() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let sub = work.join("sub");
+    fs::create_dir_all(&sub)?;
+    fs::write(work.join("sepals.csv"), b"length\n5.1\n")?;
+    for folder in [&work, &sub] {
+        fs::write(folder.join("petals.csv"), b"length\n1.4\n")?;
+    }
+    crate::merge::ok(&sandbox, &["add", "petals.csv", "sub/petals.csv"])?;
+    ok(&sandbox.run(&["add", "./sepals.csv"])?)?;
+    let mut command = sandbox.command_in(&sub, &["--json", "add", "./petals.csv"]);
+    for name in crate::merge::git_variables() {
+        command.env_remove(name);
+    }
+    let added = command.output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stdout)?);
+    let told = "git -C .. rm -r --cached sub/petals.csv";
+    let warnings = warned(&json(&added)?);
+    assert!(
+        warnings
+            .iter()
+            .any(|warning| warning.contains(&format!("run `{told}`"))),
+        "{warnings:?}"
+    );
+    let words: Vec<&str> = told.split(' ').skip(1).collect();
+    let ran = crate::merge::git(&sandbox, &sub, &words)?.ok_or("git runs")?;
+    assert!(ran.status.success(), "{}", text(&ran.stderr)?);
+    let listed = crate::merge::git(&sandbox, &work, &["ls-files"])?.ok_or("git runs")?;
+    assert_eq!(text(&listed.stdout)?, "petals.csv\n");
     Ok(())
 }
 

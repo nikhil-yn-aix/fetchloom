@@ -3444,6 +3444,79 @@ fn line_ends_are_told_file_by_file_beside_a_rerun() -> Result {
     Ok(())
 }
 
+/// the line-ends fix told in a folder inside the project starts git in the project's folder: run
+/// as told there, it rewrites the output's file and leaves a file of the same path below that
+/// folder as it was, its staged edit and its edit not staged alike. told in the project's folder,
+/// it names no folder.
+#[test]
+fn the_line_ends_fix_told_in_a_subfolder_starts_git_in_the_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/table1.csv"), b"a,b\n1,2\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    let paper = work.join("paper");
+    let (pinned, shadow) = (
+        work.join("results/table1.csv"),
+        paper.join("results/table1.csv"),
+    );
+    fs::create_dir_all(work.join("results"))?;
+    fs::create_dir_all(paper.join("results"))?;
+    fs::write(&pinned, b"a,b\r\n1,2\r\n")?;
+    aged(&pinned)?;
+    fs::write(&shadow, b"paper copy\n")?;
+    crate::merge::ok(&sandbox, &["add", "results", "paper"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results and paper"])?;
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the results' bytes"])?;
+    fs::write(&shadow, b"staged edit\n")?;
+    crate::merge::ok(&sandbox, &["add", "paper/results/table1.csv"])?;
+    fs::write(&shadow, b"edit not staged\n")?;
+    let at_root = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(
+        at_root.contains("then `git rm --cached -q -- results/table1.csv` and `git checkout HEAD -- results/table1.csv` write"),
+        "{at_root}"
+    );
+    assert!(!at_root.contains("git -C"), "{at_root}");
+    let told = text(&sandbox.command_in(&paper, &["status"]).output()?.stderr)?;
+    assert!(
+        told.contains("then `git -C .. rm --cached -q -- results/table1.csv` and `git -C .. checkout HEAD -- results/table1.csv` write"),
+        "{told}"
+    );
+    // each git command told, run as told in paper/, the next one too where one fails, as a
+    // person runs a list of commands
+    let mut failed = Vec::new();
+    for command in told.split('`').skip(1).step_by(2) {
+        let Some(words) = command.strip_prefix("git ") else {
+            continue;
+        };
+        let words: Vec<&str> = words.split(' ').collect();
+        let ran = crate::merge::git(&sandbox, &paper, &words)?.ok_or("git runs")?;
+        if !ran.status.success() {
+            failed.push(format!("{command}: {}", text(&ran.stderr)?));
+        }
+    }
+    assert_eq!(fs::read(&shadow)?, b"edit not staged\n", "{failed:?}");
+    let staged = crate::merge::git(&sandbox, &work, &["show", ":paper/results/table1.csv"])?
+        .ok_or("git runs")?;
+    assert_eq!(text(&staged.stdout)?, "staged edit\n", "{failed:?}");
+    assert_eq!(fs::read(&pinned)?, b"a,b\n1,2\n", "{failed:?}");
+    assert!(failed.is_empty(), "{failed:?}");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
 /// gives the file at `path` a modified time long past before git records it, so git trusts its
 /// record of the file, as one a checkout wrote long ago leaves it, and a checkout that compares
 /// the file with that record alone skips it.

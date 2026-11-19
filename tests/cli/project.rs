@@ -529,7 +529,7 @@ fn git_commands_after_a_run_with_c_reach_the_project() -> Result {
     crate::merge::ok(&sandbox, &["add", "tracked.csv"])?;
     paste(
         &run(&["add", "./tracked.csv"])?,
-        &format!("git -C {typed} rm -r --cached {typed}/tracked.csv"),
+        &format!("git -C {typed} rm -r --cached tracked.csv"),
     )?;
     let listed =
         crate::merge::git(&sandbox, &work, &["ls-files", "tracked.csv"])?.ok_or("no git")?;

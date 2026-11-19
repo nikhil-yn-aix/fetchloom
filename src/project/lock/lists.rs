@@ -790,11 +790,12 @@ mod tests {
                 "data.lock.d was probably not committed with data.lock: `git commit -a` leaves new files out"
             ]
         );
+        let checkout = crate::suggested::git(root.path(), "checkout -- data.lock.d");
         assert_eq!(
             gone.help.as_deref(),
-            Some(
-                "where set was pinned, run `git add data.lock.d` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- data.lock.d`"
-            )
+            Some(&*format!(
+                "where set was pinned, run `git add data.lock.d` and commit, then pull that commit here. a part deleted here comes back with `{checkout}`"
+            ))
         );
     }
 

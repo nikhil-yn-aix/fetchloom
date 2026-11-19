@@ -560,9 +560,15 @@ fn listed_datasets_merge_from_the_parts_of_the_side_kept() {
         None,
     )
     .unwrap_err();
+    let checkout =
+        |commit: &str| crate::suggested::git(root.path(), &format!("checkout {commit} -- {part}"));
     assert_eq!(
         gone.help.as_deref(),
-        Some(format!("bring it back from their side's commit with `git checkout MERGE_HEAD -- {part}`, or `git checkout REBASE_HEAD -- {part}` in a rebase, then run the same command again").as_str())
+        Some(&*format!(
+            "bring it back from their side's commit with `{}`, or `{}` in a rebase, then run the same command again",
+            checkout("MERGE_HEAD"),
+            checkout("REBASE_HEAD")
+        ))
     );
     let bytes = lists::compress(text).unwrap();
     let committed =

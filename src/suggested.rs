@@ -38,14 +38,35 @@ pub(crate) fn ran_elsewhere() -> bool {
     DIRECTORY.get().is_some()
 }
 
-/// `git` and `words` for the project at `root`, the paths in `words` given from there: after a
-/// run given `-C`, with git's own `-C` and the project's folder, so it finds the same repository
-/// from the folder the person ran in.
+/// `git` and `words` for the project at `root`, the paths in `words` given from there: with git's
+/// own `-C` and the project's folder as [`git_root`] names it wherever the run did not work in
+/// that folder, so git reads the paths from there whatever folder the person ran in.
 pub(crate) fn git(root: &std::path::Path, words: &str) -> String {
-    if ran_elsewhere() {
-        format!("git -C {} {words}", shell_folder_path(root))
-    } else {
-        format!("git {words}")
+    match git_root(root) {
+        Some(folder) => format!("git -C {folder} {words}"),
+        None => format!("git {words}"),
+    }
+}
+
+/// the project's folder `root` as a git command a person runs next reaches it, quoted for a
+/// shell: none where the run worked in it, `..` and so on from a folder inside it, and whole
+/// after a run given `-C`, which works away from the person, as [`reached`] tells.
+pub(crate) fn git_root(root: &std::path::Path) -> Option<String> {
+    let here = (!ran_elsewhere())
+        .then(std::env::current_dir)
+        .and_then(Result::ok);
+    reached(root, here.as_deref())
+}
+
+/// [`git_root`] from `here`, the folder the run worked in where the person ran it: whole when
+/// that is not known or not inside the project.
+fn reached(root: &std::path::Path, here: Option<&std::path::Path>) -> Option<String> {
+    match here.map(|here| here.strip_prefix(root)) {
+        Some(Ok(inside)) => {
+            let up = vec![".."; inside.components().count()].join("/");
+            (!up.is_empty()).then(|| shell_folder(&up).into_owned())
+        }
+        _ => Some(shell_folder_path(root)),
     }
 }
 
@@ -978,6 +999,26 @@ pub(crate) mod tests {
             sorted(&elsewhere),
             "route new ones through suggested::command"
         );
+    }
+
+    /// a git command reaches the project's folder from where the person ran fetchloom: nothing
+    /// there, `..` and so on from a folder inside it, and the folder whole, quoted as any told
+    /// path is, from anywhere else or after `-C`.
+    #[test]
+    fn a_git_command_reaches_the_project_from_where_the_person_ran() {
+        let root = std::path::Path::new("/work/my proj");
+        for (here, reach) in [
+            (Some(root.to_path_buf()), None),
+            (Some(root.join("paper")), Some("..")),
+            (Some(root.join("paper").join("figures")), Some("../..")),
+            (
+                Some(std::path::PathBuf::from("/work")),
+                Some("\"/work/my proj\""),
+            ),
+            (None, Some("\"/work/my proj\"")),
+        ] {
+            assert_eq!(reached(root, here.as_deref()).as_deref(), reach, "{here:?}");
+        }
     }
 
     /// a git command a help gives for this project goes through [`git`], so after `-C` it names

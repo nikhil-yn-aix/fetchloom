@@ -256,11 +256,14 @@ fn new_name(
     )
 }
 
-/// warns when `start`, the files an import read, is in the git work tree the project at `root` is
-/// in, where `git add .` takes raw data into the repository, or git has it already.
-fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
+/// warns when `start`, the files an import read, is in the git work tree the project at `project`
+/// is in, where `git add .` takes raw data into the repository, or git has it already.
+fn warn_in_git(output: &Output, project: &Path, (start, shown): (&Path, &str)) {
     let real = |path: &Path| std::fs::canonicalize(path).ok();
-    let Some((top, root)) = Project::repository(root).and_then(real).zip(real(root)) else {
+    let Some((top, root)) = Project::repository(project)
+        .and_then(real)
+        .zip(real(project))
+    else {
         return;
     };
     // a path below `folder`, with `/` between its names, as git writes one
@@ -282,8 +285,9 @@ fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
         return;
     };
     // .gitignore beside data.toml, or at the top for a folder outside the project
-    let (holder, place) = match slashed(&root) {
-        Some(below) => (below, "the project"),
+    let below = slashed(&root);
+    let (holder, place) = match &below {
+        Some(below) => (below.clone(), "the project"),
         None => (inside, "the repository"),
     };
     let mut pattern = format!("/{}", crate::project::gitignore_escaped(&holder));
@@ -292,18 +296,18 @@ fn warn_in_git(output: &Output, root: &Path, (start, shown): (&Path, &str)) {
     }
     let ignore = format!("add {pattern} to .gitignore");
     let (said, help) = if !known.tracked.is_empty() {
-        let named =
-            if shown.starts_with('~') || shown.contains(':') || crate::suggested::ran_elsewhere() {
-                start.display().to_string()
-            } else {
-                shown.to_owned()
-            };
+        // the told command starts in the project's folder wherever the run did not work in it
+        let named = match (crate::suggested::git_root(project), below) {
+            (None, _) if !shown.starts_with('~') && !shown.contains(':') => shown.to_owned(),
+            (_, Some(below)) => below,
+            (_, None) => start.display().to_string(),
+        };
         (
             format!("git tracks {shown}, so a commit keeps its files in the repository"),
             format!(
                 "run `{}`, then delete it or {ignore}",
                 crate::suggested::git(
-                    &root,
+                    project,
                     &format!("rm -r --cached {}", super::shell_word(&named))
                 )
             ),
