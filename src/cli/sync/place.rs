@@ -242,8 +242,8 @@ pub(crate) struct ChangedOutput {
     /// its changed or added files git tracks, which `--force` leaves as they are, so none is
     /// offered.
     pub(crate) tracked: Vec<String>,
-    /// the pinned files a `sync --force` would write there, as its folder lacks them or holds
-    /// them changed, each with its SHA-256 and size.
+    /// the pinned files a `sync --force` would write there, as [`forced_write`] tells, outdated
+    /// ones too, whatever the summary counts, each with its SHA-256 and size.
     pub(crate) needed: Vec<(Sha256, u64)>,
     /// whether a `sync --force` here can write `needed`.
     pub(crate) reach: Reach,
@@ -2141,6 +2141,18 @@ fn needs_bytes(action: &Action) -> bool {
     )
 }
 
+/// whether `sync --force` writes the pinned file whose action, decided without `--force`, is
+/// `action`: one a plain sync writes as well, or one it leaves that `--force` overwrites or clears
+/// the way for, as [`decide`] decides with it.
+fn forced_write(action: &Action) -> bool {
+    needs_bytes(action)
+        || matches!(
+            action,
+            Action::Leave(Reason::Changed | Reason::Shared | Reason::Foreign)
+        )
+        || matches!(action, Action::Blocked(blocker) if blocker.clearable)
+}
+
 /// what a sync with nothing to do placed, or none unless data.toml and data.lock are as the last
 /// complete sync left them, every file looks as recorded and the survey raised no doubt and
 /// followed no data folder link for the first time, which a placing checks; the caller
@@ -3509,6 +3521,9 @@ pub(crate) fn changed_outputs(
         };
         let path = target.path.as_str();
         let ours = authored.contains(target.dataset);
+        if forced_write(action) {
+            output.needed.push((target.sha256, target.size));
+        }
         let (how, count) = match action {
             Action::Leave(Reason::Changed | Reason::Foreign | Reason::Shared)
             | Action::Overwrite(_)
@@ -3534,8 +3549,6 @@ pub(crate) fn changed_outputs(
             _ => continue,
         };
         *count += 1;
-        // a pinned file its folder lacks or holds changed, which a `sync --force` would write
-        output.needed.push((target.sha256, target.size));
         changes.push(change(how, path));
     }
     let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();

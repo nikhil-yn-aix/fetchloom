@@ -780,6 +780,53 @@ const REFUSED: [&str; 2] = [
     "  help: run your pipeline here, then `fetchloom add ./data/processed --as processed`",
 ];
 
+/// a teammate's sync placed an output's first pin from a mirror; the author pinned a new run on
+/// their machine and pushed nothing, and the teammate added a note to the folder. no `sync --force`
+/// is offered, as it would have to write the new pin's files, which nothing here holds.
+#[test]
+fn a_teammates_output_pinned_anew_elsewhere_offers_no_force() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"v1\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let run = |args: &[&str]| -> Result<String> {
+        let output = sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
+        Ok(stderr)
+    };
+    run(&["sync", "--mirror", &mirror])?;
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
+    fs::write(work.join("results/a.csv"), b"v2\n")?;
+    ok(&sandbox.run(&["add", "./results", "--as", "results", "--yes"])?)?;
+    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
+    fs::write(teammate.join("results/notes.txt"), b"my notes\n")?;
+    let status = run(&["status"])?;
+    assert!(status.contains("1 extra file: "), "{status}");
+    assert!(!status.contains("--force"), "{status}");
+    let synced = run(&["sync"])?;
+    assert!(
+        synced.contains("1 extra file, so sync leaves it"),
+        "{synced}"
+    );
+    assert!(!synced.contains("--force"), "{synced}");
+    run(&["sync", "--force", "results"])?;
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
+    Ok(())
+}
+
 /// a push that refuses an output, as neither the target nor anything here holds its files, says
 /// nothing else of it, whether a forced sync put the capture back before the cache was lost or
 /// not, and though a forced sync made its folder anew for the pipeline.
