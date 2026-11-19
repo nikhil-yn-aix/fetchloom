@@ -217,7 +217,9 @@ pub(crate) struct Uncached {
 /// neither side has a number, as a copy tool there may keep it. hfs+ keeps whole seconds, which a
 /// copy made in the same second shares, so its time is not kept. the disk's own number is left out, since network disks number it apart
 /// on each machine. a clone, a copy or a state from git matches neither, so the records of a state
-/// that came with it, which anyone could have written, are not used.
+/// that came with it, which anyone could have written, are not used. the system that read all this
+/// and the folder's path there say whose view it is: windows and wsl, sharing a windows drive,
+/// read neither one number nor one creation time for a folder, but name its path alike.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Folder {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -225,6 +227,12 @@ pub(crate) struct Folder {
     /// nanoseconds since 1970.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     created: Option<u64>,
+    /// the system that read the folder so, as `std::env::consts::OS` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    os: Option<String>,
+    /// the folder's resolved path on that system.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    path: Option<String>,
 }
 
 impl Folder {
@@ -250,7 +258,16 @@ impl Folder {
             .filter(|_| !matches!(filesystem, Filesystem::Fat | Filesystem::Exfat));
         #[cfg(not(any(unix, windows)))]
         let inode = None;
-        (inode.is_some() || created.is_some()).then_some(Folder { inode, created })
+        let path = root
+            .canonicalize()
+            .ok()
+            .and_then(|path| crate::machine::plain(&path).to_str().map(str::to_owned));
+        (inode.is_some() || created.is_some()).then(|| Folder {
+            inode,
+            created,
+            os: Some(std::env::consts::OS.to_owned()),
+            path,
+        })
     }
 
     /// whether a state written for this folder is one for `here`: the same number, or the same
@@ -261,33 +278,55 @@ impl Folder {
         self.matches_by(here, cfg!(windows))
     }
 
-    /// whether a record written for `recorded` was written for `here`, the folder as it is now, as
-    /// `same` compares the two. a record that names no folder was written for another, since every
-    /// one this build writes names its folder wherever the folder can be told; `untold` says what
-    /// a record is when this folder cannot be told.
+    /// whether a record written for `recorded` was written for `here`, the folder as this system
+    /// reads it now. the system that wrote the record decides how: this one, by
+    /// [`Folder::matches`]; another, by the folder's path on a windows drive, as windows and wsl
+    /// both name it, since neither its number nor its creation time is the same across them. a
+    /// record that names no folder was written for another, since every one this build writes
+    /// names its folder wherever the folder can be told. `untold` says what a record is when no
+    /// comparison can be made: this folder cannot be told, the record names no system or no path,
+    /// or either path is off a windows drive, as another mount or wsl's own folders are.
     pub(crate) fn written_here(
         recorded: Option<&Folder>,
         here: Option<&Folder>,
-        same: fn(&Folder, &Folder) -> bool,
         untold: Untold,
     ) -> bool {
-        match (recorded, here) {
-            (Some(recorded), Some(here)) => same(recorded, here),
-            (None, Some(_)) => false,
-            (_, None) => untold == Untold::Here,
+        let (recorded, here) = match (recorded, here) {
+            (Some(recorded), Some(here)) => (recorded, here),
+            (None, Some(_)) => return false,
+            (_, None) => return untold == Untold::Here,
+        };
+        match (recorded.os.as_deref(), here.os.as_deref()) {
+            (Some(written), Some(reading)) if written == reading => recorded.matches(here),
+            (Some(_), Some(_)) => match (recorded.on_drive(), here.on_drive()) {
+                (Some(written), Some(found)) => written == found,
+                _ => untold == Untold::Here,
+            },
+            _ => untold == Untold::Here,
         }
     }
 
-    /// whether a folder another system recorded is `here`, by its creation time alone: windows and
-    /// wsl read one ntfs folder's creation time alike, while wsl may make up its number. a record
-    /// with no creation time is no folder's here, as no fetchloom on windows writes one, while
-    /// none here, as wsl may read none on /mnt/c, tells nothing, so the folder counts as this one.
-    pub(crate) fn created_alike(&self, here: &Folder) -> bool {
-        match (self.created, here.created) {
-            (Some(recorded), Some(found)) => recorded == found,
-            (Some(_), None) => true,
-            (None, _) => false,
-        }
+    /// the folder's path on a windows drive as windows and wsl both name it: its letter and the
+    /// rest, lowercased, with `/` between names, from `C:\Users\me` or `\\?\C:\Users\me` on
+    /// windows and `/mnt/c/Users/me` in wsl. none for any other path.
+    fn on_drive(&self) -> Option<String> {
+        let path = self.path.as_deref()?;
+        let path = path.strip_prefix(r"\\?\").unwrap_or(path);
+        let (letter, rest) = if let Some(mounted) = path.strip_prefix("/mnt/") {
+            let mut chars = mounted.chars();
+            (chars.next()?, chars.as_str().to_owned())
+        } else {
+            let mut chars = path.chars();
+            let letter = chars.next()?;
+            (letter, chars.as_str().strip_prefix(':')?.replace('\\', "/"))
+        };
+        (letter.is_ascii_alphabetic() && (rest.is_empty() || rest.starts_with('/'))).then(|| {
+            format!(
+                "{}:{}",
+                letter.to_ascii_lowercase(),
+                rest.trim_end_matches('/').to_lowercase()
+            )
+        })
     }
 
     /// [`Folder::matches`], by the number alone where both sides tell one when `numbers_first`.
@@ -307,17 +346,17 @@ impl Folder {
 
 #[cfg(test)]
 impl Folder {
-    /// the folder at `root` as another system's fetchloom records it: with a creation time, which
-    /// windows always keeps, any one where this disk keeps none, as hfs+ does.
-    pub(crate) fn recorded_elsewhere(root: &std::path::Path) -> Option<Folder> {
+    /// the folder at `root` as a fetchloom on the system `os` records it.
+    pub(crate) fn of_on(root: &std::path::Path, os: &str) -> Option<Folder> {
         Folder::of(root).map(|folder| Folder {
-            created: folder.created.or(Some(1)),
+            os: Some(os.to_owned()),
             ..folder
         })
     }
 }
 
-/// what a record counts as when this folder cannot be told.
+/// what a record counts as when it cannot be compared with this folder, as
+/// [`Folder::written_here`] says.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Untold {
     /// another folder's, so a record that vouches for files here is not used.
@@ -1209,7 +1248,11 @@ mod tests {
     /// a time that falls on a whole second still matches, as one in a hundred do on fat's 10 ms.
     #[test]
     fn a_folder_matches_by_its_number_or_its_creation_time() {
-        let folder = |inode, created| Folder { inode, created };
+        let folder = |inode, created| Folder {
+            inode,
+            created,
+            ..Folder::default()
+        };
         for (recorded, here, matches) in [
             (folder(Some(7), Some(100)), folder(Some(7), Some(100)), true),
             (folder(Some(7), Some(100)), folder(Some(8), Some(100)), true),
@@ -1253,7 +1296,11 @@ mod tests {
     /// where neither does.
     #[test]
     fn a_folder_matches_by_its_number_first_where_copies_keep_creation_times() {
-        let folder = |inode, created| Folder { inode, created };
+        let folder = |inode, created| Folder {
+            inode,
+            created,
+            ..Folder::default()
+        };
         for (recorded, here, matches) in [
             (folder(Some(7), Some(100)), folder(Some(7), Some(200)), true),
             (
@@ -1272,6 +1319,92 @@ mod tests {
                 recorded.matches_by(&here, true),
                 matches,
                 "{recorded:?} {here:?}"
+            );
+        }
+    }
+
+    /// a record another system wrote is this folder's by its path on a windows drive, as wsl and
+    /// windows name it, in any case and with or without windows' `\\?\`, never by its number or
+    /// creation time; a record this system wrote goes by those alone. where no comparison can be
+    /// made, `untold` decides: an owner record holds, and a state is another folder's.
+    #[test]
+    fn a_record_is_its_folders_by_path_across_systems_and_by_number_within_one() {
+        let folder = |os: Option<&str>, path: Option<&str>, inode: u64| Folder {
+            inode: Some(inode),
+            created: Some(inode * 10),
+            os: os.map(str::to_owned),
+            path: path.map(str::to_owned),
+        };
+        let windows = |path: &str| folder(Some("windows"), Some(path), 9);
+        let linux = |path: &str| folder(Some("linux"), Some(path), 5);
+        let (owner, state) = (Untold::Here, Untold::Elsewhere);
+        for (recorded, here, untold, written_here) in [
+            // a state linux wrote on /mnt/c, read on windows: the same folder in another form or
+            // case, or another folder
+            (linux("/mnt/c/x"), windows(r"C:\x"), state, true),
+            (
+                linux("/mnt/c/Users/me/proj"),
+                windows(r"\\?\c:\users\ME\proj\"),
+                state,
+                true,
+            ),
+            (linux("/mnt/c/x"), windows(r"C:\y"), state, false),
+            (linux("/mnt/c/x"), windows(r"D:\x"), state, false),
+            (linux("/mnt/c/x"), windows(r"C:\x\y"), owner, false),
+            // windows' record read in wsl
+            (windows(r"C:\x"), linux("/mnt/c/x"), owner, true),
+            (windows(r"C:\x"), linux("/mnt/c/y"), owner, false),
+            // no comparison: no path, another mount, wsl's own folder through \\wsl$, no system
+            (
+                folder(Some("linux"), None, 5),
+                windows(r"C:\x"),
+                owner,
+                true,
+            ),
+            (
+                folder(Some("linux"), None, 5),
+                windows(r"C:\x"),
+                state,
+                false,
+            ),
+            (
+                linux("/home/me/proj"),
+                windows(r"\\wsl.localhost\Ubuntu\home\me\proj"),
+                owner,
+                true,
+            ),
+            (
+                linux("/home/me/proj"),
+                windows(r"\\wsl.localhost\Ubuntu\home\me\proj"),
+                state,
+                false,
+            ),
+            (linux("/mnt/wsl/x"), windows(r"C:\x"), state, false),
+            (
+                folder(None, Some("/mnt/c/x"), 5),
+                windows(r"C:\x"),
+                owner,
+                true,
+            ),
+            (
+                folder(None, Some("/mnt/c/x"), 5),
+                windows(r"C:\x"),
+                state,
+                false,
+            ),
+            // one system's own: its number and creation time, never its path
+            (linux("/a"), linux("/b"), state, true),
+            (
+                linux("/mnt/c/x"),
+                folder(Some("linux"), Some("/mnt/c/x"), 6),
+                owner,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                Folder::written_here(Some(&recorded), Some(&here), untold),
+                written_here,
+                "{recorded:?} {here:?} {untold:?}"
             );
         }
     }

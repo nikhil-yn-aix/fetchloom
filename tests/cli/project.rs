@@ -2400,11 +2400,15 @@ fn moved_on_a_disk_without_lasting_numbers(sandbox: &Sandbox, server: &Server) -
     let mut state: serde_json::Value = serde_json::from_slice(&fs::read(&path)?)?;
     let inode = state["folder"]["inode"].as_u64().unwrap_or_default();
     let created = u64::try_from(created.as_nanos())?;
-    state["folder"] = if cfg!(windows) {
-        serde_json::json!({ "created": created })
+    let folder = state["folder"]
+        .as_object_mut()
+        .ok_or("the state names its folder")?;
+    folder.insert("created".to_owned(), created.into());
+    if cfg!(windows) {
+        folder.remove("inode");
     } else {
-        serde_json::json!({ "inode": inode.wrapping_add(1), "created": created })
-    };
+        folder.insert("inode".to_owned(), inode.wrapping_add(1).into());
+    }
     fs::write(&path, serde_json::to_vec(&state)?)?;
     Ok(true)
 }
