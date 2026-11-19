@@ -232,11 +232,9 @@ pub(super) fn ask_git(
     survey: &mut Survey,
     wanted: &BTreeSet<String>,
 ) {
+    let outputs = output_folders(manifest);
     for folder in wanted {
-        let output = manifest
-            .datasets
-            .values()
-            .any(|entry| entry.at.as_deref() == Some(folder.as_str()));
+        let output = outputs.contains(folder.as_str());
         let first = match survey.marks.get(folder) {
             Some(Mark::Gone) => true,
             Some(Mark::Made(_) | Mark::Taken) => false,
@@ -251,6 +249,15 @@ pub(super) fn ask_git(
             survey.git_keeps.insert(folder.clone(), kept);
         }
     }
+}
+
+/// the folder of each output of `manifest`, its `at` as data.toml gives it.
+fn output_folders(manifest: &Manifest) -> HashSet<&str> {
+    manifest
+        .datasets
+        .values()
+        .filter_map(|entry| entry.at.as_deref())
+        .collect()
 }
 
 /// whether nothing stands where the marker of `folder` goes, as the listing saw it.
@@ -1167,8 +1174,8 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::{
-        DatasetFolders, MOST_NAMED, TEXT, hiding_line, holds, in_marker_form, named_for, names,
-        project_of, settled,
+        DatasetFolders, MOST_NAMED, TEXT, ask_git, hiding_line, holds, in_marker_form, named_for,
+        names, output_folders, project_of, settled,
     };
     use crate::cli::sync::Scope;
     use crate::cli::sync::disk::{self, Folders, Survey};
@@ -1232,10 +1239,9 @@ mod tests {
             })
     }
 
-    /// on generated tables of dataset folders, nested, beside one another, sharing a start or a
-    /// folder, at the data folder and as outputs, the search answers every folder as the walk did.
-    #[test]
-    fn the_sorted_folders_answer_as_a_walk_of_every_dataset() {
+    /// 400 data.toml texts of generated dataset folders: nested, beside one another, sharing a
+    /// start or a folder, at the data folder, and outputs in results/ and in the data folder.
+    fn generated() -> Vec<String> {
         use std::fmt::Write as _;
         const PARTS: [&str; 8] = ["a", "ab", "a-b", "a.b", "b", "A", "a b", "a_b"];
         let mut seed: usize = 0x2545_f491;
@@ -1245,40 +1251,126 @@ mod tests {
             seed ^= seed << 17;
             seed % below
         };
-        for _ in 0..400 {
-            let data_dir = ["data", "data/a", "d"][next(3)];
-            let mut text = format!("[project]\ndata_dir = \"{data_dir}\"\n");
-            for at in 0..=next(12) {
-                let path = (0..=next(3))
-                    .map(|_| PARTS[next(PARTS.len())])
-                    .collect::<Vec<_>>()
-                    .join("/");
-                let _ = match next(8) {
-                    0 => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \".\"\n"),
-                    1 => write!(
-                        text,
-                        "[datasets.d{at}]\nref = \"local\"\nat = \"results/{path}\"\n"
-                    ),
-                    2 => write!(
-                        text,
-                        "[datasets.d{at}]\nref = \"local\"\nat = \"{data_dir}/{path}\"\n"
-                    ),
-                    _ => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \"{path}\"\n"),
-                };
-            }
+        (0..400)
+            .map(|_| {
+                let data_dir = ["data", "data/a", "d"][next(3)];
+                let mut text = format!("[project]\ndata_dir = \"{data_dir}\"\n");
+                for at in 0..=next(12) {
+                    let path = (0..=next(3))
+                        .map(|_| PARTS[next(PARTS.len())])
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    let _ = match next(8) {
+                        0 => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \".\"\n"),
+                        1 => write!(
+                            text,
+                            "[datasets.d{at}]\nref = \"local\"\nat = \"results/{path}\"\n"
+                        ),
+                        2 => write!(
+                            text,
+                            "[datasets.d{at}]\nref = \"local\"\nat = \"{data_dir}/{path}\"\n"
+                        ),
+                        _ => write!(text, "[datasets.d{at}]\nref = \"x\"\npath = \"{path}\"\n"),
+                    };
+                }
+                text
+            })
+            .collect()
+    }
+
+    /// the folders to ask of `manifest`: each dataset's, also with a `/` or a `-` added and in
+    /// capitals, its parent, the data folder, results and the empty string.
+    fn asked(manifest: &Manifest) -> Vec<String> {
+        let mut asked = vec![
+            String::new(),
+            manifest.data_dir.clone(),
+            "results".to_owned(),
+        ];
+        for name in manifest.datasets.keys() {
+            let folder = plan::folder(manifest, name);
+            let parent = folder.rsplit_once('/').map(|(parent, _)| parent.to_owned());
+            asked.extend([
+                format!("{folder}/"),
+                format!("{folder}-"),
+                folder.to_ascii_uppercase(),
+                folder,
+            ]);
+            asked.extend(parent);
+        }
+        asked
+    }
+
+    /// on the generated tables of dataset folders, the search answers every folder as the walk
+    /// of every dataset did.
+    #[test]
+    fn the_sorted_folders_answer_as_a_walk_of_every_dataset() {
+        for text in generated() {
             let manifest = Manifest::parse(&text).unwrap();
             let folders = DatasetFolders::of(&manifest);
-            let mut asked = vec![String::new(), data_dir.to_owned(), "results".to_owned()];
-            for name in manifest.datasets.keys() {
-                let folder = plan::folder(&manifest, name);
-                let parent = folder.rsplit_once('/').map(|(parent, _)| parent.to_owned());
-                asked.extend([format!("{folder}/"), format!("{folder}-"), folder]);
-                asked.extend(parent);
-            }
-            for folder in &asked {
+            for folder in asked(&manifest) {
                 assert_eq!(
-                    folders.shared(folder),
-                    walked(&manifest, folder),
+                    folders.shared(&folder),
+                    walked(&manifest, &folder),
+                    "{folder:?} in\n{text}"
+                );
+            }
+        }
+    }
+
+    /// git is asked of an output's own folder only, the one its `at` names exactly: not a folder
+    /// inside it or holding it, one in other capitals, or a dataset's folder that is no output's.
+    #[test]
+    fn git_is_asked_of_an_outputs_own_folder_only() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("data")).unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        let manifest = Manifest::parse(concat!(
+            "[datasets.run]\nref = \"local\"\nat = \"results/run\"\n",
+            "[datasets.inside]\nref = \"local\"\nat = \"data/part/out\"\n",
+            "[datasets.part]\nref = \"x\"\npath = \"part\"\n",
+            "[datasets.iris]\nref = \"x\"\n",
+        ))
+        .unwrap();
+        let mut survey = Survey::read(
+            &project,
+            &Folders::of(&manifest),
+            crate::threads::Threads::default(),
+            &crate::stop::Stop::default(),
+        )
+        .unwrap();
+        let wanted = [
+            "results/run",
+            "data/part/out",
+            "results",
+            "results/run/more",
+            "results/runs",
+            "Results/run",
+            "data/part",
+            "data/iris",
+            "data",
+        ]
+        .map(String::from)
+        .into();
+        ask_git(&project.root, &manifest, &mut survey, &wanted);
+        let asked: Vec<&str> = survey.git_keeps.keys().map(String::as_str).collect();
+        assert_eq!(asked, ["data/part/out", "results/run"]);
+    }
+
+    /// on the generated tables, the set of outputs' folders answers every folder as the walk of
+    /// every dataset for one whose `at` names it did.
+    #[test]
+    fn the_output_folders_answer_as_a_walk_of_every_dataset() {
+        for text in generated() {
+            let manifest = Manifest::parse(&text).unwrap();
+            let outputs = output_folders(&manifest);
+            for folder in asked(&manifest) {
+                let walked = manifest
+                    .datasets
+                    .values()
+                    .any(|entry| entry.at.as_deref() == Some(folder.as_str()));
+                assert_eq!(
+                    outputs.contains(folder.as_str()),
+                    walked,
                     "{folder:?} in\n{text}"
                 );
             }
