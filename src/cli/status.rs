@@ -743,8 +743,8 @@ fn check(
     let actions = compare(&mut status, (project, &manifest), (&survey, &planned))?;
     note_unsupplied(
         &mut status,
-        (&planned.targets, &actions),
-        (&cache, mirrored),
+        (&lock, &planned, &actions),
+        (&cache, mirrored, &survey),
     );
     // a dataset dropped here whose files a drop cut short left is told in one line
     let dropped: HashSet<&str> = status.dropped.iter().map(String::as_str).collect();
@@ -850,19 +850,23 @@ fn downloads(
 }
 
 /// notes in `status` what nothing here can supply, as sync finds it among the writes `actions`
-/// decide for `targets`: those a plain sync makes, by import and output, and those `--force` makes
-/// in a changed output's folder, which mark the output lost.
+/// decide for the targets `planned` lists from `lock`: those a plain sync makes, by import and
+/// output, which a mirror set, as `mirrored` says, may supply unless a sync here asked it for the
+/// files `lock` pins and found some lacking, as the state `survey` read records, and those
+/// `--force` makes in a changed output's folder, which mark the output lost.
 fn note_unsupplied(
     status: &mut Status,
-    (targets, actions): (&[plan::Target<'_>], &[Action]),
-    (cache, mirrored): (&Cache, bool),
+    (lock, planned, actions): (&Lock, &plan::Plan<'_>, &[Action]),
+    (cache, mirrored, survey): (&Cache, bool, &Survey),
 ) {
+    let targets = &planned.targets;
     let plain = targets
         .iter()
         .zip(actions)
         .filter(|(_, action)| place::needs_bytes(action))
         .map(|(target, _)| target);
-    status.imported_elsewhere = place::unsupplied(plain, (cache, mirrored))
+    let may_hold = place::mirrors_may_hold(mirrored, &survey.state.told, lock);
+    status.imported_elsewhere = place::unsupplied(plain, (cache, may_hold))
         .into_iter()
         .map(|(name, files)| {
             let paths = files.iter().map(|target| target.path.clone()).collect();

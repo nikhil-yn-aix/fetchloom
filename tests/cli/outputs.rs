@@ -1258,6 +1258,99 @@ fn an_outdated_output_no_cache_holds_reads_alike_in_status_and_sync() -> Result 
     Ok(())
 }
 
+/// the c4 case with the team's mirror set: the author pushed the first pin there, pinned a second
+/// run and pushed nothing. until a sync asks the mirror, `status --check` names sync, as the
+/// mirror may hold the files; once a sync found them in no cache or mirror, status and `status
+/// --check` say so in sync's words, so a gate on status stops sending people to a sync that places
+/// nothing. a newer pin, which no sync asked the mirror for, names sync again, and once the author
+/// pushed it, one sync places it and the check passes.
+#[test]
+fn status_names_sync_until_a_sync_finds_the_mirror_lacks_the_pin() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/a.csv"), b"v1\n")?;
+    ok(&sandbox.run(&["add", "results", "--as", "results"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_string_lossy().into_owned();
+    ok(&sandbox.run(&["push", "--to", &mirror, "--yes"])?)?;
+    let teammate = sandbox.folder("teammate")?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(work.join(file), teammate.join(file))?;
+    }
+    let cache = sandbox.folder("teammate-cache")?;
+    let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
+        let output = sandbox
+            .command_in(&teammate, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    };
+    let (code, synced) = run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v1\n");
+    let other = sandbox.folder("other-cache")?;
+    fs::write(work.join("results/a.csv"), b"v2\n")?;
+    ok(&sandbox
+        .command(&["add", "./results", "--as", "results", "--yes"])
+        .env("FETCHLOOM_CACHE", &other)
+        .output()?)?;
+    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
+    let replaces = "  results/a.csv is from an older data.lock: `fetchloom sync` replaces it\n";
+    let unreached = "the files results pins are in no cache or mirror here";
+    let (code, before) = run(&["status", "--check"])?;
+    assert_eq!(code, Some(1), "{before}");
+    assert!(before.contains(replaces), "{before}");
+    assert!(!before.contains(unreached), "{before}");
+    let (code, synced) = run(&["sync"])?;
+    assert_eq!(code, Some(0), "{synced}");
+    assert!(
+        synced.contains(&format!("warning: {unreached}\n")),
+        "{synced}"
+    );
+    let (code, after) = run(&["status", "--check"])?;
+    assert_eq!(code, Some(1), "{after}");
+    assert!(
+        after.contains(&format!(
+            "  {unreached}: push them from a machine that has them"
+        )),
+        "{after}"
+    );
+    assert!(!after.contains("replaces it"), "{after}");
+    let (_, status) = run(&["status"])?;
+    assert!(
+        status.contains(&format!(
+            "  hint: {unreached}: push them from a machine that has them"
+        )),
+        "{status}"
+    );
+    assert!(
+        !status.contains("places missing or updated files"),
+        "{status}"
+    );
+    fs::write(work.join("results/a.csv"), b"v3\n")?;
+    for args in [
+        &["add", "./results", "--as", "results", "--yes"][..],
+        &["push", "--to", &mirror, "--yes"],
+    ] {
+        ok(&sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &other)
+            .output()?)?;
+    }
+    fs::copy(work.join("data.lock"), teammate.join("data.lock"))?;
+    let (code, pinned) = run(&["status", "--check"])?;
+    assert_eq!(code, Some(1), "{pinned}");
+    assert!(pinned.contains(replaces), "{pinned}");
+    let (code, placed) = run(&["sync"])?;
+    assert_eq!(code, Some(0), "{placed}");
+    assert_eq!(fs::read(teammate.join("results/a.csv"))?, b"v3\n");
+    let (code, settled) = run(&["status", "--check"])?;
+    assert_eq!(code, Some(0), "{settled}");
+    Ok(())
+}
+
 /// a teammate whose mirror holds an output's files, named by `--mirror` or by the settings, is
 /// told of them as of any dataset's missing files, which `fetchloom sync` places, as it does from
 /// that mirror; without a mirror, nothing here can, and status says so in the neutral words.

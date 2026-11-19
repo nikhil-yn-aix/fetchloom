@@ -426,7 +426,7 @@ fn output_gone(word: &str, project: &Project, mirrored: bool) -> Option<Error> {
         .flat_map(|locked| &locked.files);
     let written = crate::cli::sync::place::output_targets(output, at, files);
     let lost = super::peek_cache().is_ok_and(|cache| {
-        crate::cli::sync::place::unsupplied(&written, (&cache, mirrored))
+        crate::cli::sync::place::unsupplied(&written, (&cache, |_: &str| mirrored))
             .contains_key(output.as_str())
     });
     let since = match left.as_deref() {
