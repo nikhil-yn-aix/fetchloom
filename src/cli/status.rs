@@ -21,6 +21,7 @@ use crate::project::lock::archives;
 use crate::project::lock::{Drift, Lock, LockedFile, Waiting};
 use crate::project::manifest::{self, Manifest};
 use crate::project::{Project, git, native};
+use crate::source::local::Reach;
 use crate::stop::Stop;
 use crate::threads::Threads;
 use crate::units;
@@ -852,8 +853,10 @@ fn downloads(
 /// notes in `status` what nothing here can supply, as sync finds it among the writes `actions`
 /// decide for the targets `planned` lists from `lock`: those a plain sync makes, by import and
 /// output, and those `--force` makes in a changed output's folder, which mark the output out of
-/// reach. a mirror set, as `mirrored` says, may supply either, unless a sync here asked it for the
-/// files `lock` pins and found some lacking, as the state `survey` read records.
+/// reach. a mirror set, as `mirrored` says, may supply an output's, unless a sync here asked it for
+/// the files `lock` pins and found some lacking, as the state `survey` read records. sync records
+/// that for outputs alone, so an import's files count only where the cache holds them, and its
+/// line says what a mirror holding them would do.
 fn note_unsupplied(
     status: &mut Status,
     (lock, planned, actions): (&Lock, &plan::Plan<'_>, &[Action]),
@@ -868,7 +871,15 @@ fn note_unsupplied(
     let mirrors = place::mirror_reach(mirrored, &survey.state.told, |name| {
         place::pinned_files(lock, name)
     });
-    status.imported_elsewhere = place::unsupplied(plain, (cache, &mirrors))
+    let outputs = &status.outputs;
+    let held = |name: &str| {
+        if outputs.contains_key(name) {
+            mirrors(name)
+        } else {
+            Reach::Lost
+        }
+    };
+    status.imported_elsewhere = place::unsupplied(plain, (cache, held))
         .into_iter()
         .map(|(name, (_, files))| {
             let paths = files.iter().map(|target| target.path.clone()).collect();

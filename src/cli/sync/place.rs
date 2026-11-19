@@ -209,11 +209,11 @@ fn pinned_tree(name: &str, files: &[LockedFile]) -> String {
     format!("{name}:{}", crate::cache::tree_hash(&members).hex())
 }
 
-/// how the mirrors may supply the files a dataset's pin holds, as `pins` gives them by its name:
+/// how the mirrors may supply the files an output's pin holds, as `pins` gives them by its name:
 /// not at all when none is set, as `mirrored` says, else they may, unless a sync here asked them
-/// for those files and found some lacking, as `told` records. a sync asks again each run for the
-/// files it must write, as `--force` does for those it would, and one that finds them there places
-/// them and drops that record.
+/// for those files and found some lacking, as `told` records, which sync writes for outputs alone.
+/// a sync asks again each run for the files it must write, as `--force` does for those it would,
+/// and one that finds them there places them and drops that record.
 pub(crate) fn mirror_reach<'a>(
     mirrored: bool,
     told: &'a Told,

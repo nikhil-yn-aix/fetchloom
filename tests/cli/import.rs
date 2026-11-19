@@ -1063,6 +1063,52 @@ fn status_says_how_to_bring_an_import_no_sync_can_get() -> Result {
     Ok(())
 }
 
+/// as above with a mirror set that lacks the import: a sync asks it, fails and records nothing,
+/// so status names no sync before or after that failure, and `--check` gives the import's line,
+/// which claims only what the cache lacks and says what a mirror holding the files would do.
+#[test]
+fn status_with_a_mirror_set_says_how_to_bring_an_import_no_sync_got() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    crate::support::ok(&sandbox.run(&["add", "../flowers"])?)?;
+    let clone = clone_of(&sandbox)?;
+    let elsewhere = sandbox.folder("another-cache")?;
+    let mirror = sandbox.folder("mirror")?;
+    let run = |args: &[&str]| -> Result<(Option<i32>, String)> {
+        let output = sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &elsewhere)
+            .env("FETCHLOOM_MIRRORS", &mirror)
+            .output()?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    };
+    let checked = |when: &str| -> Result {
+        let (code, stderr) = run(&["status", "--check"])?;
+        assert_eq!(code, Some(1), "{when}: {stderr}");
+        assert!(
+            stderr.contains(&format!("  hint: {NO_SYNC_BRINGS}\n")),
+            "{when}: {stderr}"
+        );
+        assert!(
+            stderr.contains(&format!("  {NO_SYNC_BRINGS}\n")),
+            "{when}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("`fetchloom sync` places"),
+            "{when}: {stderr}"
+        );
+        Ok(())
+    };
+    checked("before a sync")?;
+    let (code, synced) = run(&["sync"])?;
+    assert_eq!(code, Some(10), "{synced}");
+    assert!(
+        synced.contains("error: flowers was imported from files, and neither this machine's cache nor a mirror holds them\n"),
+        "{synced}"
+    );
+    checked("after the failed sync")
+}
+
 /// a file of an import edited through its link takes the cache's copy with it, so no sync puts
 /// it back: status says so as sync does, never that a sync puts it back.
 #[test]
