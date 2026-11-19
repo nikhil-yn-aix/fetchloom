@@ -1216,11 +1216,15 @@ impl Status {
             .iter()
             .partition(|path| self.committed.contains(*path));
         // git's copy that holds the pinned bytes but for the line ends git converted
-        let (converted, committed) = committed.into_iter().partition(|path| {
-            self.changed_outputs
-                .iter()
-                .any(|output| output.line_ends.is_some() && output.tracked.contains(*path))
-        });
+        let converted: HashSet<&str> = self
+            .changed_outputs
+            .iter()
+            .filter_map(|output| output.line_ends.as_ref())
+            .flat_map(crate::source::local::LineEnds::files)
+            .collect();
+        let (converted, committed) = committed
+            .into_iter()
+            .partition(|path| converted.contains(path.as_str()));
         [
             ("Missing", self.missing.iter().collect(), None),
             ("Edited", self.edited.iter().collect(), None),

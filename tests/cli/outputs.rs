@@ -3336,10 +3336,16 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
         rows.contains("Committed results/a.csv · git's copy differs from the pinned bytes only in its line ends"),
         "{rows}"
     );
-    // line ends are told as the fix only when they are all that differs
+    // line ends are told file by file: a file no pin holds is a change, pinned after their fix
     fs::write(work.join("results/extra.csv"), b"x\n")?;
     let mixed = text(&sandbox.run(&["status"])?.stderr)?;
-    assert!(!mixed.contains(told), "{mixed}");
+    assert!(
+        mixed.contains(&format!(
+            "{told}; after that, `fetchloom add ./results --as results` pins what it holds now"
+        )),
+        "{mixed}"
+    );
+    assert!(!mixed.contains("`at`"), "{mixed}");
     fs::remove_file(work.join("results/extra.csv"))?;
     fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
     crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
@@ -3347,6 +3353,93 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     crate::merge::ok(&sandbox, &["rm", "--cached", "-q", "--", "results/a.csv"])?;
     crate::merge::ok(&sandbox, &["checkout", "HEAD", "--", "results/a.csv"])?;
     assert_eq!(fs::read(work.join("results/a.csv"))?, b"a,b\n1,2\n");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// line ends are decided file by file: beside a rerun of a file git tracks, a file that differs
+/// from the pin only in the line ends git's checkout gave it is told so, with the fresh checkout
+/// of it alone, never as other bytes, and with no doubt about `at`. the re-pin comes after that
+/// fix, so it pins the rerun beside the file as pinned, never its CRLF.
+#[test]
+fn line_ends_are_told_file_by_file_beside_a_rerun() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/a.csv"), b"a\n1\n")?;
+    fs::write(author.join("results/b.csv"), b"b\n1\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    // a clone where git converts line ends, and a rerun of b.csv
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    let results = work.join("results");
+    fs::create_dir_all(&results)?;
+    fs::write(results.join("a.csv"), b"a\r\n1\r\n")?;
+    fs::write(results.join("b.csv"), b"b\r\n1\r\n")?;
+    aged(&results.join("a.csv"))?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    fs::write(results.join("b.csv"), b"b\n2\n")?;
+    let fix = "results/a.csv differs from the pin only in its line ends, made CRLF by git's checkout; add `results/** -text` to the .gitattributes beside data.toml and commit it, then `git rm --cached -q -- results/a.csv` and `git checkout HEAD -- results/a.csv` write the bytes git keeps, which the pin holds; after that, ";
+    for (args, code, pin) in [
+        (&["status"][..], 0, "`fetchloom add ./results --as results`"),
+        (
+            &["status", "--check"],
+            1,
+            "`fetchloom add ./results --as results`",
+        ),
+        (
+            &["add", "./results", "--as", "results"],
+            1,
+            "`fetchloom add ./results --as results --yes`",
+        ),
+        (
+            &["sync", "--force"],
+            0,
+            "`fetchloom add ./results --as results`",
+        ),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(
+            stderr.contains(&format!("{fix}{pin} pins what it holds now")),
+            "{args:?}: {stderr}"
+        );
+        // every re-pin offered comes after the fix of a.csv's line ends
+        assert_eq!(
+            stderr.matches("fetchloom add").count(),
+            stderr.matches("; after that, `fetchloom add").count(),
+            "{args:?}: {stderr}"
+        );
+        assert!(!stderr.contains("`at`"), "{args:?}: {stderr}");
+    }
+    let rows = text(&sandbox.run(&["status"])?.stdout)?;
+    for row in [
+        "Committed results/a.csv · git's copy differs from the pinned bytes only in its line ends",
+        "Committed results/b.csv · git's copy holds other bytes than data.lock pins",
+    ] {
+        assert!(rows.contains(row), "{rows}");
+    }
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the results' bytes"])?;
+    crate::merge::ok(&sandbox, &["rm", "--cached", "-q", "--", "results/a.csv"])?;
+    crate::merge::ok(&sandbox, &["checkout", "HEAD", "--", "results/a.csv"])?;
+    assert_eq!(fs::read(results.join("a.csv"))?, b"a\n1\n");
+    ok(&sandbox.run(&["add", "./results", "--as", "results", "--yes"])?)?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    for pinned in [&b"a\n1\n"[..], b"b\n2\n"] {
+        assert!(lock.contains(&crate::support::sha256_hex(pinned)), "{lock}");
+    }
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
 }

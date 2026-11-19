@@ -299,82 +299,149 @@ pub(crate) fn sha256(bytes: &[u8]) -> Sha256 {
     hasher.finish().0
 }
 
-/// the SHA-256 and count of the bytes `reader` holds with their line ends made the other kind, as
-/// git converts them: each CRLF made LF, then each LF with no CR before it made CRLF.
-pub(crate) fn with_other_line_ends(mut reader: impl Read) -> io::Result<[(Sha256, u64); 2]> {
-    let (mut lf, mut crlf) = ((Hasher::default(), 0_u64), (Hasher::default(), 0_u64));
+/// the SHA-256 of the `held` bytes `file` holds with their line ends made the other kind, as git
+/// converts a whole file, when that leaves `wanted` bytes: each CRLF made LF where `held` is more,
+/// in a file with no LF alone, as git's checkout writes one, else each LF made CRLF, in a file with
+/// no CRLF, as git keeps one. none where the two are one count, so no line end differs, and none
+/// where the file's line ends are not such ones or their count is not the difference: a first read
+/// counts them, which costs no hashing, so only a file that passes is read again and hashed.
+pub(crate) fn with_line_ends_made(
+    mut file: impl Read + io::Seek,
+    held: u64,
+    wanted: u64,
+) -> io::Result<Option<Sha256>> {
+    let to_lf = match held.cmp(&wanted) {
+        std::cmp::Ordering::Greater => true,
+        std::cmp::Ordering::Less => false,
+        std::cmp::Ordering::Equal => return Ok(None),
+    };
+    // each line end made the other kind takes a byte off or adds one
+    if !line_ends_fit(&mut file, to_lf, held.abs_diff(wanted))? {
+        return Ok(None);
+    }
+    file.rewind()?;
+    let (mut hasher, mut made) = (Hasher::default(), 0_u64);
     let mut block = Block::sized(BLOCK as u64);
-    let (mut to_lf, mut to_crlf) = (Vec::new(), Vec::new());
+    let mut converted = Vec::new();
     // a CR waits for the next byte, which tells whether it ends a line
-    let (mut held, mut last) = (false, 0_u8);
+    let mut cr = false;
     loop {
         let buffer = block.get();
-        let read = reader.read(buffer)?;
+        let read = file.read(buffer)?;
         if read == 0 {
             break;
         }
-        to_lf.clear();
-        to_crlf.clear();
+        converted.clear();
         for &byte in &buffer[..read] {
-            if std::mem::take(&mut held) && byte != b'\n' {
-                to_lf.push(b'\r');
-            }
-            if byte == b'\r' {
-                held = true;
+            if !to_lf {
+                if byte == b'\n' {
+                    converted.push(b'\r');
+                }
+                converted.push(byte);
+            } else if byte == b'\r' {
+                if std::mem::replace(&mut cr, true) {
+                    converted.push(b'\r');
+                }
             } else {
-                to_lf.push(byte);
+                if std::mem::take(&mut cr) && byte != b'\n' {
+                    converted.push(b'\r');
+                }
+                converted.push(byte);
             }
-            if byte == b'\n' && last != b'\r' {
-                to_crlf.push(b'\r');
-            }
-            to_crlf.push(byte);
-            last = byte;
         }
-        lf.0.update(&to_lf);
-        lf.1 += to_lf.len() as u64;
-        crlf.0.update(&to_crlf);
-        crlf.1 += to_crlf.len() as u64;
+        hasher.update(&converted);
+        made += converted.len() as u64;
     }
-    if held {
-        lf.0.update(b"\r");
-        lf.1 += 1;
+    if cr {
+        hasher.update(b"\r");
+        made += 1;
     }
-    Ok([(lf.0.finish().0, lf.1), (crlf.0.finish().0, crlf.1)])
+    Ok((made == wanted).then(|| hasher.finish().0))
+}
+
+/// whether `reader` holds just `ends` line ends, each a CRLF where `crlf`, else each an LF with no
+/// CR before it, and none of the other kind, as git leaves a whole file it converted.
+fn line_ends_fit(reader: &mut impl Read, crlf: bool, ends: u64) -> io::Result<bool> {
+    let mut block = Block::sized(BLOCK as u64);
+    let (mut count, mut last) = (0_u64, 0_u8);
+    loop {
+        let buffer = block.get();
+        let read = reader.read(buffer)?;
+        let Some(&end) = buffer[..read].last() else {
+            return Ok(count == ends);
+        };
+        for (at, &byte) in buffer[..read].iter().enumerate() {
+            if byte == b'\n' {
+                let before = at.checked_sub(1).map_or(last, |before| buffer[before]);
+                if (before == b'\r') != crlf {
+                    return Ok(false);
+                }
+                count += 1;
+            }
+        }
+        if count > ends {
+            return Ok(false);
+        }
+        last = end;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// a byte at a time, so every CR falls at the end of a read.
-    struct Trickle<'a>(&'a [u8]);
+    /// a byte at a time, so every CR falls at the end of a read, read again from the start once
+    /// rewound.
+    struct Trickle<'a>(&'a [u8], usize);
 
     impl Read for Trickle<'_> {
         fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            let Some((first, rest)) = self.0.split_first() else {
+            let Some(byte) = self.0.get(self.1) else {
                 return Ok(0);
             };
-            buffer[0] = *first;
-            self.0 = rest;
+            buffer[0] = *byte;
+            self.1 += 1;
             Ok(1)
         }
     }
 
-    /// CRLF becomes LF and a lone LF becomes CRLF, either way the line ends git converts, while a
-    /// lone CR stays, however the reads fall.
+    impl io::Seek for Trickle<'_> {
+        fn seek(&mut self, to: io::SeekFrom) -> io::Result<u64> {
+            assert_eq!(to, io::SeekFrom::Start(0), "only a rewind");
+            self.1 = 0;
+            Ok(0)
+        }
+    }
+
+    /// a file git's checkout made CRLF hashes as its LF bytes, and one git kept as LF as its CRLF
+    /// bytes, a lone CR staying, however the reads fall; sizes that match, a line end of the kind
+    /// git leaves none of, or more line ends than the sizes allow give none.
     #[test]
-    fn other_line_ends_are_hashed_as_git_converts_them() {
-        let held = b"a\r\nb\rc\r\r\nd\n\r";
-        let expected = [
-            (sha256(b"a\nb\rc\r\nd\n\r"), 10),
-            (sha256(b"a\r\nb\rc\r\r\nd\r\n\r"), 13),
-        ];
-        for (name, read) in [
-            ("at once", with_other_line_ends(&held[..])),
-            ("a byte at a time", with_other_line_ends(Trickle(held))),
+    fn line_ends_are_made_the_other_kind_as_git_converts_them() {
+        let crlf = b"a\r\nb\rc\r\r\nd\r\n\r";
+        let lf = b"a\nb\rc\nd\n\r";
+        for (held, wanted, made) in [
+            (&crlf[..], 10, Some(sha256(b"a\nb\rc\r\nd\n\r"))),
+            (&lf[..], 12, Some(sha256(b"a\r\nb\rc\r\nd\r\n\r"))),
+            (b"a\r\nb\n", 4, None),
+            (b"a\nb\r\n", 7, None),
+            (b"a\r\nb\r\n", 5, None),
+            (b"a\nb\n", 4, None),
         ] {
-            let read = read.expect("a slice reads");
-            assert_eq!(read, expected, "{name}");
+            let size = held.len() as u64;
+            for (name, read) in [
+                (
+                    "at once",
+                    with_line_ends_made(io::Cursor::new(held), size, wanted),
+                ),
+                (
+                    "a byte at a time",
+                    with_line_ends_made(Trickle(held, 0), size, wanted),
+                ),
+            ] {
+                let read = read.expect("a slice reads");
+                assert_eq!(read, made, "{name}: {:?}", String::from_utf8_lossy(held));
+            }
         }
     }
 

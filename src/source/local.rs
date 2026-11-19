@@ -58,12 +58,13 @@ pub(crate) enum Since<'a> {
     /// it holds other files than the pin, and git tracks `files` of them, which `--force` leaves as
     /// they are; `yes` as for [`Since::Changed`].
     Tracked { files: &'a [String], yes: bool },
-    /// its files differ from the pin only in their line ends, `ends` here, and git tracks each of
-    /// `files`, in the folder whose files .gitattributes names by `pattern`.
+    /// files of it git tracks differ from the pin only in their line ends, `ends` here, in the
+    /// folder whose files `.gitattributes` names by `pattern`, and when others differ too, `rest`
+    /// says how, as the ways on from them once those line ends are fixed.
     LineEnds {
-        files: &'a [String],
         pattern: &'a str,
         ends: &'a LineEnds,
+        rest: Option<&'a Since<'a>>,
     },
 }
 
@@ -80,29 +81,36 @@ pub(crate) enum Reach {
     Lacked,
 }
 
-/// the line ends an output's file holds where its pin holds the other kind, the one difference
-/// between them, as git converts line ends when it checks a file out or keeps it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum LineEnds {
-    /// CRLF where the pin has LF, as a checkout writes them where git converts line ends: with the
-    /// git commands that write just those whose blob in git's index and last commit is the pinned
-    /// bytes fresh from that commit, if any, unstaging them first, so git holds no record of the
-    /// file it could skip one by, and those whose blob is not, which no checkout gives back.
-    Crlf {
-        restore: Option<[String; 2]>,
-        stale: Vec<String>,
-    },
+/// the files git tracks in an output's folder that differ from the pin only in their line ends, as
+/// git converts them when it checks a file out or keeps it, each by its path in the project and in
+/// path order, by the kind they hold where the pin holds the other.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LineEnds {
+    /// CRLF where the pin has LF, as a checkout writes them where git converts line ends.
+    pub(crate) crlf: Vec<String>,
+    /// the git commands that write those of `crlf` whose blob in git's index and last commit is
+    /// the pinned bytes fresh from that commit, if any: unstaging them first, so git holds no
+    /// record of the file it could skip one by.
+    pub(crate) restore: Option<[String; 2]>,
+    /// those of `crlf` whose blob is not, which no checkout gives back.
+    pub(crate) stale: Vec<String>,
     /// LF where the pin has CRLF, as git keeps the CRLF file it was given where it converts them.
-    Lf,
+    pub(crate) lf: Vec<String>,
 }
 
-/// that `files`, which git tracks in the folder of the output `name`, whose files .gitattributes
-/// names by `pattern`, differ from the pin only in their line ends, `ends` here, with the fix:
-/// git keeping that
-/// folder's bytes as they are, committed, then a fresh checkout of just the files whose blob git
-/// keeps is the pinned bytes, and LF line ends for the rest, which no command writes for them, or,
-/// where git kept them as LF, a commit of the pinned bytes where they are.
-fn line_ends_said(name: &str, pattern: &str, files: &[String], ends: &LineEnds) -> String {
+impl LineEnds {
+    /// each file it holds, by its path in the project.
+    pub(crate) fn files(&self) -> impl Iterator<Item = &str> {
+        self.crlf.iter().chain(&self.lf).map(String::as_str)
+    }
+}
+
+/// that files git tracks in the folder of the output `name`, whose files `.gitattributes` names by
+/// `pattern`, differ from the pin only in their line ends, as `ends` holds them, with the fix: git
+/// keeping that folder's bytes as they are, committed, then a fresh checkout of just the files
+/// whose blob git keeps is the pinned bytes, and LF line ends for the rest, which no command writes
+/// for them, or, where git kept them as LF, a commit of the pinned bytes where they are.
+fn line_ends_said(name: &str, pattern: &str, ends: &LineEnds) -> String {
     let named = |files: &[String]| match files {
         [one] => one.clone(),
         _ => format!(
@@ -111,38 +119,39 @@ fn line_ends_said(name: &str, pattern: &str, files: &[String], ends: &LineEnds) 
             files.first().map_or("", String::as_str)
         ),
     };
-    let (these, one) = (named(files), files.len() == 1);
-    let (differ, its, them) = if one {
-        ("differs", "its", "it")
-    } else {
-        ("differ", "their", "them")
+    let forms = |files: &[String]| {
+        if files.len() == 1 {
+            ("differs", "its", "it")
+        } else {
+            ("differ", "their", "them")
+        }
     };
     let rule =
         format!("add `{pattern} -text` to the .gitattributes beside data.toml and commit it");
-    match ends {
-        LineEnds::Crlf {
-            restore: Some([unstage, checkout]),
-            stale,
-        } if stale.is_empty() => format!(
-            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps, which the pin holds"
-        ),
-        LineEnds::Crlf {
-            restore: Some([unstage, checkout]),
-            stale,
-        } => format!(
-            "{these} differ from the pin only in their line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps for those it keeps as pinned, and give {} LF line ends, as git's staged or committed copy is not the pinned one",
-            named(stale)
-        ),
-        LineEnds::Crlf { restore: None, .. } => format!(
-            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout, but git's staged or committed copy is not the pinned one, so no checkout brings the pin back; {rule}, then give {them} LF line ends"
-        ),
-        LineEnds::Lf => {
-            let (literal, paths) = git_paths(files);
-            format!(
-                "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git {literal}add --renormalize -- {paths}` and commit, so a pull brings them as pinned"
-            )
-        }
+    let mut said = Vec::new();
+    if !ends.crlf.is_empty() {
+        let (these, (differ, its, them)) = (named(&ends.crlf), forms(&ends.crlf));
+        said.push(match &ends.restore {
+            Some([unstage, checkout]) if ends.stale.is_empty() => format!(
+                "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps, which the pin holds"
+            ),
+            Some([unstage, checkout]) => format!(
+                "{these} differ from the pin only in their line ends, made CRLF by git's checkout; {rule}, then `{unstage}` and `{checkout}` write the bytes git keeps for those it keeps as pinned, and give {} LF line ends, as git's staged or committed copy is not the pinned one",
+                named(&ends.stale)
+            ),
+            None => format!(
+                "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout, but git's staged or committed copy is not the pinned one, so no checkout brings the pin back; {rule}, then give {them} LF line ends"
+            ),
+        });
     }
+    if !ends.lf.is_empty() {
+        let (these, (differ, its, _)) = (named(&ends.lf), forms(&ends.lf));
+        let (literal, paths) = git_paths(&ends.lf);
+        said.push(format!(
+            "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git {literal}add --renormalize -- {paths}` and commit, so a pull brings them as pinned"
+        ));
+    }
+    said.join("; ")
 }
 
 /// `paths`, files in the project, as the words a git command a person runs names them by: each a
@@ -185,12 +194,22 @@ pub(crate) fn kept_by_git(name: &str, files: &[String]) -> String {
 /// a command names `shown`: pinning what it holds now, saying yes ahead for `yes`, or bringing
 /// git's copy to the pin.
 pub(crate) fn git_ways(name: &str, shown: &str, yes: bool) -> String {
-    let pin = if yes {
-        pinned_yes(name, shown)
-    } else {
-        pinned_again(name, shown)
-    };
-    format!("`{pin}` pins what it holds now, or make git's copy match data.lock")
+    format!(
+        "`{}` pins what it holds now, or make git's copy match data.lock",
+        pinned(name, shown, yes)
+    )
+}
+
+/// the ways on from the other changes in the folder of the output `name`, `shown` as a command
+/// names it, beside files that differ from its pin only in their line ends, once those are fixed,
+/// as `since` tells them: such a file shows the folder is the output's, so `at` is not in doubt,
+/// and the lines that tell of the files git tracks say they stay.
+fn after_line_ends(name: &str, shown: &str, since: Since<'_>) -> String {
+    match since {
+        Since::Unplaced { yes } => format!("`{}` pins what it holds now", pinned(name, shown, yes)),
+        Since::Tracked { yes, .. } => git_ways(name, shown, yes),
+        since => ways_on(name, shown, since),
+    }
 }
 
 /// the ways on for the output `name`, whose folder, `shown` as a command names it, is not as it
@@ -199,13 +218,7 @@ pub(crate) fn git_ways(name: &str, shown: &str, yes: bool) -> String {
 /// left, else put back or named where it went.
 pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
     let force = crate::suggested::command(&format!("sync --force {name}"));
-    let pin = |yes: bool| {
-        if yes {
-            pinned_yes(name, shown)
-        } else {
-            pinned_again(name, shown)
-        }
-    };
+    let pin = |yes: bool| pinned(name, shown, yes);
     match since {
         Since::Changed {
             yes,
@@ -257,10 +270,19 @@ pub(crate) fn ways_on(name: &str, shown: &str, since: Since<'_>) -> String {
             git_ways(name, shown, yes)
         ),
         Since::LineEnds {
-            files,
             pattern,
             ends,
-        } => line_ends_said(name, pattern, files, ends),
+            rest,
+        } => {
+            let said = line_ends_said(name, pattern, ends);
+            match rest {
+                Some(rest) => format!(
+                    "{said}; after that, {}",
+                    after_line_ends(name, shown, *rest)
+                ),
+                None => said,
+            }
+        }
     }
 }
 
@@ -280,6 +302,15 @@ fn pinned_again(name: &str, at: &str) -> String {
 /// [`pinned_again`] saying yes ahead, for a run that cannot ask a person.
 pub(crate) fn pinned_yes(name: &str, at: &str) -> String {
     crate::suggested::command(&format!("{} --yes", output_pin(name, at)))
+}
+
+/// [`pinned_yes`] for `yes`, else [`pinned_again`].
+fn pinned(name: &str, at: &str, yes: bool) -> String {
+    if yes {
+        pinned_yes(name, at)
+    } else {
+        pinned_again(name, at)
+    }
 }
 
 /// the refusal of a changed data.toml entry of `name`: an import, which only importing the files

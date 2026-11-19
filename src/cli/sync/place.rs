@@ -267,8 +267,8 @@ pub(crate) struct ChangedOutput {
     /// whether a `sync --force` here can write the files it would write there, as [`note_lost`]
     /// notes.
     pub(crate) reach: Reach,
-    /// the line ends its files hold where the pin holds the other kind, when that is all that
-    /// differs and git tracks each of them, as `tracked` lists them: git converted them.
+    /// those of `tracked` that differ from the pin only in their line ends, which git converted,
+    /// if any.
     pub(crate) line_ends: Option<LineEnds>,
 }
 
@@ -355,52 +355,74 @@ impl ChangedOutput {
     /// as a run that cannot ask a person needs it.
     pub(crate) fn ways(&self, yes: bool) -> String {
         let reach = self.reach;
-        let pattern: String;
+        let (others, pattern): (Vec<String>, String);
+        let after: Since<'_>;
         let since = match (&self.left, &self.line_ends) {
             (Some(from), _) => Since::Left { from, reach },
             (None, _) if self.gone => Since::Gone { reach },
-            // bytes that match but for line ends show the folder is the output's
+            // bytes that match but for line ends show the folder is the output's, file by file
             (None, Some(ends)) => {
+                let told: HashSet<&str> = ends.files().collect();
+                others = self
+                    .tracked
+                    .iter()
+                    .filter(|path| !told.contains(path.as_str()))
+                    .cloned()
+                    .collect();
+                after = self.changes(&others, yes);
                 pattern = crate::project::below_in_attributes(&self.at);
+                let more = self.changed + self.added + self.removed
+                    > u64::try_from(told.len()).unwrap_or(u64::MAX);
                 Since::LineEnds {
-                    files: &self.tracked,
                     pattern: &pattern,
                     ends,
+                    rest: more.then_some(&after),
                 }
             }
-            (None, None) if !self.placed_here => Since::Unplaced { yes },
-            (None, None) if !self.tracked.is_empty() => Since::Tracked {
-                files: &self.tracked,
-                yes,
-            },
-            (None, None) => Since::Changed { yes, reach },
+            (None, None) => self.changes(&self.tracked, yes),
         };
         crate::source::local::ways_on(&self.name, &self.shown, since)
     }
 
-    /// notes the line ends git converted in this output's files, as [`line_ends`] finds them, when
-    /// every file it differs in is one git tracks, `pins`, given the output's name, saying what the
-    /// pin holds at each path, as its SHA-256 and size.
+    /// how this output's folder changed, as the ways on from it differ, git tracking `tracked` of
+    /// the files that changed; `yes` as for [`ChangedOutput::ways`].
+    fn changes<'s>(&self, tracked: &'s [String], yes: bool) -> Since<'s> {
+        if !self.placed_here {
+            Since::Unplaced { yes }
+        } else if tracked.is_empty() {
+            Since::Changed {
+                yes,
+                reach: self.reach,
+            }
+        } else {
+            Since::Tracked {
+                files: tracked,
+                yes,
+            }
+        }
+    }
+
+    /// notes those of this output's files git tracks that differ from the pin only in the line
+    /// ends git converted, as [`line_ends`] finds them, `pins`, given the output's name, saying what
+    /// the pin holds at each path, as its SHA-256 and size.
     pub(crate) fn note_line_ends(
         &mut self,
         root: &Path,
         pins: impl FnOnce(&str) -> HashMap<String, (Sha256, u64)>,
     ) {
-        if self.added + self.removed > 0
-            || usize::try_from(self.changed).ok() != Some(self.tracked.len())
-        {
+        if self.tracked.is_empty() {
             return;
         }
         let pins = pins(&self.name);
-        let files: Option<Vec<(&str, Sha256, u64)>> = self
+        let files: Vec<(&str, Sha256, u64)> = self
             .tracked
             .iter()
-            .map(|path| {
+            .filter_map(|path| {
                 pins.get(path)
                     .map(|(sha256, size)| (path.as_str(), *sha256, *size))
             })
             .collect();
-        self.line_ends = files.and_then(|files| line_ends(root, &files));
+        self.line_ends = line_ends(root, &files);
     }
 
     /// what became of this output's folder and the ways on, as a line of status says it.
@@ -3876,47 +3898,52 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
     tracked
 }
 
-/// which line ends each of `files`, at its path in the project with the SHA-256 and size its pin
-/// holds, holds where the pin holds the other kind, when each differs only so: none otherwise. it
-/// reads each once, and of each that holds CRLF, the blob git's index and its last commit hold,
-/// which only the commands that write those files fresh from that commit may write.
+/// those of `files`, each at its path in the project with the SHA-256 and size its pin holds, that
+/// differ from the pin only in their line ends, as git converts a whole file, by the kind they hold
+/// where the pin holds the other: none when none does. it hashes only a file whose size and line
+/// ends fit, as [`crate::digest::with_line_ends_made`] counts them, and for those holding CRLF
+/// reads what git's index and its last commit hold, so the commands that write a file fresh from
+/// that commit are offered only where they write the pin.
 pub(crate) fn line_ends(root: &Path, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
-    // whether each holds CRLF where its pin holds LF, rather than the other way
-    let mut crlf = None;
+    let mut ends = LineEnds::default();
+    let mut crlf = Vec::new();
     for (path, sha256, size) in files {
-        let file = fs::File::open(native(root, path)).ok()?;
-        let [as_lf, as_crlf] = crate::digest::with_other_line_ends(file).ok()?;
-        let here = if as_lf == (*sha256, *size) {
-            true
-        } else if as_crlf == (*sha256, *size) {
-            false
-        } else {
-            return None;
-        };
-        if crlf.is_some_and(|crlf| crlf != here) {
-            return None;
+        let made = fs::File::open(native(root, path)).ok().and_then(|file| {
+            let held = file.metadata().ok()?.len();
+            let made = crate::digest::with_line_ends_made(file, held, *size).ok()??;
+            (made == *sha256).then_some(held > *size)
+        });
+        match made {
+            Some(true) => crlf.push((*path, *sha256, *size)),
+            Some(false) => ends.lf.push((*path).to_owned()),
+            None => {}
         }
-        crlf = Some(here);
     }
-    if !crlf? {
-        return Some(LineEnds::Lf);
+    if crlf.is_empty() && ends.lf.is_empty() {
+        return None;
     }
-    let (restorable, stale) = restorable(root, files);
-    let restore = (!restorable.is_empty()).then(|| {
+    let (restorable, stale) = restorable(root, &crlf);
+    ends.restore = (!restorable.is_empty()).then(|| {
         let (literal, paths) = crate::source::local::git_paths(&restorable);
         [
             crate::suggested::git(root, &format!("{literal}rm --cached -q -- {paths}")),
             crate::suggested::git(root, &format!("{literal}checkout HEAD -- {paths}")),
         ]
     });
-    Some(LineEnds::Crlf { restore, stale })
+    ends.crlf = crlf.iter().map(|(path, ..)| (*path).to_owned()).collect();
+    ends.stale = stale;
+    Some(ends)
 }
 
 /// `files`, each at its path in the project with the SHA-256 and size its pin holds, split into
-/// those whose blob git's index and its last commit share holds the pinned bytes, read raw, so no
-/// filter or program the project configures runs, and the rest: what unstaging them, which loses
-/// nothing, then a checkout from that commit writes once git keeps their bytes as they are.
+/// those whose one blob in git's index and its last commit holds the pinned bytes, read raw, so no
+/// filter or program the project configures runs, and the rest. unstaging one of the first loses
+/// nothing, and a checkout from that commit then writes the pin, once git keeps its bytes as they
+/// are.
 fn restorable(root: &Path, files: &[(&str, Sha256, u64)]) -> (Vec<String>, Vec<String>) {
+    if files.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
     let git = crate::project::git::on_path();
     let listed = git.as_deref().and_then(|git| {
         let paths: Vec<&str> = files.iter().map(|(path, ..)| *path).collect();
@@ -4434,12 +4461,13 @@ mod tests {
             ("r/f.csv", &one),
             ("r/g.csv", &one),
         ]);
-        let files: Vec<(&str, Sha256, u64)> = ["r/g.csv", "r/b.csv", "r/c.csv", "r/a.csv"]
-            .into_iter()
-            .chain(["r/d.csv", "r/e.csv"])
-            .map(|path| (path, pin.0, pin.1))
-            .chain([("r/f.csv", pin.0, pin.1 + 1)])
-            .collect();
+        let files: Vec<(&str, Sha256, u64)> = [
+            "r/g.csv", "r/b.csv", "r/c.csv", "r/a.csv", "r/d.csv", "r/e.csv",
+        ]
+        .into_iter()
+        .map(|path| (path, pin.0, pin.1))
+        .chain([("r/f.csv", pin.0, pin.1 + 1)])
+        .collect();
         let (restorable, stale) = split_restorable(&files, (&staged, &committed), |object| {
             blobs.get(object).cloned()
         });
