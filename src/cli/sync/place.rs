@@ -296,19 +296,10 @@ impl ChangedOutput {
     }
 
     /// this output, as its folder is there or gone, and when nothing is at it, where the state of
-    /// `survey` recorded its files of `pinned`, each with its dataset, still held.
-    pub(crate) fn looked_at<'f>(
-        mut self,
-        survey: &Survey,
-        pinned: impl IntoIterator<Item = (&'f str, &'f LockedFile)>,
-    ) -> Self {
+    /// `survey` recorded its files of `own`, its pinned files, still held.
+    pub(crate) fn looked_at(mut self, survey: &Survey, own: &[&Target]) -> Self {
         let root = survey.root();
-        let pinned: Vec<(&str, &LockedFile)> = pinned.into_iter().collect();
-        let pins: u64 = pinned
-            .iter()
-            .filter(|(dataset, _)| *dataset == self.name)
-            .map(|_| 1)
-            .sum();
+        let pins = u64::try_from(own.len()).unwrap_or(u64::MAX);
         let away = fs::symlink_metadata(native(root, &self.at))
             .is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound);
         self.gone = away || (self.changed + self.added == 0 && self.removed == pins);
@@ -316,6 +307,7 @@ impl ChangedOutput {
         if away {
             // `shown` is `at` as a command run here names it
             let up = self.shown.strip_suffix(&self.at).unwrap_or_default();
+            let pinned = own.iter().map(|target| (target.dataset, target.file));
             self.left = left_at(root, (&self.name, &self.at), pinned, &survey.state)
                 .map(|from| format!("{up}{from}"));
         }
@@ -2189,6 +2181,26 @@ fn forced_write(action: &Action) -> bool {
         || matches!(action, Action::Blocked(blocker) if blocker.clearable)
 }
 
+/// the targets of each dataset `wanted` names, gathered in one pass over `targets`, so each
+/// output reads its own pins rather than every target once for each output.
+fn targets_by_dataset<'t, 'p>(
+    targets: &'t [Target<'p>],
+    wanted: impl Fn(&str) -> bool,
+) -> HashMap<&'p str, Vec<&'t Target<'p>>> {
+    let mut by_dataset: HashMap<&'p str, Vec<&'t Target<'p>>> = HashMap::new();
+    for target in targets.iter().filter(|target| wanted(target.dataset)) {
+        by_dataset.entry(target.dataset).or_default().push(target);
+    }
+    by_dataset
+}
+
+/// `own`, an output's pins, by path in the project, each as its SHA-256 and size.
+fn pins_by_path(own: &[&Target]) -> HashMap<String, (Sha256, u64)> {
+    own.iter()
+        .map(|target| (target.path.clone(), (target.sha256, target.size)))
+        .collect()
+}
+
 /// what a sync with nothing to do placed, or none unless data.toml and data.lock are as the last
 /// complete sync left them, every file looks as recorded and the survey raised no doubt and
 /// followed no data folder link for the first time, which a placing checks; the caller
@@ -3619,14 +3631,15 @@ pub(crate) fn changed_outputs(
     }
     extras.sort_unstable();
     let told = &survey.state.told;
+    found.retain(|_, (output, ..)| output.is_changed());
+    let mut own = targets_by_dataset(targets, |name| found.contains_key(name));
     let changed: Vec<ChangedOutput> = found
         .into_values()
-        .filter(|(output, ..)| output.is_changed())
         .map(|(output, changes, differ)| {
-            let pinned = targets.iter().map(|target| (target.dataset, target.file));
-            let mut output = output.told_of(changes, told).looked_at(survey, pinned);
+            let pins = own.remove(output.name.as_str()).unwrap_or_default();
+            let mut output = output.told_of(changes, told).looked_at(survey, &pins);
             output.tracked = git_tracked(root, &output.at, &differ);
-            output.note_line_ends(root, pinned_in(targets));
+            output.note_line_ends(root, |_| pins_by_path(&pins));
             output
         })
         .collect();
@@ -3759,19 +3772,6 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
         .collect();
     tracked.sort_unstable();
     tracked
-}
-
-/// the pins of the files of an output among `targets`, given its name, by path in the project.
-fn pinned_in<'a>(
-    targets: &'a [Target<'a>],
-) -> impl FnOnce(&str) -> HashMap<String, (Sha256, u64)> + 'a {
-    move |name| {
-        targets
-            .iter()
-            .filter(|target| target.dataset == name)
-            .map(|target| (target.path.clone(), (target.sha256, target.size)))
-            .collect()
-    }
 }
 
 /// which line ends each of `files`, at its path in the project with the SHA-256 and size its pin
@@ -4285,6 +4285,44 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// each output gets its own pins from one pass, in data.lock's order, and a dataset not asked
+    /// for gets none.
+    #[test]
+    fn each_output_gets_its_own_pins_from_one_pass() {
+        let file = |path: &str| crate::project::lock::LockedFile {
+            path: path.to_owned(),
+            size: 1,
+            sha256: crate::digest::sha256(path.as_bytes()),
+            md5: None,
+            url: String::new(),
+            unpacks_to: None,
+        };
+        let files = [file("a1"), file("b1"), file("a2"), file("c1")];
+        let targets: Vec<Target> = [("a", 0), ("b", 1), ("a", 2), ("c", 3)]
+            .into_iter()
+            .map(|(dataset, at)| Target {
+                dataset,
+                path: format!("{dataset}/{}", files[at].path),
+                sha256: files[at].sha256,
+                size: 1,
+                copy: false,
+                file: &files[at],
+            })
+            .collect();
+        let grouped = targets_by_dataset(&targets, |name| name != "c");
+        let paths = |name: &str| {
+            grouped.get(name).map(|pins| {
+                pins.iter()
+                    .map(|target| target.path.as_str())
+                    .collect::<Vec<_>>()
+            })
+        };
+        assert_eq!(paths("a"), Some(vec!["a/a1", "a/a2"]));
+        assert_eq!(paths("b"), Some(vec!["b/b1"]));
+        assert_eq!(paths("c"), None);
+        assert_eq!(grouped.len(), 2);
+    }
     use crate::output::{Level, Style};
     use crate::project::state::State;
 
