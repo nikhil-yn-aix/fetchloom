@@ -3,8 +3,8 @@
 
 use crate::mirrors::{IRIS, cold, mirror_of, project, web_mirror_of};
 use crate::support::{
-    Part, Ranged, Result, Routes, Sandbox, file, json, md5_hex, ok, reply, sha256_hex, text,
-    workspace,
+    Part, Ranged, Result, Routes, Sandbox, file, hang_up, json, md5_hex, ok, reply, sha256_hex,
+    text, workspace,
 };
 
 /// each of `targets` on `source` added as a dataset of its own, named for its file.
@@ -280,8 +280,9 @@ fn a_host_that_gives_no_answer_is_asked_no_more() -> Result {
     Ok(())
 }
 
-/// a source that gives the file without its size serves it; one that is busy, refuses or is down
-/// leaves the file not checked, which `--check` fails as a download of it would, never as lost.
+/// a source that gives the file without its size serves it; one that is busy, refuses or gives no
+/// answer leaves the file not checked, which `--check` fails as a download of it would, never as
+/// lost.
 #[test]
 fn a_file_not_checked_is_never_called_lost() -> Result {
     let sandbox = Sandbox::new()?;
@@ -331,7 +332,7 @@ fn a_file_not_checked_is_never_called_lost() -> Result {
             "could not check 1 file data.lock pins, which may still be served"
         );
     }
-    drop(source);
+    source.change(vec![("/files/iris.csv".to_owned(), hang_up())]);
     let output = check()?;
     assert_eq!(output.status.code(), Some(20), "{}", text(&output.stderr)?);
     Ok(())

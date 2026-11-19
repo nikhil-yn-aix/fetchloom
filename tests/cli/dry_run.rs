@@ -5,7 +5,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::project::added;
-use crate::support::{Result, Routes, Sandbox, Server, file, json, reply, text, warning};
+use crate::support::{Refusing, Result, Routes, Sandbox, Server, file, json, reply, text, warning};
 
 const IRIS: &[u8] = b"sepal_length,species\n5.1,setosa\n";
 const PATH: &str = "/files/iris.csv";
@@ -457,7 +457,8 @@ fn an_add_dry_run_asks_the_link_as_the_add_would() -> Result {
     // nothing at the link, or no answer at all: the dry run fails as the add does
     let gone = || reply("404 Not Found", &[("Content-Length", "0")], b"");
     let missing = Server::start(PATH, vec![gone(), gone()])?;
-    let closed = std::net::TcpListener::bind("127.0.0.1:0")?.local_addr()?;
+    let refusing = Refusing::new()?;
+    let closed = refusing.address;
     for link in [missing.url.clone(), format!("http://{closed}{PATH}")] {
         let run = |args: &[&str]| sandbox.command(args).env("FETCHLOOM_RETRIES", "0").output();
         let dry = run(&["--json", "add", &link, "--dry-run"])?;

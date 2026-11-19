@@ -1635,6 +1635,13 @@ pub(crate) fn file(body: &[u8], etag: &str) -> Vec<Part> {
     )
 }
 
+/// no answer: the server reads the request and hangs up. a test whose source should give no
+/// answer keeps it up this way, since dropping it frees its port, and the requests still sent
+/// there would reach whichever test's server takes the port next.
+pub(crate) fn hang_up() -> Vec<Part> {
+    Vec::new()
+}
+
 /// a target answered `answer`, a `304 Not Modified`, to a request whose head holds `line`,
 /// lowercased.
 struct Unchanged {

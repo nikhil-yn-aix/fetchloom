@@ -7,7 +7,8 @@ use serde_json::json;
 
 use crate::mirrors::{IRIS, mirror_of};
 use crate::support::{
-    Result, Routes, Running, Sandbox, edit, file, json, object, ok, reply, text, wait_until, zip_of,
+    Result, Routes, Running, Sandbox, edit, file, hang_up, json, object, ok, reply, text,
+    wait_until, zip_of,
 };
 
 /// a project in the sandbox's work folder whose dataset iris is iris.csv from the source it
@@ -333,7 +334,7 @@ fn gc_frees_what_only_a_dropped_dataset_pins() -> Result {
 fn a_source_that_gives_no_answer_keeps_the_dataset_as_not_checked() -> Result {
     let sandbox = Sandbox::new()?;
     let source = iris(&sandbox)?;
-    drop(source);
+    source.change(vec![("/files/iris.csv".to_owned(), hang_up())]);
     let output = sandbox
         .command(&["--json", "--yes", "drop", "iris"])
         .env("FETCHLOOM_RETRIES", "0")

@@ -697,10 +697,8 @@ fn a_machine_without_googles_metadata_server_has_no_credentials() {
     let (endpoint, _) = tokens();
     let (local, asked) = server(|_, _| reply("401 Unauthorized", &[], b""));
     let (elsewhere, asked_elsewhere) = server(|_, _| reply("404 Not Found", &[], b""));
-    let closed = {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap()
-    };
+    let refusing = crate::test_ports::Refusing::new().unwrap();
+    let closed = Url::parse(&format!("http://{}/", refusing.address)).unwrap();
     let client = transport();
     let link = "https://storage.googleapis.com/lab-private/a.csv";
     for machine in [Some(&elsewhere), Some(&closed), None] {
