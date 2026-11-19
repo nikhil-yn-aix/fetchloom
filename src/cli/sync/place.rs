@@ -398,7 +398,7 @@ impl ChangedOutput {
                     .map(|(sha256, size)| (path.as_str(), *sha256, *size))
             })
             .collect();
-        self.line_ends = files.and_then(|files| line_ends(root, &self.at, &files));
+        self.line_ends = files.and_then(|files| line_ends(root, &files));
     }
 
     /// what became of this output's folder and the ways on, as a line of status says it.
@@ -3775,10 +3775,10 @@ fn pinned_in<'a>(
 }
 
 /// which line ends each of `files`, at its path in the project with the SHA-256 and size its pin
-/// holds, holds where the pin holds the other kind, when each differs only so, and when they are
-/// CRLF with the git command that checks the output folder `at` out again: none otherwise. it
-/// reads each once.
-pub(crate) fn line_ends(root: &Path, at: &str, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
+/// holds, holds where the pin holds the other kind, when each differs only so: none otherwise. it
+/// reads each once, and git's staged copy of each that holds CRLF, which only a checkout naming
+/// just the files whose staged copy holds the pinned bytes may write.
+pub(crate) fn line_ends(root: &Path, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
     // whether each holds CRLF where its pin holds LF, rather than the other way
     let mut crlf = None;
     for (path, sha256, size) in files {
@@ -3796,14 +3796,48 @@ pub(crate) fn line_ends(root: &Path, at: &str, files: &[(&str, Sha256, u64)]) ->
         }
         crlf = Some(here);
     }
-    Some(if crlf? {
-        let folder = crate::suggested::shell_word(at);
-        LineEnds::Crlf {
-            checkout: crate::suggested::git(root, &format!("checkout -- {folder}")),
-        }
-    } else {
-        LineEnds::Lf
-    })
+    if !crlf? {
+        return Some(LineEnds::Lf);
+    }
+    let pinned = staged_as_pinned(root, files);
+    let checkout = (!pinned.is_empty()).then(|| {
+        let words: Vec<String> = pinned
+            .iter()
+            .map(|path| crate::suggested::shell_word(path).into_owned())
+            .collect();
+        crate::suggested::git(root, &format!("checkout -- {}", words.join(" ")))
+    });
+    let stale = files
+        .iter()
+        .map(|(path, ..)| (*path).to_owned())
+        .filter(|path| !pinned.contains(path))
+        .collect();
+    Some(LineEnds::Crlf { checkout, stale })
+}
+
+/// those of `files`, each at its path in the project with the SHA-256 and size its pin holds,
+/// whose copy in git's index holds the pinned bytes, read raw, so no filter or program the project
+/// configures runs: what a checkout of them writes once git keeps their bytes as they are.
+fn staged_as_pinned(root: &Path, files: &[(&str, Sha256, u64)]) -> Vec<String> {
+    let Some(git) = crate::project::git::on_path() else {
+        return Vec::new();
+    };
+    let paths: Vec<&str> = files.iter().map(|(path, ..)| *path).collect();
+    let Some(staged) = crate::project::git::staged(&git, root, &paths) else {
+        return Vec::new();
+    };
+    files
+        .iter()
+        .filter(|(path, sha256, size)| {
+            staged
+                .get(*path)
+                .and_then(|object| crate::project::git::blob(&git, root, object))
+                .is_some_and(|bytes| {
+                    bytes.len() as u64 == *size && crate::digest::sha256(&bytes) == *sha256
+                })
+        })
+        .map(|(path, ..)| (*path).to_owned())
+        .collect()
 }
 
 /// `at`, a folder in the project at `root`, as a command run in the current folder names it.

@@ -3003,7 +3003,7 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     fs::write(work.join("results/a.csv"), b"a,b\r\n1,2\r\n")?;
     crate::merge::ok(&sandbox, &["add", "results"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
-    let told = "results/a.csv differs from the pin only in its line ends, made CRLF by git's checkout; add `results/** -text` to the .gitattributes beside data.toml, then `git checkout -- results` writes the bytes git keeps, which the pin holds";
+    let told = "results/a.csv differs from the pin only in its line ends, made CRLF by git's checkout; add `results/** -text` to the .gitattributes beside data.toml and commit it, then `git checkout -- results/a.csv` writes the bytes git keeps, which the pin holds";
     for (args, code) in [
         (&["status"][..], 0),
         (&["status", "--check"], 1),
@@ -3029,7 +3029,9 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     assert!(!mixed.contains(told), "{mixed}");
     fs::remove_file(work.join("results/extra.csv"))?;
     fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
-    crate::merge::ok(&sandbox, &["checkout", "--", "results"])?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the results' bytes"])?;
+    crate::merge::ok(&sandbox, &["checkout", "--", "results/a.csv"])?;
     assert_eq!(fs::read(work.join("results/a.csv"))?, b"a,b\n1,2\n");
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
@@ -3064,7 +3066,7 @@ fn an_outputs_line_ends_git_kept_as_lf_are_told_with_their_fix() -> Result {
     let stderr = text(&checked.stderr)?;
     assert_eq!(checked.status.code(), Some(1), "{stderr}");
     assert!(
-        stderr.contains("results/a.csv differs from the pin only in its line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, add `results/** -text` to the .gitattributes beside data.toml, then `git add --renormalize results` and commit, so a pull brings them as pinned"),
+        stderr.contains("results/a.csv differs from the pin only in its line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, add `results/** -text` to the .gitattributes beside data.toml and commit it, then `git add --renormalize -- results/a.csv` and commit, so a pull brings them as pinned"),
         "{stderr}"
     );
     assert!(!stderr.contains("fetchloom add"), "{stderr}");
@@ -3072,11 +3074,157 @@ fn an_outputs_line_ends_git_kept_as_lf_are_told_with_their_fix() -> Result {
     fs::write(work.join("results/a.csv"), b"a,b\r\n1,2\r\n")?;
     fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
     crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
-    crate::merge::ok(&sandbox, &["add", "--renormalize", "results"])?;
+    crate::merge::ok(&sandbox, &["add", "--renormalize", "--", "results/a.csv"])?;
     crate::merge::ok(&sandbox, &["commit", "-qm", "keep the pinned bytes"])?;
     fs::remove_file(work.join("results/a.csv"))?;
     crate::merge::ok(&sandbox, &["checkout", "--", "results"])?;
     assert_eq!(fs::read(work.join("results/a.csv"))?, b"a,b\r\n1,2\r\n");
+    ok(&sandbox.run(&["status", "--check"])?)?;
+    Ok(())
+}
+
+/// a rerun pinned but not committed, which git wrote back with CRLF line ends while its index still
+/// holds the first run, as `git stash`, a pull and `git stash pop` leave it, differs from the pin
+/// only in line ends, though no checkout brings the pin back, as git keeps the first run: none is
+/// offered, nor a re-pin, and nothing fetchloom does writes the first run over the rerun.
+#[test]
+fn line_ends_over_a_rerun_git_has_not_staged_offer_no_checkout() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/table1.csv"), b"a,b\n3,4\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    fs::create_dir_all(work.join("results"))?;
+    fs::write(work.join("results/table1.csv"), b"a,b\r\n1,2\r\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "the first run"])?;
+    let rerun = b"a,b\r\n3,4\r\n";
+    fs::write(work.join("results/table1.csv"), rerun)?;
+    let told = "results/table1.csv differs from the pin only in its line ends, made CRLF by git's checkout, but git's staged copy is not the pinned one, so no checkout brings the pin back; add `results/** -text` to the .gitattributes beside data.toml and commit it, then give it LF line ends";
+    for (args, code) in [
+        (&["status"][..], 0),
+        (&["status", "--check"], 1),
+        (&["add", "./results", "--as", "results"], 1),
+        (&["sync", "--force"], 0),
+    ] {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(code), "{args:?}: {stderr}");
+        assert!(stderr.contains(told), "{args:?}: {stderr}");
+        assert!(!stderr.contains("git checkout"), "{args:?}: {stderr}");
+        assert!(!stderr.contains("fetchloom add"), "{args:?}: {stderr}");
+    }
+    assert_eq!(fs::read(work.join("results/table1.csv"))?, rerun);
+    Ok(())
+}
+
+/// beside a rerun git has not staged, a file git keeps as pinned is checked out alone: the fix
+/// names that file's checkout and asks LF line ends for the rerun, and following it leaves the rerun
+/// as it was, still to be made ready.
+#[test]
+fn the_line_ends_checkout_leaves_out_a_file_git_staged_otherwise() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/b.csv"), b"x\n")?;
+    fs::write(author.join("results/table1.csv"), b"a,b\n3,4\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    let results = work.join("results");
+    fs::create_dir_all(&results)?;
+    fs::write(results.join("b.csv"), b"x\r\n")?;
+    fs::write(results.join("table1.csv"), b"a,b\r\n1,2\r\n")?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "the first run"])?;
+    let rerun = b"a,b\r\n3,4\r\n";
+    fs::write(results.join("table1.csv"), rerun)?;
+    let checked = sandbox.run(&["status", "--check"])?;
+    let stderr = text(&checked.stderr)?;
+    assert_eq!(checked.status.code(), Some(1), "{stderr}");
+    assert!(
+        stderr.contains("2 files git tracks in results's folder, such as results/b.csv, differ from the pin only in their line ends, made CRLF by git's checkout; add `results/** -text` to the .gitattributes beside data.toml and commit it, then `git checkout -- results/b.csv` writes the bytes git keeps for those it keeps as pinned, and give results/table1.csv LF line ends, as git's staged copy is not the pinned one"),
+        "{stderr}"
+    );
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the results' bytes"])?;
+    crate::merge::ok(&sandbox, &["checkout", "--", "results/b.csv"])?;
+    assert_eq!(fs::read(results.join("b.csv"))?, b"x\n");
+    assert_eq!(fs::read(results.join("table1.csv"))?, rerun);
+    let checked = sandbox.run(&["status", "--check"])?;
+    assert_eq!(checked.status.code(), Some(1), "{}", text(&checked.stderr)?);
+    Ok(())
+}
+
+/// the line-ends fix checks out just the pinned files whose staged copy holds the pinned bytes,
+/// never the output's folder: a system file and a link git tracks there, which the pin leaves out,
+/// keep the edits made to them, and the output is ready after the fix.
+#[test]
+fn the_line_ends_checkout_names_only_the_pinned_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/table1.csv"), b"a,b\n1,2\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    let results = work.join("results");
+    fs::create_dir_all(&results)?;
+    fs::write(results.join("table1.csv"), b"a,b\r\n1,2\r\n")?;
+    fs::write(results.join(".DS_Store"), b"first")?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("table1.csv", results.join("latest"))?;
+    crate::merge::ok(&sandbox, &["add", "-f", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    fs::write(results.join(".DS_Store"), b"edited")?;
+    #[cfg(unix)]
+    {
+        fs::remove_file(results.join("latest"))?;
+        std::os::unix::fs::symlink("../notes/run2.csv", results.join("latest"))?;
+    }
+    let status = sandbox.run(&["status"])?;
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains("; add `results/** -text` to the .gitattributes beside data.toml and commit it, then `git checkout -- results/table1.csv` writes the bytes git keeps, which the pin holds"),
+        "{stderr}"
+    );
+    fs::write(work.join(".gitattributes"), b"results/** -text\n")?;
+    crate::merge::ok(&sandbox, &["add", ".gitattributes"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "keep the results' bytes"])?;
+    crate::merge::ok(&sandbox, &["checkout", "--", "results/table1.csv"])?;
+    assert_eq!(fs::read(results.join(".DS_Store"))?, b"edited");
+    #[cfg(unix)]
+    assert_eq!(
+        fs::read_link(results.join("latest"))?,
+        Path::new("../notes/run2.csv")
+    );
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
 }

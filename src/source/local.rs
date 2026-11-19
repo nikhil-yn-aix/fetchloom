@@ -71,38 +71,65 @@ pub(crate) enum Since<'a> {
 /// between them, as git converts line ends when it checks a file out or keeps it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum LineEnds {
-    /// CRLF where the pin has LF, as a checkout writes them where git converts line ends, with
-    /// the git command that checks the folder out again.
-    Crlf { checkout: String },
+    /// CRLF where the pin has LF, as a checkout writes them where git converts line ends: with the
+    /// git command that checks out again just those whose staged copy holds the pinned bytes, if
+    /// any, and those whose staged copy does not, which no checkout gives back.
+    Crlf {
+        checkout: Option<String>,
+        stale: Vec<String>,
+    },
     /// LF where the pin has CRLF, as git keeps the CRLF file it was given where it converts them.
     Lf,
 }
 
 /// that `files`, which git tracks in the folder of the output `name`, `at` as data.toml names it,
 /// differ from the pin only in their line ends, `ends` here, with the fix: git keeping that
-/// folder's bytes as they are, then a checkout that writes the bytes git keeps, which the pin
-/// holds, or, where git kept them as LF, a commit of the pinned bytes where they are.
+/// folder's bytes as they are, committed, then a checkout of just the files whose staged copy holds
+/// the pinned bytes, and LF line ends for the rest, which no command writes for them, or, where
+/// git kept them as LF, a commit of the pinned bytes where they are.
 fn line_ends_said(name: &str, at: &str, files: &[String], ends: &LineEnds) -> String {
-    let (these, differ, its) = match files {
-        [one] => (one.clone(), "differs", "its"),
-        _ => (
-            format!(
-                "{} files git tracks in {name}'s folder, such as {}",
-                files.len(),
-                files.first().map_or("", String::as_str)
-            ),
-            "differ",
-            "their",
+    let named = |files: &[String]| match files {
+        [one] => one.clone(),
+        _ => format!(
+            "{} files git tracks in {name}'s folder, such as {},",
+            files.len(),
+            files.first().map_or("", String::as_str)
         ),
     };
-    let rule = format!("add `{at}/** -text` to the .gitattributes beside data.toml");
+    let (these, one) = (named(files), files.len() == 1);
+    let (differ, its, them) = if one {
+        ("differs", "its", "it")
+    } else {
+        ("differ", "their", "them")
+    };
+    let rule = format!("add `{at}/** -text` to the .gitattributes beside data.toml and commit it");
     match ends {
-        LineEnds::Crlf { checkout } => format!(
+        LineEnds::Crlf {
+            checkout: Some(checkout),
+            stale,
+        } if stale.is_empty() => format!(
             "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout; {rule}, then `{checkout}` writes the bytes git keeps, which the pin holds"
         ),
-        LineEnds::Lf => format!(
-            "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git add --renormalize {at}` and commit, so a pull brings them as pinned"
+        LineEnds::Crlf {
+            checkout: Some(checkout),
+            stale,
+        } => format!(
+            "{these} differ from the pin only in their line ends, made CRLF by git's checkout; {rule}, then `{checkout}` writes the bytes git keeps for those it keeps as pinned, and give {} LF line ends, as git's staged copy is not the pinned one",
+            named(stale)
         ),
+        LineEnds::Crlf { checkout: None, .. } => format!(
+            "{these} {differ} from the pin only in {its} line ends, made CRLF by git's checkout, but git's staged copy is not the pinned one, so no checkout brings the pin back; {rule}, then give {them} LF line ends"
+        ),
+        LineEnds::Lf => {
+            let paths: Vec<String> = files
+                .iter()
+                .map(|file| crate::suggested::shell_word(file).into_owned())
+                .collect();
+            let paths = paths.join(" ");
+            format!(
+                "{these} {differ} from the pin only in {its} line ends, which git keeps as LF where the pin has CRLF; where the pinned files are, {rule}, then `git add --renormalize -- {paths}` and commit, so a pull brings them as pinned"
+            )
+        }
     }
 }
 

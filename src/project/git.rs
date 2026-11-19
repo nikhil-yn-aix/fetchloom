@@ -287,6 +287,34 @@ pub(crate) fn blobs(
     Some(found)
 }
 
+/// the blob git's index holds for each of `paths`, files of the work tree at `root`, by its path
+/// from `root` with `/` between folders: plain files staged whole, never a link, a submodule or a
+/// side of a conflict. it reads only the index, so no filter the project configures runs. none
+/// when git cannot list them.
+pub(crate) fn staged(git: &Path, root: &Path, paths: &[&str]) -> Option<BTreeMap<String, String>> {
+    let specs: Vec<String> = paths.iter().map(|path| format!("./{path}")).collect();
+    let mut arguments = vec!["--literal-pathspecs", "ls-files", "-s", "-z", "--"];
+    arguments.extend(specs.iter().map(String::as_str));
+    let listed = run(git, root, &arguments).ok()?;
+    let mut found = BTreeMap::new();
+    // each entry is `<mode> <object> <stage>\t<path>`
+    for entry in listed
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+    {
+        let (head, path) = std::str::from_utf8(entry).ok()?.split_once('\t')?;
+        let mut fields = head.split(' ');
+        let (Some(mode), Some(object), Some(stage)) = (fields.next(), fields.next(), fields.next())
+        else {
+            return None;
+        };
+        if stage == "0" && ["100644", "100755"].contains(&mode) && is_object(object) {
+            found.insert(path.to_owned(), object.to_owned());
+        }
+    }
+    Some(found)
+}
+
 /// the bytes of the blob `object`, from this repository alone.
 pub(crate) fn blob(git: &Path, root: &Path, object: &str) -> Option<Vec<u8>> {
     read_objects(git, root, &["cat-file", "blob", "--end-of-options", object])

@@ -993,7 +993,7 @@ pub(crate) mod tests {
             ("src/project/lock/lists.rs", "git commit -a"),
             ("src/project/lock/merge.rs", "git add"),
             ("src/project/lock/merge.rs", "git add"),
-            ("src/source/local.rs", "git add --renormalize {at}"),
+            ("src/source/local.rs", "git add --renormalize -- {paths}"),
         ];
         assert_eq!(
             literal("git"),
