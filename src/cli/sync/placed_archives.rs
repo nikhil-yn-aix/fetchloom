@@ -97,6 +97,16 @@ impl PlacedArchives {
         let mut hashed: HashMap<String, Option<Sha256>> = HashMap::new();
         let mut recorded: Option<HashMap<String, HashSet<String>>> = None;
         let temporary: HashSet<&String> = survey.leftovers().collect();
+        // built once for all the archives: each archive building every dataset's folder and
+        // passing over every file was quadratic in archive datasets
+        let folders = DatasetFolderSet::of(manifest);
+        let paths = in_order(
+            survey
+                .disk
+                .keys()
+                .filter(|placed| !temporary.contains(placed))
+                .map(String::as_str),
+        );
         for (dataset, archive) in unknown {
             let Some(tree) = archive.file.unpacks_to else {
                 continue;
@@ -107,11 +117,7 @@ impl PlacedArchives {
             let Some(layout) = Layout::of((manifest, lock), dataset, archive) else {
                 continue;
             };
-            let files = survey
-                .disk
-                .keys()
-                .filter(|placed| !temporary.contains(placed));
-            let listed = layout.below(files.map(String::as_str));
+            let listed = layout.listed(&paths, &folders);
             if listed.is_empty() {
                 continue;
             }
@@ -349,9 +355,6 @@ struct Layout {
     filtered: bool,
     /// the paths of the dataset's files pinned whole, none of them the archive's.
     whole: HashSet<String>,
-    /// the folders of the other datasets, each ending in `/`, whose files are none of the
-    /// archive's, as when its dataset is the data folder itself.
-    others: Vec<String>,
 }
 
 impl Layout {
@@ -375,13 +378,6 @@ impl Layout {
         let path = archive.path();
         let name = path.rsplit_once('/').map_or(path, |(_, name)| name);
         let base = plan::unpacked_folder(manifest, dataset, path);
-        let others = manifest
-            .datasets
-            .keys()
-            .map(|other| plan::folder(manifest, other))
-            .filter(|other| *other != folder)
-            .map(|other| format!("{other}/"))
-            .collect();
         Some(Layout {
             dataset: dataset.to_owned(),
             folder,
@@ -391,24 +387,29 @@ impl Layout {
             decompressed: archive.decompressed(),
             filtered,
             whole,
-            others,
         })
     }
 
+    /// the files of `sorted`, the disk's paths in byte order, that [`Layout::below`] gives: the
+    /// ones below the archive's folder are a run of them.
+    fn listed<'p>(&self, sorted: &[&'p str], folders: &DatasetFolderSet) -> Vec<(&'p str, String)> {
+        self.below(paths_below(sorted, &self.base), folders)
+    }
+
     /// each file of `files`, paths in the project as the disk lists them, below the folder the
-    /// archive's files land below and pinned by none of the dataset's whole files, with its path
-    /// there in NFC, as an archive's members are kept, in order. a file a system writes by itself,
-    /// which unpacking never keeps, is left out, unless it is the file one decompresses to.
-    fn below<'f>(&self, files: impl Iterator<Item = &'f str>) -> Vec<(&'f str, String)> {
+    /// archive's files land below, pinned by none of the dataset's whole files and below no
+    /// other dataset's folder of `folders`, with its path there in NFC, as an archive's members
+    /// are kept, in order. a file a system writes by itself, which unpacking never keeps, is left
+    /// out, unless it is the file one decompresses to.
+    fn below<'f>(
+        &self,
+        files: impl Iterator<Item = &'f str>,
+        folders: &DatasetFolderSet,
+    ) -> Vec<(&'f str, String)> {
         let prefix = format!("{}/", self.base);
         let mut below: Vec<(&str, String)> = files
             .filter(|placed| !self.whole.contains(*placed))
-            .filter(|placed| {
-                !self
-                    .others
-                    .iter()
-                    .any(|other| placed.starts_with(other.as_str()))
-            })
+            .filter(|placed| !folders.hold(placed, &self.folder))
             .filter_map(|placed| Some((placed, name::composed(placed.strip_prefix(&prefix)?))))
             .filter(|(_, inside)| {
                 self.decompressed.as_ref() == Some(inside)
@@ -418,6 +419,54 @@ impl Layout {
         below.sort_unstable();
         below
     }
+}
+
+/// the folder of every dataset data.toml names, built once for all the archives a run looks for.
+/// a file below the folder of another dataset is none of an archive's, as when the archive's
+/// dataset is the data folder itself.
+#[derive(Default)]
+struct DatasetFolderSet(HashSet<String>);
+
+impl DatasetFolderSet {
+    fn of(manifest: &Manifest) -> DatasetFolderSet {
+        DatasetFolderSet(
+            manifest
+                .datasets
+                .keys()
+                .map(|name| plan::folder(manifest, name))
+                .collect(),
+        )
+    }
+
+    /// whether `path` starts with the folder of a dataset and `/`, that folder not `own`: a
+    /// look at each folder above it in the path, not a pass over every dataset's.
+    fn hold(&self, path: &str, own: &str) -> bool {
+        path.match_indices('/').any(|(at, _)| {
+            let folder = &path[..at];
+            folder != own && self.0.contains(folder)
+        })
+    }
+}
+
+/// `paths` in byte order, in which the paths below a folder are one run ([`paths_below`]).
+fn in_order<'p>(paths: impl Iterator<Item = &'p str>) -> Vec<&'p str> {
+    let mut paths: Vec<&str> = paths.collect();
+    paths.sort_unstable();
+    paths
+}
+
+/// the paths of `sorted`, a list in byte order, that start with `folder` and `/`: found by a
+/// search for the first of them, as they follow one another.
+fn paths_below<'s, 'p>(
+    sorted: &'s [&'p str],
+    folder: &str,
+) -> impl Iterator<Item = &'p str> + use<'s, 'p> {
+    let prefix = format!("{folder}/");
+    let start = sorted.partition_point(|path| *path < prefix.as_str());
+    sorted[start..]
+        .iter()
+        .copied()
+        .take_while(move |path| path.starts_with(prefix.as_str()))
 }
 
 /// the ways `below`, the files below an archive's folder with their paths there, may be the
@@ -526,13 +575,21 @@ mod tests {
             decompressed: None,
             filtered: false,
             whole: HashSet::new(),
-            others: Vec::new(),
         }
     }
 
     /// the paths in the archive each guess gives the files of `placed`, paths in the project.
     fn guessed(layout: &Layout, placed: &[&str]) -> Vec<Vec<String>> {
-        let listed = layout.below(placed.iter().copied());
+        guessed_beside(layout, placed, &DatasetFolderSet::default())
+    }
+
+    /// [`guessed`], with `folders` the folders of every dataset data.toml names.
+    fn guessed_beside(
+        layout: &Layout,
+        placed: &[&str],
+        folders: &DatasetFolderSet,
+    ) -> Vec<Vec<String>> {
+        let listed = layout.below(placed.iter().copied(), folders);
         let below: Vec<(&str, &str)> = listed
             .iter()
             .map(|(placed, inside)| (*placed, inside.as_str()))
@@ -654,7 +711,7 @@ mod tests {
             "data/scans/cafe\u{301}.bin",
             "data/scans/notes.txt",
         ];
-        let listed = layout.below(placed.iter().copied());
+        let listed = layout.below(placed.iter().copied(), &DatasetFolderSet::default());
         let below: Vec<(&str, &str)> = listed
             .iter()
             .map(|(placed, inside)| (*placed, inside.as_str()))
@@ -693,11 +750,205 @@ mod tests {
         let mut layout = layout("all", "all.zip", true);
         layout.folder = "data".to_owned();
         layout.base = "data".to_owned();
-        layout.others = vec!["data/iris/".to_owned()];
+        let folders = DatasetFolderSet(HashSet::from(["data".to_owned(), "data/iris".to_owned()]));
         assert_eq!(
-            guessed(&layout, &["data/a.csv", "data/iris/iris.csv"])[0],
+            guessed_beside(&layout, &["data/a.csv", "data/iris/iris.csv"], &folders)[0],
             ["a.csv"]
         );
+    }
+
+    /// a file is another dataset's when that dataset's folder and a `/` start its path: nested
+    /// folders, siblings sharing a start (`data/a`, `data/ab`, `data/a-b`, `data/a.b`), two
+    /// datasets in one folder, outputs beside and inside the data folder, and the data folder.
+    #[test]
+    fn a_file_below_another_datasets_folder_is_none_of_an_archives() {
+        let manifest = Manifest::parse(concat!(
+            "[datasets.a]\nref = \"x\"\npath = \"a\"\n",
+            "[datasets.inner]\nref = \"x\"\npath = \"a/inner\"\n",
+            "[datasets.ab]\nref = \"x\"\npath = \"ab\"\n",
+            "[datasets.dash]\nref = \"x\"\npath = \"a-b\"\n",
+            "[datasets.dot]\nref = \"x\"\npath = \"a.b\"\n",
+            "[datasets.one]\nref = \"x\"\npath = \"pair\"\n",
+            "[datasets.two]\nref = \"x\"\npath = \"pair\"\n",
+            "[datasets.run]\nref = \"local\"\nat = \"results/run\"\n",
+            "[datasets.part]\nref = \"x\"\npath = \"part\"\n",
+            "[datasets.output]\nref = \"local\"\nat = \"data/part/out\"\n",
+        ))
+        .unwrap();
+        let folders = DatasetFolderSet::of(&manifest);
+        for (path, own, held) in [
+            ("data/a/x.csv", "data/a", false),
+            ("data/a/inner/x.csv", "data/a", true),
+            // a's folder holds inner's: the rule leaves out what any other folder holds
+            ("data/a/inner/x.csv", "data/a/inner", true),
+            ("data/ab/x.csv", "data/ab", false),
+            ("data/a-b/x.csv", "data/a-b", false),
+            ("data/a.b/x.csv", "data/a.b", false),
+            ("data/ab/x.csv", "data/a", true),
+            ("data/pair/x.csv", "data/pair", false),
+            ("results/run/x.csv", "data/a", true),
+            ("data/part/out/x.csv", "data/part", true),
+            ("data/part/x.csv", "data/part", false),
+            ("data/a", "data/ab", false),
+            ("x.csv", "data/a", false),
+        ] {
+            assert_eq!(folders.hold(path, own), held, "{path} beside {own}");
+        }
+        let top = "[datasets.top]\nref = \"x\"\npath = \".\"\n[datasets.iris]\nref = \"x\"\n";
+        let top = DatasetFolderSet::of(&Manifest::parse(top).unwrap());
+        assert!(!top.hold("data/a.csv", "data"));
+        assert!(top.hold("data/iris/iris.csv", "data"));
+        let sorted = in_order(
+            [
+                "data/ab/x",
+                "data/a/x",
+                "data/a",
+                "data/a.b/x",
+                "data/b/x",
+                "data/a/inner/y",
+                "data/a-b/x",
+            ]
+            .into_iter(),
+        );
+        assert_eq!(
+            paths_below(&sorted, "data/a").collect::<Vec<_>>(),
+            ["data/a/inner/y", "data/a/x"]
+        );
+        assert_eq!(paths_below(&sorted, "data/c").count(), 0);
+    }
+
+    /// the files below an archive's folder as each archive listed them before: every other
+    /// dataset's folder built for it, and every file on the disk tried against each one.
+    fn walked<'f>(
+        layout: &Layout,
+        manifest: &Manifest,
+        files: &'f [String],
+    ) -> Vec<(&'f str, String)> {
+        let others: Vec<String> = manifest
+            .datasets
+            .keys()
+            .map(|other| plan::folder(manifest, other))
+            .filter(|other| *other != layout.folder)
+            .map(|other| format!("{other}/"))
+            .collect();
+        let prefix = format!("{}/", layout.base);
+        let mut below: Vec<(&str, String)> = files
+            .iter()
+            .map(String::as_str)
+            .filter(|placed| !layout.whole.contains(*placed))
+            .filter(|placed| {
+                !others
+                    .iter()
+                    .any(|other| placed.starts_with(other.as_str()))
+            })
+            .filter_map(|placed| Some((placed, name::composed(placed.strip_prefix(&prefix)?))))
+            .filter(|(_, inside)| {
+                layout.decompressed.as_ref() == Some(inside)
+                    || !inside.split('/').any(name::made_by_system)
+            })
+            .collect();
+        below.sort_unstable();
+        below
+    }
+
+    /// 300 generated data.toml texts with a disk's files: dataset folders nested, beside one
+    /// another, sharing a start or a folder, at the data folder itself, and outputs in results/
+    /// and in the data folder; files in them, deeper, named like a folder, and in none.
+    fn generated() -> Vec<(String, Vec<String>)> {
+        use std::fmt::Write as _;
+        const PARTS: [&str; 8] = ["a", "ab", "a-b", "a.b", "b", "A", "a b", "a_b"];
+        const NAMES: [&str; 5] = ["x.csv", ".DS_Store", "a", "x.zip", "caf\u{e9}.txt"];
+        let mut seed: usize = 0x9e37_79b9;
+        let mut next = |below: usize| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % below
+        };
+        (0..300)
+            .map(|_| {
+                let data = ["data", "data/in", "d"][next(3)];
+                let mut toml = format!("[project]\ndata_dir = \"{data}\"\n");
+                let mut folders = vec![data.to_owned(), "results".to_owned()];
+                for index in 0..=next(10) {
+                    let path: Vec<&str> = (0..=next(3)).map(|_| PARTS[next(PARTS.len())]).collect();
+                    let path = path.join("/");
+                    let (line, folder) = match next(8) {
+                        0 => ("path = \".\"".to_owned(), data.to_owned()),
+                        1 => (
+                            format!("at = \"results/{path}\""),
+                            format!("results/{path}"),
+                        ),
+                        2 => (
+                            format!("at = \"{data}/{path}/out\""),
+                            format!("{data}/{path}/out"),
+                        ),
+                        _ => (format!("path = \"{path}\""), format!("{data}/{path}")),
+                    };
+                    let source = if line.starts_with("at") { "local" } else { "x" };
+                    writeln!(toml, "[datasets.d{index}]\nref = \"{source}\"\n{line}").unwrap();
+                    folders.push(folder);
+                }
+                let mut files: Vec<String> = (0..next(40))
+                    .map(|_| {
+                        let mut file = folders[next(folders.len())].clone();
+                        if next(10) == 0 {
+                            return file;
+                        }
+                        for _ in 0..next(3) {
+                            file.push('/');
+                            file.push_str(PARTS[next(PARTS.len())]);
+                        }
+                        file.push('/');
+                        file.push_str(NAMES[next(NAMES.len())]);
+                        file
+                    })
+                    .collect();
+                files.sort_unstable();
+                files.dedup();
+                // a disk lists its files in no order
+                files.reverse();
+                (toml, files)
+            })
+            .collect()
+    }
+
+    /// the folders built once and the files searched in order list each archive's files as
+    /// building every other dataset's folder for it and trying every file did.
+    #[test]
+    fn the_folders_built_once_list_each_archives_files_as_every_dataset_walked() {
+        let mut compared = 0;
+        for (table, files) in generated() {
+            let manifest = Manifest::parse(&table).unwrap();
+            let folders = DatasetFolderSet::of(&manifest);
+            let sorted = in_order(files.iter().map(String::as_str));
+            for (index, dataset) in manifest.datasets.keys().enumerate() {
+                for archive in ["x.zip", "a/x.zip", "a b/x.tar.gz"] {
+                    let folder = plan::folder(&manifest, dataset);
+                    let layout = Layout {
+                        dataset: dataset.clone(),
+                        whole: files
+                            .iter()
+                            .filter(|file| file.len() % 3 == index % 3)
+                            .cloned()
+                            .collect(),
+                        base: plan::unpacked_folder(&manifest, dataset, archive),
+                        folder,
+                        stem: crate::archive::stem(archive).to_owned(),
+                        alone: index % 2 == 0,
+                        decompressed: (index % 4 == 1).then(|| "x.csv".to_owned()),
+                        filtered: false,
+                    };
+                    assert_eq!(
+                        layout.listed(&sorted, &folders),
+                        walked(&layout, &manifest, &files),
+                        "{table}\n{dataset}, {archive}, {files:?}"
+                    );
+                    compared += 1;
+                }
+            }
+        }
+        assert!(compared > 1500, "{compared} archives compared");
     }
 
     /// a disk may list a name decomposed, as a mac can, while an archive's members are kept in NFC.
