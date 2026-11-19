@@ -4641,6 +4641,31 @@ fn a_partial_sync_never_counts_a_waiting_dataset_as_placed() -> Result {
     Ok(())
 }
 
+/// a sync's closing line counts only the datasets it placed and names big, which waits for its
+/// file list, and the next sync never calls every pinned file in place.
+#[test]
+fn a_sync_names_the_dataset_that_waits_in_its_closing_line() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (clone, _) = clone_without_big(&sandbox)?;
+    let first = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&first.stderr)?;
+    assert_eq!(first.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Synced 1 dataset into data · big waits for its file list\n"),
+        "{stderr}"
+    );
+    let again = listing_in(&sandbox, &clone, &["sync"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(
+            "Ok all pinned files but big's are in place by size and time, nothing to do\n"
+        ),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// `list big` while big waits for its list says so, as status does, and never that data.lock has
 /// no pin of it or that a sync would lock it; `--json` names the part it waits for.
 #[test]
