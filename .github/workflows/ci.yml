@@ -259,7 +259,9 @@ jobs:
       # the azure tests sign for microsoft's own emulator, pinned to 3.38, which needs the node 22
       # the runner has; its lockfile pins every package it pulls in, and no package runs scripts.
       # package.json lifts uuid past the 8.x ms-rest-js and sequelize ask for to 11.1.1, the first
-      # release with the fix, which still ships the commonjs build they require
+      # release with the fix, which still ships the commonjs build they require, and
+      # @opentelemetry/instrumentation-http past the 0.221 @azure/monitor-opentelemetry asks for to
+      # 0.223, the newest line with the fix that still pairs with @opentelemetry/core 2
       - name: install azurite for the azure signing tests
         if: matrix.os == 'ubuntu-24.04'
         run: |
