@@ -1515,7 +1515,9 @@ impl<'a> Placing<'a> {
             .collect()
     }
 
-    /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it.
+    /// what placing needs that `holds` says the cache lacks, as [`Placing::missing`] lists it,
+    /// asking of each object once, holding of each answer a word rather than a whole error, and
+    /// keeping only the objects the cache lacks, not every one it holds.
     fn lacking(
         &self,
         holds: impl Fn(&Sha256, u64) -> Result<bool, Error> + Sync,
@@ -1534,19 +1536,20 @@ impl<'a> Placing<'a> {
             .map(|target| (target.sha256, target.size))
             .collect();
         let _span = tracing::debug_span!("find_objects", objects = objects.len()).entered();
+        drop(unique);
         let found = place::run_all(&objects, self.survey.threads, |(digest, size)| {
-            holds(digest, *size)
+            holds(digest, *size).map_err(Box::new)
         });
-        let mut present = HashSet::new();
+        let mut absent = HashSet::new();
         for ((digest, _), found) in objects.iter().zip(found) {
-            if found? {
-                present.insert(*digest);
+            if !found.map_err(|error| *error)? {
+                absent.insert(*digest);
             }
         }
         let mut seen = HashSet::new();
         Ok(needed
             .into_iter()
-            .filter(|target| !present.contains(&target.sha256))
+            .filter(|target| absent.contains(&target.sha256))
             .map(|target| (target.dataset, target.file))
             .filter(|(_, file)| seen.insert(file.sha256))
             .map(|(dataset, file)| (dataset.to_owned(), file))
@@ -5486,6 +5489,95 @@ mod tests {
             placing.holding().is_empty(),
             "nothing needs bytes, so no file lends any"
         );
+    }
+
+    /// a placing of each of `files` in the dataset `set`.
+    fn placing_all<'a>(
+        project: &'a Project,
+        manifest: &'a Manifest,
+        files: &'a [LockedFile],
+    ) -> Placing<'a> {
+        Placing {
+            project,
+            manifest,
+            targets: files
+                .iter()
+                .map(|file| Target {
+                    dataset: "set",
+                    path: format!("data/set/{}", file.path),
+                    sha256: file.sha256,
+                    size: file.size,
+                    copy: false,
+                    file,
+                })
+                .collect(),
+            unknown: Vec::new(),
+            waiting: Vec::new(),
+            actions: files.iter().map(|_| Action::Place).collect(),
+            survey: surveyed(project),
+            scope: Scope::All,
+            unlisted: plan::Unlisted::new(),
+            vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
+            elsewhere: Vec::new(),
+            forced: Vec::new(),
+        }
+    }
+
+    /// a look for what the cache lacks finds each file whose object it lacks once, in data.lock's
+    /// order, and fails with the first failure in that order.
+    #[test]
+    fn a_look_for_what_the_cache_lacks_finds_each_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().join("project"));
+        fs::create_dir_all(project.root.join("data")).unwrap();
+        let manifest =
+            Manifest::parse("[datasets.set]\nref = \"https://example.org/set\"\n").unwrap();
+        let digest = |text: &str| crate::digest::sha256(text.as_bytes());
+        let files: Vec<LockedFile> = ["held", "lacked", "lacked", "broken", "other", "lacked"]
+            .iter()
+            .enumerate()
+            .map(|(at, text)| LockedFile {
+                path: format!("f{at}.csv"),
+                size: 1,
+                sha256: digest(text),
+                md5: None,
+                url: String::new(),
+                unpacks_to: None,
+            })
+            .collect();
+        let placing = placing_all(&project, &manifest, &files);
+        let shown = |found: Result<Vec<(String, &LockedFile)>, Error>| match found {
+            Ok(found) => format!(
+                "{:?}",
+                found
+                    .iter()
+                    .map(|(d, f)| format!("{d}/{}", f.path))
+                    .collect::<Vec<_>>()
+            ),
+            Err(error) => error.message,
+        };
+        for broken in [false, true] {
+            let holds = |sha256: &Sha256, _: u64| {
+                if broken && *sha256 == digest("broken") {
+                    return Err(Error::new(Kind::ProjectInvalid, "a broken object"));
+                }
+                if broken && *sha256 == digest("other") {
+                    return Err(Error::new(Kind::ProjectInvalid, "a later broken object"));
+                }
+                Ok(*sha256 == digest("held") || *sha256 == digest("broken"))
+            };
+            let expected = if broken {
+                "a broken object"
+            } else {
+                r#"["set/f1.csv", "set/f4.csv"]"#
+            };
+            assert_eq!(shown(placing.lacking(holds)), expected, "{broken}");
+        }
     }
 
     #[test]
