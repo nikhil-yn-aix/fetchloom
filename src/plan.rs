@@ -823,12 +823,13 @@ fn data_named(manifest: &Manifest, dataset: &str, path: &str) -> Option<(String,
 }
 
 /// the sorted paths below the folder of `locked` that windows or a fat disk cannot store, as
-/// [`name::unportable`] finds them among its files and kept archive members, only to be told.
+/// [`name::unportable`] finds them among its files and kept archive members, only to be told,
+/// each with whether it comes out of an archive, which windows then cannot unpack.
 pub(crate) fn unportable(
     manifest: &Manifest,
     locked: &Locked,
     members: &dyn Fn(&Archive<'_>) -> Option<Vec<Member>>,
-) -> Vec<String> {
+) -> Vec<(String, bool)> {
     let Some(source) = manifest
         .datasets
         .get(&locked.name)
@@ -853,12 +854,12 @@ pub(crate) fn unportable(
         return Vec::new();
     }
     let inside = format!("{folder}/");
-    let mut paths: Vec<String> = plan
+    let mut paths: Vec<(String, bool)> = plan
         .targets
         .into_iter()
         .filter_map(|target| {
             let path = target.path.strip_prefix(&inside)?;
-            name::unportable(path).map(|_| path.to_owned())
+            name::unportable(path).map(|_| (path.to_owned(), target.unpacked()))
         })
         .collect();
     paths.sort_unstable();
