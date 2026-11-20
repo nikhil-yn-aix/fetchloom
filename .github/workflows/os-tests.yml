@@ -1,0 +1,85 @@
+name: os-tests
+
+# scratch only: the os-fix commits' tests, for red, green and break evidence
+# (plan/qa/os-hunt/fixes.md). OS_TESTS_MODE says which tree this branch holds: green runs the
+# whole suite on ubuntu, the new and nearby tests elsewhere and ci's refs lane on windows-2022;
+# red and break run the new tests alone, which must fail there.
+on:
+  push:
+    branches: ['scratch-os-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+  INSTA_UPDATE: 'no'
+  INSTA_FORCE_PASS: '0'
+  PIN_NEXTEST: cargo-nextest@0.9.151
+  OS_TESTS_MODE: green
+  NEW_LIB: >-
+    cli::fetch::tests::a_stated_size_is_weighed_against_the_data_folders_disk
+    cli::sync::place::tests::the_first_file_past_the_data_folders_largest_is_too_large
+  NEW_CLI: >-
+    placing::an_add_weighs_the_data_folders_disk_before_downloading
+
+jobs:
+  new:
+    name: new tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: env.OS_TESTS_MODE != 'green' && matrix.os != 'ubuntu-24.04'
+        run: echo "red and break run on ubuntu alone"
+      - if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        run: rustup toolchain install
+      - name: unit tests
+        if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        continue-on-error: ${{ env.OS_TESTS_MODE != 'green' }}
+        run: |
+          nearby=""
+          if [ "$OS_TESTS_MODE" = green ]; then
+            nearby="cli::fetch:: cli::sync:: space::"
+          fi
+          cargo test --locked --no-fail-fast --lib -- $NEW_LIB $nearby
+      - name: cli tests
+        if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        continue-on-error: ${{ env.OS_TESTS_MODE != 'green' }}
+        run: |
+          nearby=""
+          if [ "$OS_TESTS_MODE" = green ]; then
+            nearby="placing:: project:: get:: decompress:: dry_run::"
+          fi
+          cargo test --locked --no-fail-fast --test cli -- $NEW_CLI $nearby
+
+  suite:
+    name: whole suite on ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - if: env.OS_TESTS_MODE != 'green'
+        run: echo "the whole suite runs on the green tree alone"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.OS_TESTS_MODE == 'green'
+        with:
+          persist-credentials: false
+      - if: env.OS_TESTS_MODE == 'green'
+        run: rustup toolchain install
+      - if: env.OS_TESTS_MODE == 'green'
+        run: cargo test --locked --no-fail-fast
