@@ -89,7 +89,7 @@ impl Cache {
 
     /// a new object holding the file at `source`, which another program keeps, when its bytes are
     /// the ones `digest` and `size` pin, cloned or copied, never linked. without `flush` the caller
-    /// flushes a [`Batch`] before publishing it.
+    /// flushes a `Batch` before publishing it.
     ///
     /// # Errors
     ///
