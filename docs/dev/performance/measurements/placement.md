@@ -267,3 +267,18 @@ one bounded retry prefetched at most 64 names on the caller, kept worker-local r
 functional CLI checks compared all errors, totals, changed marks and bytes for a damaged object, a link, a directory and an unreadable fan: eight comparisons in the first version and four glibc comparisons in the retry. the streaming regression failed against the eager scan. deliberately collecting the full name walk and disabling the one-shot total guard then failed both `verification_reads_before_finishing_the_name_walk` and `discovered_total_waits_for_metadata_and_is_reported_once`. after restoration, 91 upkeep, partial and link tests and all-target clippy passed.
 
 reproduction records of this cache-verification experiment stay under `/datadisk/fl-perf/io/impl2/`: its immutable builds, both source patches and base identities, the a/b results of both versions, the corresponding analysis JSON, syscall counts, contract outputs and red/restored logs. the scripts that run, compare and analyze it select either version with `--experiment v1` or `v2`; the unchanged sweep harness's identity is recorded with each batch.
+
+## a sync's placing told as it starts, 2026-11-20
+
+a sync that places files said nothing about them until its first `Placed` line, written once the first dataset's files were in: 24 ms after start for 1,000 files from the cache and 80 ms for 5,000, most of a run that short. it now says `Placing <n> files` as placing starts, once settling has found the n files it places; an add, `-q`, `--json`, a run that places nothing and one whose count changed while it settled say no such line. the round-2 feel window measured it with a sync placing every file of a project from a warm cache into an emptied data folder, 1,000 files in 20 datasets and 5,000 in 50, at a pseudo-terminal and into a pipe, off against on in shuffled rounds on ext4: 30 for 1,000 files and 20 for 5,000, on the musl build 9f8b27802 over main dd9fae1e3. at a pseudo-terminal, first visible output is the time to the first printable character drawn.
+
+| case | median ms, off -> on | ratio |
+|---|---:|---:|
+| 1,000 files at a terminal: first visible output | 24.0 -> 17.0 | 0.708 [0.708, 0.739] |
+| 5,000 files at a terminal: first visible output | 80.0 -> 53.5 | 0.668 [0.618, 0.732] |
+| 1,000 files at a terminal: exit | 25.0 -> 25.0 | 1.000 [0.981, 1.020] |
+| 5,000 files at a terminal: exit | 83.0 -> 85.5 | 1.012 [0.987, 1.068] |
+| 1,000 files into a pipe | 23.8 -> 24.0 | 1.005 [0.988, 1.014] |
+| 5,000 files into a pipe | 70.4 -> 70.6 | 1.013 [0.964, 1.027] |
+
+cpu stayed flat: 0.993 and 1.004 into a pipe, 1.017 [1.000, 1.017] and 1.000 at a terminal. peak memory: 38.8 -> 38.9 MiB for 1,000 files, 1.001 [0.999, 1.006], and 73.1 -> 74.9 MiB for 5,000, 1.016 [1.003, 1.027], 1.8 MiB more, within the rule, a lower end at most 1.02. what raised it is not established: the count the line needs allocates nothing. the output gains the one line, at a terminal and in plain stderr alike. kept.

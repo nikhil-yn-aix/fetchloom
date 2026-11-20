@@ -35,7 +35,7 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, keeping unchanged entries. a fetched dataset [renamed](../reference/data-toml.md#dataset-names) in data.toml keeps its pin under the new name, with no request, and says `Renamed iris to flowers in data.lock · its pin stays`. a dataset pinned for the first time gets a `Pinned` line with what it resolved to, its title, file count and size, so an id with a typo that pins an unrelated record stands out.
 3. reuse unchanged placed files and cached files, then take what the cache lacks from files [already in place](#already-in-place) in the data folder, then from [other caches](../guides/other-tools.md#reusing-other-caches) on this machine, such as hugging face's, then from the [mirrors](../guides/mirrors.md) you named, and download the rest. in [mirror-only mode](../guides/mirrors.md#mirror-only-mode), a file no mirror holds fails the run before any download.
-4. check downloads against their pinned sizes and hashes, then place files and remove the unchanged files fetchloom placed that no dataset needs now.
+4. check downloads against their pinned sizes and hashes, then place files, saying `Placing <n> files` as placing starts, and remove the unchanged files fetchloom placed that no dataset needs now.
 5. save the project's state and register the project with the cache.
 6. add the data folder to `.gitignore` if needed: in a git repository, and outside one on the project's first sync, when there is no data.lock yet.
 
@@ -59,6 +59,7 @@ a sync that cannot get every file still gets and places the rest. an archive tha
 
 ```text
  Downloaded 1 file · 1 B in 26 ms
+    Placing 1 file
      Placed data/small · 1 file linked to the cache
      Synced small into data · 1 other dataset left as it was
 ```
@@ -86,6 +87,7 @@ a file whose bytes the cache lacks can also come from another file in the data f
 
 ```text
      Copied 1 file · 104 B from data into the cache
+    Placing 1 file
      Placed data/twin · 1 file linked to the cache
     Adopted data/iris · 1 file already held the pinned bytes, so it is now linked to the cache
      Synced 2 datasets into data

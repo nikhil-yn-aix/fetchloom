@@ -1085,6 +1085,9 @@ pub(crate) struct Placing<'a> {
     /// where in `targets` the files are that `--force` would write in the folders of `changed`,
     /// as decided before the run left those outputs whole.
     forced: Vec<usize>,
+    /// how many files a run that tells `Placing <n> files` as placing starts expects to place,
+    /// as its live line names them, and what says whether that line's plain lines said so.
+    told_at_once: Option<(usize, crate::output::Begun)>,
 }
 
 impl<'a> Placing<'a> {
@@ -1201,6 +1204,7 @@ impl<'a> Placing<'a> {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced,
+            told_at_once: None,
         })
     }
 
@@ -1762,6 +1766,23 @@ impl<'a> Placing<'a> {
         self.targets.len()
     }
 
+    /// how many files the run places as decided: missing, outdated or in the way. one found
+    /// changed since the survey once placing starts, or behind what cannot be cleared, stays.
+    pub(crate) fn placing_now(&self) -> usize {
+        #[cfg(test)]
+        tests::counting();
+        self.actions
+            .iter()
+            .filter(|action| needs_bytes(action))
+            .count()
+    }
+
+    /// has the run say `Placing <n> files` as placing starts, once settling found it places the
+    /// `files` it expects, unless the plain lines `begun` belongs to said so first.
+    pub(crate) fn told_at_once(&mut self, files: usize, begun: crate::output::Begun) {
+        self.told_at_once = Some((files, begun));
+    }
+
     /// what placing copies rather than links to `cache` or clones, told before trying: all on
     /// another disk, FAT, exFAT or read-only cache; synced or `copy = true` ones `clones` denies.
     pub(crate) fn copies(
@@ -1842,6 +1863,7 @@ impl<'a> Placing<'a> {
             still_marked: _,
             elsewhere,
             forced: _,
+            told_at_once,
         } = self;
         let root = placing_root(project, manifest)?;
         let mut placement = Placement {
@@ -1955,6 +1977,12 @@ impl<'a> Placing<'a> {
         let checked = survey.started;
         let threads = survey.threads;
         let state = &mut survey.state;
+        if let Some((files, begun)) = &told_at_once
+            && todo.len() == *files
+        {
+            let placing = crate::units::count(*files as u64, "file", "files");
+            output.beginning(begun, "Placing", &placing);
+        }
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
         let failure = unsettled.or(failure);
         // one look at the stop decides flushing, taking back an add's files and the result, so
@@ -4848,6 +4876,7 @@ mod tests {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced: Vec::new(),
+            told_at_once: None,
         };
 
         placing
@@ -4963,6 +4992,189 @@ mod tests {
         );
     }
 
+    /// an output that tells at `level`, or `json`, on no terminal.
+    fn placing_told(level: Level, json: bool) -> Output {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        };
+        Output::new(style, level, json, false)
+    }
+
+    thread_local! {
+        static COUNTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn counting() {
+        COUNTS.set(COUNTS.get() + 1);
+    }
+
+    /// what a run of the sync loop on `output` placing weather's three files did: the lines it
+    /// told, the work its live lines named, and how often it counted the files it places now.
+    /// `placed` is missing, `replaced` outdated and `kept` in place, all three in place if
+    /// `kept_all`. `edited` has a person change `replaced` after the survey, and `adding` makes
+    /// the run an add of weather.
+    fn placing_said(
+        output: Output,
+        (kept_all, edited, adding): (bool, bool, bool),
+    ) -> (Vec<String>, Vec<String>, usize) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let bytes = b"station,temperature\nlerwick,9.1\n";
+        let stored = crate::cache::tests::store(&cache, bytes);
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: bytes.len() as u64,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let names = ["placed", "replaced", "kept"];
+        let targets: Vec<Target> = names
+            .iter()
+            .map(|name| Target {
+                dataset: "weather",
+                path: format!("data/weather/{name}.csv"),
+                sha256: stored.digest,
+                size: bytes.len() as u64,
+                copy: false,
+                file: &locked,
+            })
+            .collect();
+        let project = Project::at(dir.path().join("project"));
+        fs::create_dir_all(project.root.join("data/weather")).unwrap();
+        let mut state = State::default();
+        for target in targets.iter().skip(usize::from(!kept_all)) {
+            let path = project.root.join(&target.path);
+            fs::write(&path, bytes).unwrap();
+            state.files.insert(
+                target.path.clone(),
+                Placed {
+                    dataset: target.dataset.to_owned(),
+                    sha256: target.sha256,
+                    method: Method::Copy,
+                    look: now(&path).unwrap(),
+                    writable: false,
+                    checked: 0,
+                    adopted: false,
+                    output: false,
+                    unlinkable: false,
+                    racy_intact: std::sync::OnceLock::new(),
+                },
+            );
+        }
+        project.write_state(&state).unwrap();
+        let survey = surveyed(&project);
+        if edited {
+            fs::write(project.root.join(&targets[1].path), b"my own notes\n").unwrap();
+        }
+        let actions = if kept_all {
+            vec![Action::Keep, Action::Keep, Action::Keep]
+        } else {
+            vec![
+                Action::Place,
+                Action::Replace(Stale::Outdated),
+                Action::Keep,
+            ]
+        };
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                .unwrap();
+        let placing = Placing {
+            project: &project,
+            manifest: &manifest,
+            targets,
+            unknown: Vec::new(),
+            waiting: Vec::new(),
+            actions,
+            survey,
+            scope: Scope::All,
+            unlisted: plan::Unlisted::new(),
+            vouched: true,
+            outputs: Outputs::default(),
+            changed: Vec::new(),
+            extras: Vec::new(),
+            unmarking: Vec::new(),
+            still_marked: Vec::new(),
+            elsewhere: Vec::new(),
+            forced: Vec::new(),
+            told_at_once: None,
+        };
+        let context = crate::cli::Context::new(output);
+        let net = std::sync::Arc::new(context.net());
+        let mut run = crate::cli::sync::Loop::new(&context, &project, net, cache);
+        if adding {
+            run = run.adding("weather");
+        }
+        let counted = COUNTS.get();
+        run.apply(&manifest, &Lock::default(), placing, None)
+            .unwrap();
+        let counts = COUNTS.get() - counted;
+        (context.output.said(), context.output.lasted(), counts)
+    }
+
+    /// a sync says `Placing <n> files` as it starts placing them, n the files it places, once and
+    /// before what it placed, its live line naming the same files.
+    #[test]
+    fn a_sync_says_what_it_places_as_it_starts() {
+        let (said, lasted, counts) =
+            placing_said(placing_told(Level::Normal, false), (false, false, false));
+        let at = |wanted: &str| {
+            said.iter()
+                .position(|line| line.trim_start().starts_with(wanted))
+                .unwrap_or_else(|| panic!("no {wanted}: {said:?}"))
+        };
+        assert_eq!(said[at("Placing")].trim_start(), "Placing 2 files");
+        assert!(at("Placing") < at("Placed"), "{said:?}");
+        assert!(said[at("Placed")].contains(" 2 files "), "{said:?}");
+        let told = said.iter().filter(|line| line.contains("Placing")).count();
+        assert_eq!(told, 1, "{said:?}");
+        assert_eq!(lasted, ["Placing 2 files"]);
+        assert_eq!(counts, 1);
+    }
+
+    /// a file a person changes after the survey stays as they left it, so the run places fewer
+    /// files than it expected and says none at once, since its count would be wrong.
+    #[test]
+    fn a_sync_that_finds_a_file_changed_meanwhile_says_none_at_once() {
+        let (said, _, _) = placing_said(placing_told(Level::Normal, false), (false, true, false));
+        assert!(
+            !said.iter().any(|line| line.contains("Placing")),
+            "{said:?}"
+        );
+        assert!(
+            said.iter().any(|line| line.contains(" 1 file ")),
+            "{said:?}"
+        );
+    }
+
+    /// only a run that tells its placing says it at once: an add tells what it placed in its own
+    /// lines, `-q` and `--json` tell no step, and a run that places nothing has nothing to say.
+    /// their live lines name every file the plan puts in the data folder, and only the last counts
+    /// the files it places now.
+    #[test]
+    fn only_a_run_that_tells_its_placing_says_it_at_once() {
+        for (output, (kept_all, adding)) in [
+            (placing_told(Level::Normal, false), (false, true)),
+            (placing_told(Level::Quiet, false), (false, false)),
+            (placing_told(Level::Normal, true), (false, false)),
+            (placing_told(Level::Normal, false), (true, false)),
+        ] {
+            let (said, lasted, counts) = placing_said(output, (kept_all, false, adding));
+            assert_eq!(counts, usize::from(kept_all), "{adding} {kept_all}");
+            assert!(
+                !said.iter().any(|line| line.contains("Placing")),
+                "{said:?}"
+            );
+            assert_eq!(lasted, ["Placing 3 files"]);
+        }
+    }
+
     #[test]
     fn placements_are_checked_no_later_than_their_survey() {
         let dir = tempfile::tempdir().unwrap();
@@ -5048,6 +5260,7 @@ mod tests {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced: Vec::new(),
+            told_at_once: None,
         };
         placing
             .apply(
@@ -5122,6 +5335,7 @@ mod tests {
                 still_marked: Vec::new(),
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
+                told_at_once: None,
             };
 
             let placed = placing.apply(
@@ -5201,6 +5415,7 @@ mod tests {
                 still_marked: Vec::new(),
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
+                told_at_once: None,
             };
 
             let placed = placing.apply(
@@ -5284,6 +5499,7 @@ mod tests {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced: Vec::new(),
+            told_at_once: None,
         };
 
         placing
@@ -5485,6 +5701,7 @@ mod tests {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced: Vec::new(),
+            told_at_once: None,
         };
         let holding: Vec<String> = placing
             .holding()
@@ -5543,6 +5760,7 @@ mod tests {
             still_marked: Vec::new(),
             elsewhere: Vec::new(),
             forced: Vec::new(),
+            told_at_once: None,
         }
     }
 

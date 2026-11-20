@@ -171,6 +171,7 @@ select = ["*.wav", "*.txt"]
 sync placed only the 40 `.wav` and 40 `.txt` files of each shard, from `data/shards/shard-000000` to `shard-000005`. once `fetchloom lock --upgrade shards` pinned a seventh shard, sync placed its files the same way, as its stderr shows:
 
 ```text
+    Placing 80 files
      Placed data/shards · 80 files linked to the cache
      Synced 1 dataset into data
 ```

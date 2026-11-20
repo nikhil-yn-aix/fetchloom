@@ -21,7 +21,7 @@ use indicatif::{MultiProgress, ProgressDrawTarget};
 use serde::Serialize;
 
 pub(crate) use picker::lead as picker_lead;
-pub(crate) use progress::{Bar, Setup, Ticker, Wait};
+pub(crate) use progress::{Bar, Begun, Setup, Ticker, Wait};
 pub(crate) use style::Tone;
 pub(crate) use style::{ColorChoice, Style};
 pub(crate) use warning::Warning;
@@ -99,6 +99,9 @@ pub(crate) struct Output {
     /// every line told, in the order it went out, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
+    /// the verb and what of each [`Output::lasting`] made, in order, for tests.
+    #[cfg(test)]
+    lasted: Mutex<Vec<String>>,
     /// the width of the terminal stderr goes to, which a line wraps at between words, or none.
     columns: Option<usize>,
     /// the words withheld from the commands rows on stdout name, so every row of the run gives
@@ -191,7 +194,14 @@ impl Alone<'_> {
 /// work told once it lasts, as [`Output::lasting`] makes it, until dropped.
 pub(crate) struct Lasting {
     _setup: Setup,
-    _ticker: Ticker,
+    ticker: Ticker,
+}
+
+impl Lasting {
+    /// what says whether the work's plain lines said what it does, for a step that says it first.
+    pub(crate) fn begun(&self) -> Begun {
+        self.ticker.begun()
+    }
 }
 
 /// the document `--json` prints, described in docs/user/reference/json-output.md.
@@ -389,6 +399,8 @@ impl Output {
             once: Mutex::default(),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
+            #[cfg(test)]
+            lasted: Mutex::new(Vec::new()),
             columns: None,
             started: Instant::now(),
             joining,
@@ -435,6 +447,14 @@ impl Output {
     pub(crate) fn step_in(&self, verb: &str, text: &str, tone: Tone) {
         if self.tells(Level::Normal) {
             self.line(&verb_line(verb, text, tone, self.style.color));
+        }
+    }
+
+    /// says at once that work `verb` and `what` name begins, as a step still running, unless the
+    /// plain lines of the work `begun` belongs to said so first, which then never say it.
+    pub(crate) fn beginning(&self, begun: &Begun, verb: &str, what: &str) {
+        if self.tells(Level::Normal) && begun.first() {
+            self.step_in(verb, what, Tone::Work);
         }
     }
 
@@ -562,6 +582,15 @@ impl Output {
             .clone()
     }
 
+    /// the verb and what of each [`Output::lasting`] made so far, for tests.
+    #[cfg(test)]
+    pub(crate) fn lasted(&self) -> Vec<String> {
+        self.lasted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// for tests elsewhere: an output whose bars draw on `screen`, as a terminal's would, and
     /// which tells lasting work at once.
     #[cfg(test)]
@@ -684,6 +713,11 @@ impl Output {
 
     /// whether [`Output::item`] prints: not with `-q` or `--json`.
     pub(crate) fn shows_items(&self) -> bool {
+        self.tells(Level::Normal)
+    }
+
+    /// whether [`Output::step`] prints: not with `-q` or `--json`.
+    pub(crate) fn shows_steps(&self) -> bool {
         self.tells(Level::Normal)
     }
 
@@ -968,9 +1002,14 @@ impl Output {
     /// work that is usually quick but grows with its size, such as placing many files: a live line
     /// once it lasts a second, or where no bar shows, a long batch's plain lines.
     pub(crate) fn lasting(&self, verb: &'static str, what: String) -> Lasting {
+        #[cfg(test)]
+        self.lasted
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(format!("{verb} {what}"));
         Lasting {
             _setup: self.untold(verb, what.clone()),
-            _ticker: self.ticker(verb, what, [None]),
+            ticker: self.ticker(verb, what, [None]),
         }
     }
 
@@ -987,7 +1026,7 @@ impl Output {
         let left = (self.started + self.untold).saturating_duration_since(now);
         Lasting {
             _setup: self.untold_for(left, verb, what.clone()),
-            _ticker: self.ticker(verb, what, [None]),
+            ticker: self.ticker(verb, what, [None]),
         }
     }
 

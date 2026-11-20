@@ -390,7 +390,7 @@ fn path_answers_from_a_files_own_rows() -> Result {
             "error: flowers has no file or folder called {asked}\n  help: did you mean `fetchloom path flowers/petals/red.csv`?\n"
         )
     };
-    let put_back = "     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n";
+    let put_back = "    Placing 1 file\n     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n";
     let targets = [
         (
             "flowers/sepals.csv",

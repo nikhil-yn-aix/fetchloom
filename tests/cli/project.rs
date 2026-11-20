@@ -5330,7 +5330,7 @@ fn a_settled_sync_finds_every_change_before_reading_data_lock() -> Result {
             |work| delete(&work.join("data/flowers/petals/red.csv")),
             "",
             Some(0),
-            "     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n     Synced 1 dataset into data\n",
+            "    Placing 1 file\n     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n     Synced 1 dataset into data\n",
         ),
         (
             "data.lock",

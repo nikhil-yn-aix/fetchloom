@@ -123,6 +123,7 @@ error: corpus/corpus.csv is not the file data.lock records
   help: to keep the pinned bytes, someone who has them runs `fetchloom push --to <folder>`, then you run `fetchloom sync --mirror <folder>`. if the new bytes are intended, run `fetchloom lock --upgrade corpus`
 $ fetchloom sync --mirror ../mirror
      Copied 1 file · 24 B from ../mirror
+    Placing 1 file
      Placed data/corpus · 1 file linked to the cache
      Synced 1 dataset into data
 ```

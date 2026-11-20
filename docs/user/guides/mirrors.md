@@ -42,6 +42,7 @@ stderr:
 
 ```text
      Copied 6 files · 91 B from /mnt/lab/fetchloom
+    Placing 6 files
      Placed data/dataset · 5 files linked to the cache
      Placed data/iris · 1 file linked to the cache
      Synced 2 datasets into data

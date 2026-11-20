@@ -51,6 +51,7 @@ path = "raw"
 `fetchloom sync` then moves them; stderr from a real run:
 
 ```text
+    Placing 2 files
      Placed data/raw · 2 files linked to the cache
     Removed 2 files from data/ that no dataset needs
      Synced 2 datasets into data

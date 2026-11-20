@@ -32,6 +32,7 @@ ref = "https://raw.githubusercontent.com/mwaskom/seaborn-data/master/penguins.cs
 
 ```text
 $ fetchloom sync
+    Placing 1 file
      Placed data/penguins · 1 file copied, 13.2 KiB
      Synced 2 datasets into data
 ```

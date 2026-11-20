@@ -1331,6 +1331,35 @@ fn lasting_work_is_told_once_it_lasts() {
     drop(placing);
 }
 
+/// a step told at once says so as work, then neither it nor the work's plain lines say it again;
+/// under `-q` or `--json` it says nothing and leaves saying it to those lines, which `--progress`
+/// keeps beside `--json`.
+#[test]
+fn a_step_told_at_once_is_said_once() {
+    let output = telling(false);
+    let lasting = output.lasting("Placing", "2 files".to_owned());
+    output.beginning(&lasting.begun(), "Placing", "2 files");
+    output.beginning(&lasting.begun(), "Placing", "2 files");
+    assert_eq!(output.said(), ["    Placing 2 files"]);
+    assert!(!lasting.begun().first());
+
+    for (level, json) in [(Level::Quiet, false), (Level::Normal, true)] {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        };
+        let output = Output::new(style, level, json, false).with_progress(true);
+        let lasting = output.lasting("Placing", "2 files".to_owned());
+        output.beginning(&lasting.begun(), "Placing", "2 files");
+        assert_eq!(output.said(), Vec::<String>::new());
+        assert!(lasting.begun().first(), "{level:?} {json}");
+    }
+}
+
 /// work a command reaches once it has lasted its moment is told at once, however long before
 /// it the command spent elsewhere, and work reached sooner waits out the rest of that moment.
 #[test]

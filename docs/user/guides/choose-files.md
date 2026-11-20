@@ -7,6 +7,7 @@ deleting a file from the data folder does not last: data.lock still pins it, so 
 ```text
 $ rm data/uci/iris.names
 $ fetchloom sync
+    Placing 1 file
      Placed data/uci · 1 file linked to the cache
 warning: put back data/uci/iris.names, which was deleted or moved, since data.lock pins it
   help: to leave a file out for good, run `fetchloom exclude data/uci/iris.names`; keep files of your own in a folder outside data/

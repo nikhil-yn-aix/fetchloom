@@ -832,13 +832,23 @@ impl<'a> Loop<'a> {
         &self,
         manifest: &Manifest,
         lock: &Lock,
-        placing: Placing<'_>,
+        mut placing: Placing<'_>,
         synced: Option<Synced>,
     ) -> Result<Placement, Error> {
         let packed = self.packed_in(manifest, lock, &placing);
         let nested = placing.nested();
-        let files = units::count(placing.files() as u64, "file", "files");
-        let _placing = self.context.output.lasting("Placing", files);
+        let output = &self.context.output;
+        // an add tells what it placed in lines of its own, so only other runs say it first
+        let to_place = (output.shows_steps() && self.told.is_empty())
+            .then(|| placing.placing_now())
+            .filter(|files| *files > 0);
+        // the live line names the files the line told at once does
+        let shown = to_place.unwrap_or_else(|| placing.files());
+        let files = units::count(shown as u64, "file", "files");
+        let lasting = output.lasting("Placing", files);
+        if let Some(to_place) = to_place {
+            placing.told_at_once(to_place, lasting.begun());
+        }
         // a pin only its source's digests make waits for a sync, so no run leaves the project
         // settled while data.lock holds one
         let synced = synced.filter(|_| lock.stated.is_empty());

@@ -954,6 +954,20 @@ impl Shared {
     }
 }
 
+/// whether a batch's plain lines said what it does, shared with a step that may say it first.
+#[derive(Clone)]
+pub(crate) struct Begun(Option<Arc<Shared>>);
+
+impl Begun {
+    /// whether this is the first to say what the batch does, which its plain lines then never
+    /// say: always, where the batch has none.
+    pub(crate) fn first(&self) -> bool {
+        self.0
+            .as_ref()
+            .is_none_or(|shared| !shared.begun.swap(true, Ordering::Relaxed))
+    }
+}
+
 /// how long a batch runs before its first plain line, or none for no lines. debug builds take
 /// `FETCHLOOM_TEST_TICKER` from tests: `off` drops the lines and a slow disk's time in a
 /// download's closing line, any other value waits 0.1 s.
@@ -1038,6 +1052,11 @@ impl Ticker {
         if let Some(shared) = &self.shared {
             shared.done.fetch_add(bytes, Ordering::Relaxed);
         }
+    }
+
+    /// what says whether the batch said what it does, for a step that may say it first.
+    pub(crate) fn begun(&self) -> Begun {
+        Begun(self.shared.clone())
     }
 
     /// adds the size a download just told; the one that makes its batch's size known says what the
@@ -1597,6 +1616,44 @@ mod tests {
             *heard.lock().unwrap(),
             ["Downloading 2 files · 96 B · under 10 s"]
         );
+    }
+
+    /// what a batch does is said once, by whichever says it first: a step told at once keeps the
+    /// batch's plain lines from saying it again, and a step after those lines says nothing.
+    #[test]
+    fn what_a_batch_does_is_said_once_by_whoever_says_it_first() {
+        let hour = Duration::from_secs(3600);
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced(
+            "Placing",
+            "10 files".to_owned(),
+            (0, 1),
+            (hour, hour),
+            false,
+            say,
+        );
+        let begun = ticker.begun();
+        assert!(begun.first());
+        assert!(!ticker.shared.as_ref().unwrap().begin(None));
+        assert!(!begun.first());
+        drop(ticker);
+        assert!(heard.lock().unwrap().is_empty());
+
+        let (heard, _reported, say) = ear();
+        let ticker = Ticker::paced(
+            "Placing",
+            "10 files".to_owned(),
+            (0, 1),
+            (hour, hour),
+            false,
+            say,
+        );
+        assert!(ticker.shared.as_ref().unwrap().begin(None));
+        assert!(!ticker.begun().first());
+        drop(ticker);
+        assert_eq!(*heard.lock().unwrap(), ["Placing 10 files"]);
+
+        assert!(Ticker::quiet().begun().first());
     }
 
     /// work on this machine says nothing until it lasts a moment.

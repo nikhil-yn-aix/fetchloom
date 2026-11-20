@@ -7,7 +7,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::support::{
     Part, Result, Sandbox, Server, delete, delete_folder, edit, file, json, reply, skipped, text,
-    without_copy_warning, zip_of,
+    ways_left_out, without_copy_warning, zip_of,
 };
 
 const V1: &[u8] = b"sepal_length,species\n5.1,setosa\n";
@@ -536,7 +536,9 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
     assert_eq!(forced.status.code(), Some(0), "{told}");
     // it throws away the person's own bytes, so it asks for attention, never a finished step's green
     assert!(
-        told.starts_with("\u{1b}[1m\u{1b}[33m   Replaced\u{1b}[0m \u{1b}[1mdata/iris/iris.csv"),
+        told.starts_with(
+            "\u{1b}[1m\u{1b}[36m    Placing\u{1b}[0m 1 file\n\u{1b}[1m\u{1b}[33m   Replaced\u{1b}[0m \u{1b}[1mdata/iris/iris.csv"
+        ),
         "{told:?}"
     );
     assert!(told.contains(" · discarding your edit"), "{told:?}");
@@ -4149,5 +4151,67 @@ fn a_blocked_placement_names_its_blocker_in_json() -> Result {
         }]),
         "{document}"
     );
+    Ok(())
+}
+
+/// a sync that places files says `Placing <n> files` on stderr as it starts placing them, once,
+/// just before what it placed, n the files those lines count: the one line it adds to what it said
+/// before. stdout says nothing, `-q` says nothing, and `--json` writes no line on stderr.
+#[test]
+fn a_placing_sync_says_what_it_places_as_it_starts() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    for name in ["a.csv", "b.csv", "c.csv"] {
+        fs::write(flowers.join(name), name)?;
+    }
+    let added = sandbox.run(&["add", &flowers.display().to_string()])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(!stderr.contains("Placing"), "{stderr}");
+    let data = sandbox.work().join("data");
+    let placed = |args: &[&str]| -> Result<std::process::Output> {
+        fs::remove_dir_all(&data)?;
+        let synced = sandbox.run(args)?;
+        assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+        assert_eq!(fs::read(data.join("flowers/b.csv"))?, b"b.csv");
+        Ok(synced)
+    };
+    let synced = placed(&["sync"])?;
+    assert_eq!(
+        ways_left_out(&text(&synced.stderr)?),
+        "    Placing 3 files\n     Placed data/flowers · 3 files\n  hint: to keep the data folder somewhere else than data/, set data_dir in data.toml\n     Synced 1 dataset into data\n"
+    );
+    assert_eq!(text(&synced.stdout)?, "");
+    let quiet = placed(&["-q", "sync"])?;
+    assert_eq!(text(&quiet.stderr)?, "");
+    let documented = placed(&["--json", "sync"])?;
+    assert_eq!(text(&documented.stderr)?, "");
+    assert_eq!(json(&documented)?["result"]["placement"]["placed"], 3);
+    Ok(())
+}
+
+/// a dry run, a sync with nothing to place and a remove say no such line.
+#[test]
+fn only_a_placing_sync_says_what_it_places_as_it_starts() -> Result {
+    let sandbox = Sandbox::new()?;
+    let flowers = sandbox.folder("flowers")?;
+    fs::write(flowers.join("a.csv"), "a")?;
+    let run = |args: &[&str]| -> Result<String> {
+        let ran = sandbox.run(args)?;
+        let stderr = text(&ran.stderr)?;
+        assert_eq!(ran.status.code(), Some(0), "{args:?}: {stderr}");
+        Ok(stderr)
+    };
+    run(&["add", &flowers.display().to_string()])?;
+    let data = sandbox.work().join("data");
+    fs::remove_dir_all(&data)?;
+    let dry = run(&["sync", "--dry-run"])?;
+    assert!(dry.contains("Would"), "{dry}");
+    assert!(!dry.contains("Placing"), "{dry}");
+    assert!(run(&["sync"])?.contains("Placing 1 file"));
+    let settled = run(&["sync"])?;
+    assert!(!settled.contains("Placing"), "{settled}");
+    let removed = run(&["remove", "flowers", "--yes"])?;
+    assert!(!removed.contains("Placing"), "{removed}");
     Ok(())
 }

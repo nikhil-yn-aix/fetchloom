@@ -139,6 +139,7 @@ one error names every import the run cannot supply, each import's first file bef
 
 ```text
      Copied 2 files · 15 B from ../mirror
+    Placing 2 files
      Placed data/flowers · 2 files linked to the cache
 error: a-very-long-dataset-name-for-testing and tiny were imported from files, and neither this machine's cache nor a mirror holds them
   a-very-long-dataset-name-for-testing/l.csv: not there on ../mirror
