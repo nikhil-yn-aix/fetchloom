@@ -181,7 +181,8 @@ def build(case, seed):
 
 def prepare_native(case, fetchloom, names):
     """each named tool's project for the case, made outside the clock and kept until the fixture,
-    the harness or the fetchloom build changes; returns the case with the folder they are in."""
+    the harness or the fetchloom build changes; returns the case with the folder they are in. a name
+    such as fetchloom-arm1 is a project of its own that this fetchloom build locks."""
     root = lab.ROOT / "prepared" / case["key"]
     root.mkdir(parents=True, exist_ok=True)
     env = lab.environment()
@@ -191,7 +192,8 @@ def prepare_native(case, fetchloom, names):
                                                      ("key", "files", "members", "fixture_signature")}),
                          harness={name: sha256(Path(__file__).with_name(name)) for name in
                                   ("fixtures.py", "lab.py", "tools.py", "uv.lock")})
-        if tool == "fetchloom":
+        built = tool == "fetchloom" or tool.startswith("fetchloom-")
+        if built:
             signature["executable"] = sha256(fetchloom)
         if read_json(target / ".ready") == signature:
             continue
@@ -203,7 +205,7 @@ def prepare_native(case, fetchloom, names):
             def run(argv, cwd=target, input=None):
                 lab.run_group(argv, cwd=cwd, env=env, input=input, text=True, stdout=output,
                               stderr=subprocess.STDOUT, timeout=lab.PREPARE_TIMEOUT)
-            if tool == "fetchloom":
+            if built:
                 text = "\n".join(f'[datasets.f{i:05}]\nref = "{item["url"]}"\n'
                                  for i, item in enumerate(case["files"]))
                 (target / "data.toml").write_text(text)

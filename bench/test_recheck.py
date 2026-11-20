@@ -10,6 +10,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+from collections import Counter
+import hashlib
+
 import recheck
 
 # stands in for a fetchloom build: add names a dataset after what it adds, and add, lock and sync
@@ -65,6 +68,8 @@ class FixtureTests(unittest.TestCase):
             self.assertEqual([path.read_bytes() for path in copies.values()], [b"baseline", b"candidate", b"baseline"])
             self.assertTrue(all(path.parent == root / "bin" for path in copies.values()))
             self.assertTrue(all(path.stat().st_mode & 0o100 for path in copies.values()))
+            # each arm's binary has a name of one length, as its folders have
+            self.assertEqual([path.name for path in copies.values()], ["arm0", "arm1", "arm2"])
 
 
 class MeasureTests(unittest.TestCase):
@@ -90,8 +95,65 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(*orders)
         self.assertGreater(len({tuple(order) for order in orders[0]}), 1)
         text = recheck.summary(rows)
-        self.assertIn("| status | candidate | 6 | 1000.0 → 1100.0 ms | 1.100 [1.100, 1.100] | 1.0 → 2.0 | 2.000", text)
-        self.assertIn("| status | aa | 6 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000] | 1.0 → 1.0 | 1.000", text)
+        self.assertIn("| status | candidate | 6 | 1000.0 → 1100.0 ms | 1.100 [1.100, 1.100] | 1.000 [1.000, 1.000] | 1.0 → 2.0 | 2.000", text)
+        self.assertIn("| status | aa | 6 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000] | 1.000 [1.000, 1.000] | 1.0 → 1.0 | 1.000", text)
+
+    def test_a_link_case_names_its_link_in_the_summary(self):
+        rows = [dict(kind="lab", tool=arm, scenario="s1", filesystem="ext4", profile=profile, round=n, warmup=False,
+                     status="passed", quick=False, count=1, file_size=8, wall_seconds=wall * (2 if profile == "poor" else 1),
+                     user_seconds=1, sys_seconds=0, maxrss_bytes=1 << 20)
+                for profile in ("home", "poor") for n in range(1, 6)
+                for arm, wall in (("fetchloom", 1.0), ("fetchloom+candidate", .9), ("fetchloom+aa", 1.0))]
+        text = recheck.summary(rows)
+        self.assertIn("| s1 home | candidate | 5 | 1000.0 → 900.0 ms | 0.900 [0.900, 0.900]", text)
+        self.assertIn("| s1 poor | candidate | 5 | 2000.0 → 1800.0 ms | 0.900 [0.900, 0.900]", text)
+
+    def test_what_a_run_downloads_or_places_is_checked_after_the_clock_and_before_it_is_cleared(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder)
+            placed = out / "placed"
+            good, bad = b"right bytes", b"wrong bytes"
+            done = []
+            for leaves, status in ((good, "passed"), (bad, "failed")):
+                def measured(argv, cwd, env, logfile, timeout, *, cpus=None, leaves=leaves):
+                    (placed / "data" / "d").mkdir(parents=True)
+                    (placed / "data" / "d" / "file.bin").write_bytes(leaves)
+                    # fetchloom's own hidden files are no output
+                    (placed / ".fetchloom").mkdir()
+                    (placed / ".fetchloom" / "state").write_bytes(b"x")
+                    done.append("run")
+                    return dict(wall_seconds=1, exit_code=0, timeout=False)
+
+                def cleared():
+                    done.append("post")
+                    recheck.remove(placed)
+
+                digests = Counter([hashlib.sha256(good).hexdigest()])
+                specs = {arm: dict(argv=[arm], cwd=out, env={}, post=cleared, outputs=(placed, digests)) for arm in recheck.ARMS[:1]}
+                (out / "runs.jsonl").unlink(missing_ok=True)
+                with mock.patch.object(recheck.run, "measure", side_effect=measured):
+                    recheck.measure("place", specs, 1, 1729, out, None, 5)
+                rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
+                self.assertEqual({row["status"] for row in rows}, {status}, rows)
+                self.assertEqual(rows[-1]["checks"], [] if status == "passed" else
+                                 [f"1 of 1 expected files are missing or wrong under {placed}"])
+            self.assertEqual(done, ["run", "post"] * 4)
+
+    def test_every_digest_must_be_there_as_often_as_expected_and_others_may_be_too(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for name, data in (("a", b"1"), ("b", b"1"), ("c", b"2"), ("extra", b"3")):
+                (root / "data").mkdir(exist_ok=True)
+                (root / "data" / name).write_bytes(data)
+            digest = {data: hashlib.sha256(data).hexdigest() for data in (b"1", b"2")}
+            self.assertEqual(recheck.placed(root, Counter({digest[b"1"]: 2, digest[b"2"]: 1})), [])
+            self.assertEqual(recheck.placed(root, Counter({digest[b"1"]: 3})), [f"1 of 3 expected files are missing or wrong under {root}"])
+            # a hidden copy, as fetchloom keeps its own state, never stands in for a placed file
+            (root / ".fetchloom").mkdir()
+            (root / ".fetchloom" / "copy").write_bytes(b"2")
+            self.assertEqual(recheck.placed(root, Counter({digest[b"2"]: 2})), [f"1 of 2 expected files are missing or wrong under {root}"])
+            self.assertEqual(recheck.placed(root / "gone", Counter({digest[b"2"]: 1})),
+                             [f"1 of 1 expected files are missing or wrong under {root / 'gone'}"])
 
 
 def build(path, program=BUILD):
@@ -110,7 +172,7 @@ class PreparationTests(unittest.TestCase):
     def test_each_arm_prepares_once_with_its_own_binary(self):
         binary = build(self.root / "fetchloom")
         folder = recheck.prepare(self.root, "fetchloom+candidate", binary, self.signature, "http://127.0.0.1:9")
-        self.assertEqual(folder, self.root / "fx/fetchloom-candidate")
+        self.assertEqual(folder, self.root / "fx/arm1")
         self.assertEqual(recheck.exclude_paths(folder / "exclude"), [f"data/p0000{index}/remove.bin" for index in range(3)])
         merged = (folder / "merge/data.toml").read_text()
         self.assertTrue(merged.startswith("<<<<<<< ours\n[datasets.o00000]") and "=======\n[datasets.t00000]" in merged, merged)
@@ -130,9 +192,15 @@ class PreparationTests(unittest.TestCase):
 
     def test_a_case_that_changes_its_project_works_on_a_fresh_copy_and_clears_it_after(self):
         folder = recheck.prepare(self.root, "fetchloom", build(self.root / "fetchloom"), self.signature, "http://127.0.0.1:9")
-        specs = recheck.cases(self.root, "fetchloom", "/bin/fetchloom", folder, "http://127.0.0.1:9")
+        digests = recheck.expected(self.root)
+        specs = recheck.cases(self.root, "fetchloom", "/bin/fetchloom", folder, "http://127.0.0.1:9", digests)
         self.assertEqual(sorted(specs), sorted(recheck.ROUNDS))
-        work = self.root / "work/fetchloom"
+        # the cases that download or place files say where and which
+        self.assertEqual({name: spec["outputs"][0].name for name, spec in specs.items() if "outputs" in spec},
+                         dict(place="place", add_links="links", zip="zip", get="get"))
+        # at this scale: 40,000 datasets make 4, 1,000 links and 10,000 members the least, 3 each
+        self.assertEqual([sum(digests[name].values()) for name in ("place", "add_links", "zip", "get")], [4, 3, 3, 1])
+        work = self.root / "work/arm0"
         (folder / "many/data/stray.bin").parent.mkdir(parents=True)
         (folder / "many/data/stray.bin").write_bytes(b"")
         specs["place"]["prep"]()
@@ -186,7 +254,62 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(all([step for step, _ in done[index:index + 3]] == ["prep", "run", "post"] for index in range(0, 18, 3)))
 
 
+class LinkTests(unittest.TestCase):
+    def test_each_link_case_runs_every_arm_on_a_project_its_own_build_locked(self):
+        prepared, ran, shaped = [], [], []
+
+        def built(spec, seed):
+            return dict(spec, key=f"{spec['profile']}-{spec['id']}", files=[], members=[])
+
+        def prepare(case, binary, names):
+            prepared.append((case["key"], Path(binary).name, names))
+            return case
+
+        def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run_id=None):
+            ran.append((case["profile"], case["id"], number, warmup, tool.name, tool.prepared_as, Path(tool.fetchloom).name, run_id))
+            workdir.mkdir(parents=True, exist_ok=True)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            binaries = {arm: root / "bin" / recheck.FOLDERS[arm] for arm in recheck.ARMS}
+            with mock.patch.object(recheck.lab, "ROOT", root), mock.patch.object(recheck.lab, "profile", side_effect=shaped.append), \
+                 mock.patch.object(recheck.fixtures, "build", side_effect=built), \
+                 mock.patch.object(recheck.fixtures, "prepare_native", side_effect=prepare), \
+                 mock.patch.object(recheck.run, "one_run", side_effect=one_run), contextlib.redirect_stderr(io.StringIO()):
+                recheck.links(binaries, root / "out", seed=1729, rounds=2, cpus=None, timeout=60)
+            self.assertFalse((root / "fs/ext4/work").exists())
+        cases = [(profile, scenario) for profile in ("home", "poor") for scenario in ("s1", "s2r", "s7")]
+        self.assertEqual(shaped, [step for profile, _ in cases for step in ("lan", profile)])
+        self.assertEqual(prepared, [(f"{profile}-{scenario}", recheck.FOLDERS[arm], [f"fetchloom-{recheck.FOLDERS[arm]}"])
+                                    for profile, scenario in cases for arm in recheck.ARMS])
+        self.assertEqual(len(ran), 6 * 3 * 3)
+        for profile, scenario in cases:
+            runs = [entry for entry in ran if entry[:2] == (profile, scenario)]
+            for number in range(3):
+                self.assertEqual(sorted(entry[4] for entry in runs if entry[2] == number), sorted(recheck.ARMS))
+            self.assertEqual([entry[3] for entry in runs], [entry[2] == 0 for entry in runs])
+        # each arm syncs with its own binary, under its own name of one length
+        self.assertEqual({entry[4:7] for entry in ran},
+                         {(arm, f"fetchloom-{recheck.FOLDERS[arm]}", recheck.FOLDERS[arm]) for arm in recheck.ARMS})
+        self.assertEqual([entry[7] for entry in ran], [f"{n:06}" for n in range(1, len(ran) + 1)])
+
+
 class SettingTests(unittest.TestCase):
+    def test_link_cases_need_root_and_the_lab_before_anything_is_made(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            argv = ["--baseline", "a", "--candidate", "b", "--root", str(root / "recheck"), "--links"]
+            with mock.patch.object(recheck.lab.os, "geteuid", return_value=1000), self.assertRaisesRegex(SystemExit, "the lab needs root"):
+                recheck.main(argv)
+            with mock.patch.object(recheck.lab.os, "geteuid", return_value=0), mock.patch.object(recheck.lab, "ROOT", root / "lab"), \
+                 contextlib.redirect_stderr(io.StringIO()) as said, self.assertRaises(SystemExit):
+                recheck.main(argv)
+            self.assertIn("--links needs the lab: run lab.py setup first", said.getvalue())
+            with contextlib.redirect_stderr(io.StringIO()) as said, self.assertRaises(SystemExit):
+                recheck.main(["--baseline", "a", "--candidate", "b", "--root", str(root / "recheck"), "--cases", ""])
+            self.assertIn("choose at least one case, or --links", said.getvalue())
+            self.assertFalse((root / "recheck").exists())
+
     def test_the_measured_environment_has_no_setting_of_the_shell(self):
         with mock.patch.dict(os.environ, {"FETCHLOOM_JOBS": "2", "NO_COLOR": "1", "LANG": "C.UTF-8"}):
             env = recheck.environment(Path("/r"), Path("/r/cache"), "http://127.0.0.1:9")

@@ -167,6 +167,20 @@ class Variant(Fetchloom):
         return {**super().env(workdir), **self.settings}
 
 
+class Build(Fetchloom):
+    """another fetchloom executable as an arm of its own, syncing a project its own build locked, as
+    the release recheck's baseline, candidate and a/a arms do; `folder` is its fixed-length id."""
+
+    def __init__(self, fetchloom, name, folder):
+        super().__init__(fetchloom)
+        self.name = name
+        self.folder = folder
+
+    @property
+    def prepared_as(self):
+        return f"fetchloom-{self.folder}"
+
+
 def variant(value):
     """parses `label:KEY=VALUE,KEY=VALUE`, where every key is a fetchloom setting."""
     label, _, pairs = value.partition(":")

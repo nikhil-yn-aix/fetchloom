@@ -3,9 +3,11 @@
 the recheck times the commands a release must not slow down: a status, a settled sync and a cache
 check of 100,000 files, `path` beside them, verifying 512 MiB, placing 40,000 datasets, adding
 1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and an exclude across 1,000 datasets, and
-the commands of a few milliseconds. each arm makes its own projects and caches from the same
-generated files with its own binary, so no arm reads another's formats. a byte-identical copy of
-the baseline runs as a third arm, an a/a control for the machine's noise. linux only.
+the commands of a few milliseconds. with --links, the lab's s1, s2r and s7 too, at home and on the
+poor link. each arm makes its own projects and caches from the same generated files with its own
+binary, so no arm reads another's formats, and every file a run downloads or places is checked by
+its SHA-256 after the clock stops. a byte-identical copy of the baseline runs as a third arm, an a/a
+control for the machine's noise. linux only.
 """
 import argparse
 from contextlib import contextmanager
@@ -22,6 +24,8 @@ import subprocess
 import sys
 import threading
 import tomllib
+from collections import Counter
+import hashlib
 import zipfile
 
 import ab
@@ -29,8 +33,15 @@ import fixtures
 import lab
 import native
 import run
+import tools
 
 ARMS = ("fetchloom", "fetchloom+candidate", "fetchloom+aa")
+# each arm's binary and folders go by an id of one length, so no arm's paths are longer than another's
+FOLDERS = {arm: f"arm{index}" for index, arm in enumerate(ARMS)}
+# the lab's link cases, measured with --links, each on these links
+LINKS = ("s1", "s2r", "s7")
+LINK_PROFILES = ("home", "poor")
+LINK_ROUNDS = 10
 # measured rounds per case after a warmup round; the shortest commands need many pairs
 ROUNDS = dict(status=20, sync=20, cache_verify=20, path=100, verify=20, place=10, add_links=25, zip=20,
               get=15, merge=15, exclude=15, version=100, help=100, tiny_sync=100)
@@ -129,7 +140,7 @@ def conflict(ours, theirs):
 
 def prepare(root, arm, binary, signature, origin):
     """the arm's own projects and caches, made by its own binary; rebuilt when the binary changes."""
-    folder = root / "fx" / arm.replace("+", "-")
+    folder = root / "fx" / FOLDERS[arm]
     marker = folder / "ready.json"
     ready = dict(binary=fixtures.sha256(binary), sources=signature)
     if fixtures.read_json(marker) == ready:
@@ -188,9 +199,37 @@ def fresh(target, template):
             (shutil.copytree if item.is_dir() else shutil.copyfile)(item, target / item.name)
 
 
-def cases(root, arm, binary, folder, origin):
-    """each case's command, folder and environment for one arm; prep and post run outside the clock."""
-    work = root / "work" / arm.replace("+", "-")
+def expected(root):
+    """the SHA-256 of every file each case that downloads or places files must leave: the files the
+    server serves for it and the zip's members."""
+    www = root / "www"
+
+    def digests(paths):
+        return Counter(fixtures.sha256(path) for path in paths)
+
+    with zipfile.ZipFile(www / "members.zip") as archive:
+        members = Counter(hashlib.sha256(archive.read(info)).hexdigest() for info in archive.infolist())
+    return dict(place=digests(sorted((www / "many").iterdir())), add_links=digests(sorted((www / "links").iterdir())),
+                zip=members, get=digests([www / "big.bin"]))
+
+
+def placed(folder, digests):
+    """what is wrong with the files a run left under folder, against the SHA-256 it must leave, each
+    as often as given: one line counting those missing or wrong, or none. hidden files are
+    fetchloom's own, so they are left out."""
+    folder = Path(folder)
+    found = Counter(fixtures.sha256(path) for path in (folder.rglob("*") if folder.is_dir() else [])
+                    if path.is_file() and not any(part.startswith(".") for part in path.relative_to(folder).parts))
+    missing = digests - found
+    if not missing:
+        return []
+    return [f"{sum(missing.values())} of {sum(digests.values())} expected files are missing or wrong under {folder}"]
+
+
+def cases(root, arm, binary, folder, origin, digests):
+    """each case's command, folder and environment for one arm, and for a case that downloads or
+    places files, the folder it leaves them in and their SHA-256; prep and post run outside the clock."""
+    work = root / "work" / FOLDERS[arm]
     env = functools.partial(environment, root, origin=origin)
     fl = str(binary)
 
@@ -204,15 +243,18 @@ def cases(root, arm, binary, folder, origin):
         path=dict(argv=[fl, "path", "tiny"], cwd=folder / "big", env=env(folder / "big-cache")),
         verify=dict(argv=[fl, "--json", "status", "--verify"], cwd=folder / "large", env=env(folder / "large-cache")),
         place=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "place", env=env(folder / "many-cache"),
-                   prep=lambda: fresh(work / "place", folder / "many"), post=emptied(work / "place")),
+                   prep=lambda: fresh(work / "place", folder / "many"), post=emptied(work / "place"),
+                   outputs=(work / "place", digests["place"])),
         add_links=dict(argv=[fl, "-q", "--yes", "add", *(root / "src" / "links.txt").read_text().split()], cwd=work / "links",
                        env=env(work / "links-cache"), post=emptied(work / "links", work / "links-cache"),
-                       prep=lambda: (work / "links").mkdir(parents=True, exist_ok=True)),
+                       prep=lambda: (work / "links").mkdir(parents=True, exist_ok=True),
+                       outputs=(work / "links", digests["add_links"])),
         zip=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "zip", env=env(work / "zip-cache"),
-                 prep=lambda: fresh(work / "zip", folder / "zip"), post=emptied(work / "zip", work / "zip-cache")),
+                 prep=lambda: fresh(work / "zip", folder / "zip"), post=emptied(work / "zip", work / "zip-cache"),
+                 outputs=(work / "zip", digests["zip"])),
         get=dict(argv=[fl, "-q", "--yes", "get", f"{origin}/big.bin", "-o", str(work / "get" / "big.bin")],
                  cwd=root, env=env(work / "get-cache"), post=emptied(work / "get", work / "get-cache"),
-                 prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True)),
+                 prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True), outputs=(work / "get", digests["get"])),
         merge=dict(argv=[fl, "--json", "--offline", "lock", "--dry-run"], cwd=folder / "merge",
                    env=env(folder / "merge-cache")),
         exclude=dict(argv=[fl, "--json", "--offline", "exclude", "--dry-run", *exclude_paths(folder / "exclude")],
@@ -252,7 +294,9 @@ def turn(path):
 
 
 def measure(name, specs, rounds, seed, out, cpus, timeout):
-    """every arm once a round in a seeded shuffled order, round 0 a warmup; one row per run."""
+    """every arm once a round in a seeded shuffled order, round 0 a warmup; one row per run. what a
+    run downloads or places is checked after the clock and before it is cleared, and a wrong or
+    missing file fails the run."""
     rng = random.Random(f"{seed}/{name}")
     for number in range(rounds + 1):
         order = list(specs)
@@ -261,27 +305,60 @@ def measure(name, specs, rounds, seed, out, cpus, timeout):
             spec = specs[arm]
             if spec.get("prep"):
                 spec["prep"]()
-            result = run.measure(spec["argv"], spec["cwd"], spec["env"], out / "logs" / f"{name}-{arm}.log",
+            result = run.measure(spec["argv"], spec["cwd"], spec["env"], out / "logs" / f"{name}-{FOLDERS[arm]}.log",
                                  timeout, cpus=cpus)
+            checks = placed(*spec["outputs"]) if spec.get("outputs") else []
             if spec.get("post"):
                 spec["post"]()
-            status = "passed" if result["exit_code"] == 0 and not result["timeout"] else "failed"
+            status = "passed" if result["exit_code"] == 0 and not result["timeout"] and not checks else "failed"
             row = dict(result, kind="recheck", tool=arm, scenario=name, filesystem="local", profile="recheck",
-                       round=number, warmup=number == 0, status=status, quick=False, count=None, file_size=None,
-                       load=os.getloadavg()[0])
+                       round=number, warmup=number == 0, status=status, checks=checks, quick=False, count=None,
+                       file_size=None, load=os.getloadavg()[0])
             run.append(out / "runs.jsonl", row)
 
 
+def links(binaries, out, *, seed, rounds, cpus, timeout, lock=None):
+    """the lab's link cases with every arm: s1, s2r and s7 at home and on the poor link, each arm
+    syncing a project its own build locked, once a round in a seeded shuffled order after a warmup.
+    run.one_run checks every placed file's SHA-256 after the clock and before the work folder goes."""
+    arms = {arm: tools.Build(binary, arm, FOLDERS[arm]) for arm, binary in binaries.items()}
+    workdir = lab.ROOT / "fs" / "ext4" / "work"
+    count = 0
+    for profile in LINK_PROFILES:
+        for scenario in LINKS:
+            [spec] = fixtures.case_specs([profile], [scenario], False)
+            print(f"{scenario} {profile}: {rounds} rounds", file=sys.stderr, flush=True)
+            with turn(lock):
+                lab.profile("lan")
+                case = fixtures.build(spec, seed)
+                for arm in arms.values():
+                    case = fixtures.prepare_native(case, arm.fetchloom, [arm.prepared_as])
+                lab.profile(profile)
+                rng = random.Random(f"{seed}/{scenario}/{profile}")
+                for number in range(rounds + 1):
+                    order = list(arms)
+                    rng.shuffle(order)
+                    for name in order:
+                        count += 1
+                        run.one_run(arms[name], case, workdir, out, number, number == 0, timeout, cpus=cpus,
+                                    run_id=f"{count:06}")
+                        if workdir.exists():
+                            shutil.rmtree(workdir)
+
+
 def summary(rows):
-    """per case and arm: pairs, medians, and the time and memory ratios with their intervals."""
-    lines = ["| case | arm | pairs | wall, baseline → arm | time ratio [95%] | peak MiB, baseline → arm | memory ratio [95%] |",
-             "|---|---|---:|---|---|---|---|"]
+    """per case and arm: pairs, medians, and the time, cpu and memory ratios with their intervals."""
+    lines = ["| case | arm | pairs | wall, baseline → arm | time ratio [95%] | cpu ratio [95%] | peak MiB, baseline → arm | memory ratio [95%] |",
+             "|---|---|---:|---|---|---|---|---|"]
     measured = [row for row in rows if not row["warmup"] and row["status"] == "passed"]
     for result in ab.compare(rows, threshold=.02, min_pairs=5):
-        case = result["case"].split("/")[-1]
+        key = tuple(result["case"].split("/"))
+        # a link case names its link, since it runs on two
+        case = key[2] if key[1] == "recheck" else f"{key[2]} {key[1]}"
 
-        def median(tool, key):
-            values = [row[key] for row in measured if row["scenario"] == case and row["tool"] == tool and row.get(key)]
+        def median(tool, field):
+            values = [row[field] for row in measured if (row["filesystem"], row["profile"], row["scenario"]) == key
+                      and row["tool"] == tool and row.get(field)]
             return statistics.median(values) if values else float("nan")
 
         def ratio(metric):
@@ -292,7 +369,7 @@ def summary(rows):
         arm = result["variant"]
         lines.append(f"| {case} | {arm.removeprefix('fetchloom+')} | {result['rounds']} | "
                      f"{median('fetchloom', 'wall_seconds') * 1000:.1f} → {median(arm, 'wall_seconds') * 1000:.1f} ms | "
-                     f"{ratio('wall')} | {median('fetchloom', 'maxrss_bytes') / 2**20:.1f} → "
+                     f"{ratio('wall')} | {ratio('cpu')} | {median('fetchloom', 'maxrss_bytes') / 2**20:.1f} → "
                      f"{median(arm, 'maxrss_bytes') / 2**20:.1f} | {ratio('memory')} |")
     return "\n".join(lines)
 
@@ -305,7 +382,7 @@ def arms(baseline, candidate, root):
     folder.mkdir(parents=True, exist_ok=True)
     copies = {}
     for arm, source in zip(ARMS, (baseline, candidate, baseline)):
-        copy = folder / arm.replace("+", "-")
+        copy = folder / FOLDERS[arm]
         copy.unlink(missing_ok=True)
         shutil.copyfile(source, copy)
         copy.chmod(0o755)
@@ -329,8 +406,10 @@ def main(argv=None):
     parser.add_argument("--root", required=True, type=Path,
                         help="a new or empty folder, or one recheck.py made, for fixtures, projects and results, "
                              "on the filesystem to measure")
-    parser.add_argument("--cases", type=lambda text: text.split(","), default=list(ROUNDS),
-                        help=f"comma-separated, from {','.join(ROUNDS)}")
+    parser.add_argument("--cases", type=lambda text: [name for name in text.split(",") if name], default=list(ROUNDS),
+                        help=f"comma-separated, from {','.join(ROUNDS)}; empty for the link cases alone")
+    parser.add_argument("--links", action="store_true",
+                        help="also time the lab's s1, s2r and s7 at home and on the poor link; needs root and lab.py setup")
     parser.add_argument("--rounds", type=int, help="measured rounds for every case, instead of each case's own")
     parser.add_argument("--scale", type=float, default=1.0, help="fixture size; below 1 for a smoke run")
     parser.add_argument("--cpus", type=cpus, default=None,
@@ -343,6 +422,12 @@ def main(argv=None):
     unknown = [name for name in args.cases if name not in ROUNDS]
     if unknown or (args.rounds is not None and args.rounds < 1) or not 0 < args.scale <= 1:
         parser.error(f"cases are {', '.join(ROUNDS)}; rounds must be positive and scale in (0, 1]")
+    if not args.cases and not args.links:
+        parser.error("choose at least one case, or --links")
+    if args.links:
+        lab.require_root()
+        if not (lab.ROOT / "owned.json").exists() or not os.path.ismount(lab.ROOT / "fs" / "ext4"):
+            parser.error("--links needs the lab: run lab.py setup first")
     root = args.root.resolve()
     native.claim(root, "recheck.py")
     for folder in ("home", "tmp"):
@@ -354,23 +439,31 @@ def main(argv=None):
     server = serve(root / "www", args.port)
     try:
         signature = sources(root, args.scale, args.seed, origin)
+        digests = expected(root)
         specs = {}
         for arm, binary in binaries.items():
             print(f"preparing {arm}", file=sys.stderr, flush=True)
             folder = prepare(root, arm, binary, signature, origin)
-            for name, spec in cases(root, arm, binary, folder, origin).items():
+            for name, spec in cases(root, arm, binary, folder, origin, digests).items():
                 specs.setdefault(name, {})[arm] = spec
         given = dict(zip(ARMS, (args.baseline, args.candidate, args.baseline)))
         meta = dict(date=datetime.now(timezone.utc).isoformat(), seed=args.seed, scale=args.scale,
-                    cpus=args.cpus, binaries={arm: dict(source=str(given[arm].resolve()), copy=str(path),
-                                                        sha256=fixtures.sha256(path))
-                                              for arm, path in binaries.items()})
+                    cpus=args.cpus, folders=FOLDERS,
+                    binaries={arm: dict(source=str(given[arm].resolve()), copy=str(path), sha256=fixtures.sha256(path))
+                              for arm, path in binaries.items()},
+                    links=[f"{scenario} {profile}" for profile in LINK_PROFILES for scenario in LINKS] if args.links else [],
+                    network_profiles=lab.network_profiles() if args.links else None)
         (out / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
         for name in args.cases:
             rounds = args.rounds or ROUNDS[name]
             print(f"{name}: {rounds} rounds", file=sys.stderr, flush=True)
             with turn(args.lock):
                 measure(name, specs[name], rounds, args.seed, out, args.cpus, args.timeout)
+        if args.links:
+            with lab.exclusive():
+                lab.pin_server(args.cpus or lab.cpu_list(""))
+                links(binaries, out, seed=args.seed, rounds=args.rounds or LINK_ROUNDS, cpus=args.cpus,
+                      timeout=args.timeout, lock=args.lock)
     except (OSError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"recheck: {error}", file=sys.stderr)
         return 1
