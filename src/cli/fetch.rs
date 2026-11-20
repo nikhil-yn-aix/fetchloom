@@ -1497,9 +1497,25 @@ pub(super) async fn all(
     cache: &Cache,
     jobs: Vec<Job>,
 ) -> Result<Vec<Fetched>, Error> {
+    // the batch waits on the heap, so the futures of the commands that download stay small
+    Box::pin(all_telling(context, net, cache, jobs, &|_| {})).await
+}
+
+/// [`all`], telling `came` each job's place among `jobs` as it ends well, its file then in the
+/// cache under its name, on the task that waits for them; a batch whose downloads take their
+/// names later tells none.
+pub(super) async fn all_telling(
+    context: &Context,
+    net: &Arc<Net>,
+    cache: &Cache,
+    jobs: Vec<Job>,
+    came: &(dyn Fn(usize) + Sync),
+) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
-    let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, false)).await;
+    let came: &(dyn Fn(usize) + Sync) = if batched { &|_| {} } else { came };
+    let work = each(context, net, cache, jobs, false, came);
+    let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
 }
@@ -1523,7 +1539,7 @@ pub(super) async fn prepared(
     let results = naming_meanwhile(
         cache,
         batched,
-        run_each(context, net, cache, count, overall, jobs, false),
+        run_each(context, net, cache, count, overall, jobs, false, &|_| {}),
     )
     .await;
     let published = publish(cache, batched);
@@ -1564,7 +1580,8 @@ pub(super) async fn apart(
     jobs: Vec<Job>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
-    let results = naming_meanwhile(cache, batched, each(context, net, cache, jobs, true)).await;
+    let work = each(context, net, cache, jobs, true, &|_| {});
+    let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     let results = results?;
     published?;
@@ -1666,18 +1683,19 @@ impl<T> Iterator for Queue<T> {
 }
 
 /// what each job fetched, or why it failed on its own, in the jobs' order. `apart` keeps every
-/// failure but an interruption with its job.
+/// failure but an interruption with its job; `came` is told each job that ended well.
 async fn each(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     jobs: Vec<Job>,
     apart: bool,
+    came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
     let overall = Arc::new(Overall::new(context, &jobs));
     let queue = Queue::new(jobs);
-    run_each(context, net, cache, count, overall, queue, apart).await
+    run_each(context, net, cache, count, overall, queue, apart, came).await
 }
 
 /// the job at `index`, its fetch carrying the name its progress line shows, which retry lines
@@ -1687,6 +1705,10 @@ fn labelled((index, mut job): (usize, Job)) -> (usize, Job) {
     (index, job)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is one part of the run that a batch of downloads shares"
+)]
 async fn run_each(
     context: &Context,
     net: &Arc<Net>,
@@ -1695,6 +1717,7 @@ async fn run_each(
     overall: Arc<Overall>,
     mut queue: impl Iterator<Item = (usize, Job)>,
     apart: bool,
+    came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let alone = count == 1;
     let mut results: Vec<Option<Result<Fetched, Error>>> =
@@ -1772,6 +1795,7 @@ async fn run_each(
             Ok((index, Ok(fetched))) => {
                 held[index].bytes.store(0, Ordering::Relaxed);
                 results[index] = Some(Ok(fetched));
+                came(index);
                 done += 1;
                 if let Some(bar) = &overall.bar {
                     bar.message("Downloading", batch(done, count));

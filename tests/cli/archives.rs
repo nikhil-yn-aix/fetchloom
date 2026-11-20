@@ -2041,43 +2041,463 @@ fn added(sandbox: &Sandbox, name: &str, zip: &[u8], answers: Vec<Vec<Part>>) -> 
 
 /// an archive that fails to unpack leaves its own dataset waiting and every other archive to
 /// unpack and place, and the one error names each that failed: of a, b and c, unpacked one at a
-/// time in that order, a and c are past `FETCHLOOM_ARCHIVE_FILES`, and b between them still lands.
+/// time in that order, a and c are past `FETCHLOOM_ARCHIVE_FILES`, and b between them still lands,
+/// whether the archives unpack as their downloads end or, as `FETCHLOOM_TEST_UNPACKED_EARLY=0`
+/// makes a small sync do, once they all end.
 #[test]
 fn an_archive_that_fails_to_unpack_leaves_the_others_to_place() -> Result {
     let sandbox = Sandbox::new()?;
     let zips = [csv_zip("a", 5)?, csv_zip("b", 3)?, csv_zip("c", 6)?];
     let mut servers = Vec::new();
     for (name, (zip, _)) in ["a", "b", "c"].into_iter().zip(&zips) {
-        servers.push(added(&sandbox, name, zip, vec![file(zip, "\"z\"")])?);
+        let answers = (0..2).map(|_| file(zip, "\"z\"")).collect();
+        servers.push(added(&sandbox, name, zip, answers)?);
     }
+    for most in ["0", "64"] {
+        let clone = cloned(&sandbox, &format!("clone-{most}"), ("", ""))?;
+        let synced = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", sandbox.folder(&format!("cold-{most}"))?)
+            .env("FETCHLOOM_ARCHIVE_FILES", "4")
+            .env("FETCHLOOM_THREADS", "1")
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most)
+            .output()?;
+        let stderr = text(&synced.stderr)?;
+        assert_eq!(synced.status.code(), Some(10), "{most}: {stderr}");
+        for told in [
+            "2 archives could not be unpacked",
+            "a/a.zip: the archive holds more than 4 entries",
+            "c/c.zip",
+            "placed b, whose files are all on this machine",
+            "a, c wait for files this run could not get",
+        ] {
+            assert!(stderr.contains(told), "{most}: {told}: {stderr}");
+        }
+        let data = clone.join("data");
+        for (path, bytes) in &zips[1].1 {
+            assert_eq!(&fs::read(data.join("b").join(path))?, bytes);
+        }
+        for (name, (_, files)) in [("a", &zips[0]), ("c", &zips[2])] {
+            assert!(
+                files
+                    .iter()
+                    .all(|(path, _)| !data.join(name).join(path).exists())
+            );
+        }
+    }
+    Ok(())
+}
+
+/// where the cache at `cache` keeps `bytes`.
+fn object_of(cache: &Path, bytes: &[u8]) -> PathBuf {
+    let hex = crate::support::sha256_hex(bytes);
+    cache.join("objects").join(&hex[..2]).join(&hex[2..])
+}
+
+/// `zip`'s answer held back until `path` exists, ten seconds at most, and the channel that then
+/// tells whether `path` came in time.
+fn held_until(path: PathBuf, zip: &[u8]) -> (Vec<Part>, std::sync::mpsc::Receiver<bool>) {
+    let (told, heard) = std::sync::mpsc::channel();
+    let mut held = vec![Part::Action(Box::new(move || {
+        let in_time = (0..1000).any(|_| {
+            let there = path.exists();
+            if !there {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            there
+        });
+        let _ = told.send(in_time);
+    }))];
+    held.extend(file(zip, "\"z\""));
+    (held, heard)
+}
+
+/// `command` run with its stderr read as it comes, telling `heard` once a line holds `marker`, as an
+/// answer held until then needs; its output once it ended.
+fn watched(
+    command: &mut crate::support::Fetchloom,
+    marker: &'static str,
+    heard: std::sync::mpsc::Sender<()>,
+) -> Result<Output> {
+    use std::io::BufRead as _;
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    let stderr = child.stderr.take().ok_or("no stderr")?;
+    let reader = std::thread::spawn(move || {
+        let mut told = String::new();
+        for line in std::io::BufReader::new(stderr)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            if line.contains(marker) {
+                let _ = heard.send(());
+            }
+            told.push_str(&line);
+            told.push('\n');
+        }
+        told
+    });
+    let mut output = child.wait_with_output()?;
+    output.stderr = reader
+        .join()
+        .map_err(|_| "the stderr reader panicked")?
+        .into_bytes();
+    Ok(output)
+}
+
+/// an answer of `zip` held back until `heard` hears, ten seconds at most, and the channel that then
+/// tells whether it heard in time.
+fn held_for(
+    heard: std::sync::mpsc::Receiver<()>,
+    zip: &[u8],
+) -> (Vec<Part>, std::sync::mpsc::Receiver<bool>) {
+    let (told, in_time) = std::sync::mpsc::channel();
+    let mut held = vec![Part::Action(Box::new(move || {
+        let heard = heard
+            .recv_timeout(std::time::Duration::from_secs(10))
+            .is_ok();
+        let _ = told.send(heard);
+    }))];
+    held.extend(file(zip, "\"z\""));
+    (held, in_time)
+}
+
+/// the files under a clone's data folder, none before anything was placed.
+fn placed(clone: &Path) -> Result<Vec<String>> {
+    let data = clone.join("data");
+    if data.exists() {
+        files_in(&data)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+/// a clone's sync unpacks an archive as soon as its download ends, while another still downloads,
+/// whichever of the two data.toml names first: the other's server answers only once the first
+/// one's files are in the cache, and every file lands.
+#[test]
+fn an_archive_unpacks_while_another_downloads() -> Result {
+    for first in [0, 1] {
+        let sandbox = Sandbox::new()?;
+        let zips = [csv_zip("a", 3)?, csv_zip("b", 3)?];
+        let cold = sandbox.folder("cold")?;
+        let (held, heard) = held_until(object_of(&cold, &zips[first].1[0].1), &zips[1 - first].0);
+        let mut answers = [
+            vec![file(&zips[0].0, "\"z\"")],
+            vec![file(&zips[1].0, "\"z\"")],
+        ];
+        answers[1 - first] = vec![held];
+        let [a_answers, b_answers] = answers;
+        let _a = added(&sandbox, "a", &zips[0].0, a_answers)?;
+        let _b = added(&sandbox, "b", &zips[1].0, b_answers)?;
+        let clone = cloned(&sandbox, "clone", ("", ""))?;
+        let synced = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cold)
+            .output()?;
+        ok(&synced)?;
+        assert!(
+            heard.try_recv()?,
+            "{first}'s files came before the other's answer"
+        );
+        for (name, (_, files)) in ["a", "b"].into_iter().zip(&zips) {
+            for (path, bytes) in files {
+                assert_eq!(&fs::read(clone.join("data").join(name).join(path))?, bytes);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// an archive the cache held, never unpacked, unpacks as a clone's sync begins downloading
+/// another: that one's server answers only once the held one's files are in the cache, the sync
+/// asks nothing of the held one's server, and every file lands.
+#[test]
+fn a_cached_archive_unpacks_while_another_downloads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, a_files) = csv_zip("a", 3)?;
+    let (b, b_files) = csv_zip("b", 3)?;
+    let cold = sandbox.folder("cold")?;
+    let (held, heard) = held_until(object_of(&cold, &a_files[0].1), &b);
+    let a_server = added(&sandbox, "a", &a, vec![file(&a, "\"z\"")])?;
+    let _b = added(&sandbox, "b", &b, vec![held])?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let got = sandbox
+        .command_in(&elsewhere, &["get", "--no-extract", &a_server.url])
+        .env("FETCHLOOM_CACHE", &cold)
+        .output()?;
+    ok(&got)?;
+    assert!(object_of(&cold, &a).exists(), "the cache holds a");
+    assert!(
+        !object_of(&cold, &a_files[0].1).exists(),
+        "a is not unpacked"
+    );
+    let asked = a_server.requests().len();
     let clone = cloned(&sandbox, "clone", ("", ""))?;
     let synced = sandbox
         .command_in(&clone, &["sync"])
-        .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
-        .env("FETCHLOOM_ARCHIVE_FILES", "4")
-        .env("FETCHLOOM_THREADS", "1")
+        .env("FETCHLOOM_CACHE", &cold)
         .output()?;
-    let stderr = text(&synced.stderr)?;
-    assert_eq!(synced.status.code(), Some(10), "{stderr}");
-    for told in [
-        "2 archives could not be unpacked",
-        "a/a.zip: the archive holds more than 4 entries",
-        "c/c.zip",
-        "placed b, whose files are all on this machine",
-        "a, c wait for files this run could not get",
-    ] {
-        assert!(stderr.contains(told), "{told}: {stderr}");
+    ok(&synced)?;
+    assert!(heard.try_recv()?, "a's files came before b's answer");
+    assert_eq!(a_server.requests().len(), asked);
+    for (name, files) in [("a", &a_files), ("b", &b_files)] {
+        for (path, bytes) in files {
+            assert_eq!(&fs::read(clone.join("data").join(name).join(path))?, bytes);
+        }
     }
-    let data = clone.join("data");
-    for (path, bytes) in &zips[1].1 {
-        assert_eq!(&fs::read(data.join("b").join(path))?, bytes);
+    Ok(())
+}
+
+/// a download that fails ends a clone's sync whose archives unpack as their downloads end as it
+/// ends one whose archives unpack once they all end, as `FETCHLOOM_TEST_UNPACKED_EARLY=0` makes a
+/// small sync do: the same exit code, the same error, naming the archive that failed, the same
+/// files placed, and the archive that came unpacked into the cache. a second sync, once that
+/// archive's server answers, asks for the one that came no more and places both.
+#[test]
+fn a_failed_download_ends_alike_when_archives_unpack_early() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, a_files) = csv_zip("a", 3)?;
+    let (b, b_files) = csv_zip("b", 3)?;
+    let a_server = added(
+        &sandbox,
+        "a",
+        &a,
+        (0..3).map(|_| file(&a, "\"z\"")).collect(),
+    )?;
+    let b_server = added(
+        &sandbox,
+        "b",
+        &b,
+        (0..3).map(|_| file(&b, "\"z\"")).collect(),
+    )?;
+    let missing = Server::start(
+        "/files/b.zip",
+        (0..40)
+            .map(|_| reply("404 Not Found", &[("Content-Length", "0")], b""))
+            .collect(),
+    )?;
+    sandbox.allow(&missing.url);
+    // whole links, so no other link that starts the same is touched
+    let (found, lost) = (b_server.url.clone(), missing.url.clone());
+    let mut ended = Vec::new();
+    let mut clones = Vec::new();
+    for most in ["0", "64"] {
+        let clone = cloned(&sandbox, &format!("clone-{most}"), (&found, &lost))?;
+        let cache = sandbox.folder(&format!("cache-{most}"))?;
+        let synced = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most)
+            .output()?;
+        let stderr = text(&synced.stderr)?;
+        let error: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.starts_with("error"))
+            .collect();
+        let unpacked = a_files
+            .iter()
+            .all(|(_, bytes)| object_of(&cache, bytes).exists());
+        ended.push((
+            synced.status.code(),
+            error.join("\n"),
+            placed(&clone)?,
+            unpacked,
+        ));
+        clones.push((clone, cache));
     }
-    for (name, (_, files)) in [("a", &zips[0]), ("c", &zips[2])] {
-        assert!(
-            files
-                .iter()
-                .all(|(path, _)| !data.join(name).join(path).exists())
+    assert_ne!(ended[0].0, Some(0), "{:?}", ended[0]);
+    assert!(ended[0].1.contains("b.zip"), "{:?}", ended[0]);
+    assert!(
+        ended[0].3,
+        "the archive that came is unpacked: {:?}",
+        ended[0]
+    );
+    assert_eq!(ended[1], ended[0]);
+    let (clone, cache) = &clones[1];
+    for file in ["data.toml", "data.lock"] {
+        let text = fs::read_to_string(clone.join(file))?;
+        fs::write(clone.join(file), text.replace(&lost, &found))?;
+    }
+    let asked = a_server.requests().len();
+    let again = sandbox
+        .command_in(clone, &["sync"])
+        .env("FETCHLOOM_CACHE", cache)
+        .output()?;
+    ok(&again)?;
+    assert_eq!(a_server.requests().len(), asked, "a came once");
+    for (name, files) in [("a", &a_files), ("b", &b_files)] {
+        for (path, bytes) in files {
+            assert_eq!(&fs::read(clone.join("data").join(name).join(path))?, bytes);
+        }
+    }
+    Ok(())
+}
+
+/// an archive that fails to unpack, b past `FETCHLOOM_ARCHIVE_FILES`, beside one whose download
+/// fails, a, ends a clone's sync whose archives unpack as their downloads end as it ends one whose
+/// archives unpack once they all end, as `-vv` tells only of the first: the unpack's error goes
+/// first, with the same exit code and lines, and nothing is placed.
+#[test]
+fn an_unpack_error_goes_before_a_download_error_when_archives_unpack_early() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, _) = csv_zip("a", 3)?;
+    let (b, _) = csv_zip("b", 5)?;
+    let a_server = added(&sandbox, "a", &a, Vec::new())?;
+    let _b = added(
+        &sandbox,
+        "b",
+        &b,
+        (0..2).map(|_| file(&b, "\"z\"")).collect(),
+    )?;
+    let missing = Server::start(
+        "/files/a.zip",
+        (0..40)
+            .map(|_| reply("404 Not Found", &[("Content-Length", "0")], b""))
+            .collect(),
+    )?;
+    sandbox.allow(&missing.url);
+    let mut ended = Vec::new();
+    for most in ["0", "64"] {
+        let clone = cloned(
+            &sandbox,
+            &format!("clone-{most}"),
+            (&a_server.url, &missing.url),
+        )?;
+        let synced = sandbox
+            .command_in(&clone, &["-vv", "sync"])
+            .env("FETCHLOOM_CACHE", sandbox.folder(&format!("cache-{most}"))?)
+            .env("FETCHLOOM_ARCHIVE_FILES", "4")
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most)
+            .output()?;
+        let stderr = text(&synced.stderr)?;
+        let early = stderr.contains("archives unpack as their downloads end");
+        assert_eq!(early, most != "0", "{stderr}");
+        let error: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.starts_with("error"))
+            .collect();
+        ended.push((synced.status.code(), error.join("\n"), placed(&clone)?));
+    }
+    assert_eq!(ended[0].0, Some(10), "{:?}", ended[0]);
+    assert!(ended[0].1.contains("more than 4 entries"), "{:?}", ended[0]);
+    assert_eq!(ended[0].2, Vec::<String>::new());
+    assert_eq!(ended[1], ended[0]);
+    Ok(())
+}
+
+/// an archive that comes after another failed to unpack early still unpacks and places: as archives
+/// unpack while others download, b's server answers only once the run said a's unpack failed, a
+/// being past `FETCHLOOM_ARCHIVE_FILES`, and b lands as it does when archives unpack once the
+/// downloads end, where b answers at once; both end with a's error, its exit code and the same
+/// files placed.
+#[test]
+fn an_archive_after_an_early_unpack_error_still_places() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, _) = csv_zip("a", 5)?;
+    let (b, b_files) = csv_zip("b", 3)?;
+    let (heard, hear) = std::sync::mpsc::channel();
+    let (held, in_time) = held_for(hear, &b);
+    let _a = added(
+        &sandbox,
+        "a",
+        &a,
+        (0..2).map(|_| file(&a, "\"z\"")).collect(),
+    )?;
+    let _b = added(&sandbox, "b", &b, vec![file(&b, "\"z\""), held])?;
+    let mut ended = Vec::new();
+    for most in ["0", "64"] {
+        let clone = cloned(&sandbox, &format!("clone-{most}"), ("", ""))?;
+        let cache = sandbox.folder(&format!("cache-{most}"))?;
+        let mut command = sandbox.command_in(&clone, &["-vv", "sync"]);
+        command
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_ARCHIVE_FILES", "4")
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most);
+        let synced = if most == "64" {
+            watched(&mut command, "an unpack failed", heard.clone())?
+        } else {
+            command.output()?
+        };
+        let stderr = text(&synced.stderr)?;
+        let error: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.starts_with("error"))
+            .collect();
+        ended.push((synced.status.code(), error.join("\n"), placed(&clone)?));
+        for (path, bytes) in &b_files {
+            assert_eq!(&fs::read(clone.join("data").join("b").join(path))?, bytes);
+        }
+    }
+    assert!(in_time.try_recv()?, "a's unpack failed before b answered");
+    assert_eq!(ended[0].0, Some(10), "{:?}", ended[0]);
+    assert!(ended[0].1.contains("more than 4 entries"), "{:?}", ended[0]);
+    assert_eq!(ended[1], ended[0]);
+    Ok(())
+}
+
+/// a sync whose unpacking stops, as a ctrl-c stops it, ends alike whether its archives unpack as
+/// their downloads end or once they all end: exit code 130, nothing placed, nothing recorded as
+/// unpacked, nothing half written in the cache. a second sync places both archives without asking
+/// either server again.
+#[cfg(debug_assertions)]
+#[test]
+fn a_stopped_unpacking_ends_alike_when_archives_unpack_early() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (a, a_files) = csv_zip("a", 3)?;
+    let (b, b_files) = csv_zip("b", 3)?;
+    let a_server = added(
+        &sandbox,
+        "a",
+        &a,
+        (0..2).map(|_| file(&a, "\"z\"")).collect(),
+    )?;
+    let b_server = added(
+        &sandbox,
+        "b",
+        &b,
+        (0..2).map(|_| file(&b, "\"z\"")).collect(),
+    )?;
+    for most in ["0", "64"] {
+        let clone = cloned(&sandbox, &format!("clone-{most}"), ("", ""))?;
+        let cache = sandbox.folder(&format!("cache-{most}"))?;
+        let stopped = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_TEST_STOP_UNPACKING", "1")
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most)
+            .output()?;
+        assert_eq!(
+            stopped.status.code(),
+            Some(130),
+            "{}",
+            text(&stopped.stderr)?
         );
+        assert_eq!(placed(&clone)?, Vec::<String>::new(), "{most}");
+        let records = fs::read_dir(cache.join("unpacked"))
+            .map(Iterator::count)
+            .unwrap_or_default();
+        assert_eq!(records, 0, "{most}");
+        assert_eq!(fs::read_dir(cache.join("tmp"))?.count(), 0, "{most}");
+        let asked = (a_server.requests().len(), b_server.requests().len());
+        let again = sandbox
+            .command_in(&clone, &["sync"])
+            .env("FETCHLOOM_CACHE", &cache)
+            .env("FETCHLOOM_TEST_UNPACKED_EARLY", most)
+            .output()?;
+        ok(&again)?;
+        assert_eq!(
+            (a_server.requests().len(), b_server.requests().len()),
+            asked,
+            "{most}"
+        );
+        for (name, files) in [("a", &a_files), ("b", &b_files)] {
+            for (path, bytes) in files {
+                assert_eq!(&fs::read(clone.join("data").join(name).join(path))?, bytes);
+            }
+        }
     }
     Ok(())
 }

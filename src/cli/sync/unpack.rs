@@ -10,7 +10,7 @@ use tokio::task::JoinSet;
 
 use super::super::Context;
 use super::super::cache::needed_for_drop;
-use super::super::fetch::{Told as Named, alike};
+use super::super::fetch::{Job, Told as Named, alike};
 use super::draft::{self, Draft, Unit, Why};
 use super::place::Placing;
 use super::{Loop, job};
@@ -135,6 +135,20 @@ pub(in crate::cli) async fn unpack_all(
     cache: &Cache,
     archives: Vec<Unpack>,
 ) -> Result<Vec<Option<Unpacked>>, Error> {
+    let (results, failed) = unpack_batch(context, cache, archives).await?;
+    match unpacks_failed(failed) {
+        Some(error) => Err(error),
+        None => Ok(results),
+    }
+}
+
+/// [`unpack_all`], giving every unpacking that failed beside what the others unpacked to, rather
+/// than one error for them. it fails itself only when an unpacking's thread ended unexpectedly.
+async fn unpack_batch(
+    context: &Context,
+    cache: &Cache,
+    archives: Vec<Unpack>,
+) -> Result<Noted, Error> {
     let mut results: Vec<Option<Unpacked>> = archives
         .iter()
         .map(|unpack| recorded(cache, unpack))
@@ -145,86 +159,286 @@ pub(in crate::cli) async fn unpack_all(
         .filter(|(index, _)| results[*index].is_none())
         .collect();
     if archives.is_empty() {
-        return Ok(results);
+        return Ok((results, Vec::new()));
     }
-    // each archive keeps a core decompressing and a few threads writing files
-    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
-    let at_once = processors.div_ceil(4).min(4);
-    let (at_once, writers) = context.threads.archives(at_once, archives.len());
-    let mut limits = context.settings.archive_limits();
-    // an xz stream of several blocks decodes on the archive's share of the threads
-    let share = writers.map_or_else(|| processors.div_ceil(at_once), |writers| writers + 1);
-    limits.xz_threads = u32::try_from(share).unwrap_or(u32::MAX);
-    // a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then would
-    let stops_for_tests = crate::machine::pretended("FETCHLOOM_TEST_STOP_UNPACKING").is_some();
     let what = match archives.as_slice() {
         [(_, only)] => only.label.clone(),
         _ => units::count(archives.len() as u64, "archive", "archives"),
     };
     let sizes = archives.iter().map(|(_, unpack)| Some(unpack.size));
     let ticker = Arc::new(context.output.ticker("Unpacking", what, sizes));
+    let running = Running::new(context, archives.len(), ticker);
     let mut tasks = JoinSet::new();
     let mut queue = archives.into_iter();
     let mut failed: Vec<Failed> = Vec::new();
     loop {
-        while tasks.len() < at_once
+        while tasks.len() < running.at_once
             && let Some((index, unpack)) = queue.next()
         {
-            let cache = cache.clone();
-            let stop = context.stop.clone();
-            let told = Told::new(&context.output, &unpack, ticker.clone());
-            tasks.spawn_blocking(move || {
-                let started = Instant::now();
-                let watch = |now: u64| {
-                    told.heard(now);
-                    stop.is_asked() || stops_for_tests && now > 0
-                };
-                let unpacked = unpack_one(&cache, &unpack, &limits, &watch, writers);
-                drop(told);
-                (index, unpack, started.elapsed(), unpacked)
-            });
+            running.start(context, cache, &mut tasks, index, unpack);
         }
         let Some(joined) = tasks.join_next().await else {
             break;
         };
-        let (index, unpack, elapsed, (unpacked, left)) = joined.map_err(|err| {
-            Error::new(
-                Kind::LocalIo,
-                format!("unpacking stopped unexpectedly: {err}"),
-            )
-        })?;
-        if let (Ok(None), Some(why)) = (&unpacked, left) {
-            tell_left(&context.output, &unpack.label, why);
-            continue;
+        match settle(
+            context,
+            cache,
+            joined.map_err(|err| stopped_unexpectedly(&err))?,
+        ) {
+            Ok((index, Some(unpacked))) => results[index] = Some(unpacked),
+            Ok((_, None)) => {}
+            Err(failure) => failed.push(*failure),
         }
-        match unpacked {
-            Ok(Some(unpacked)) => {
-                for digest in &unpacked.added {
-                    context.work.wrote(digest);
+    }
+    Ok((results, failed))
+}
+
+/// [`unpack_batch`] of the archives `arriving` sends as their files come into the cache, each
+/// with its place among `count`, a few at once, until the sender is gone and every one ended. one
+/// that never arrived has nothing; `what` and `sizes` name all `count` for the run's progress line.
+pub(in crate::cli) async fn unpack_arriving(
+    context: &Context,
+    cache: &Cache,
+    mut arriving: tokio::sync::mpsc::UnboundedReceiver<(usize, Unpack)>,
+    count: usize,
+    (what, sizes): (String, Vec<u64>),
+) -> Result<Noted, Error> {
+    let mut results: Vec<Option<Unpacked>> = std::iter::repeat_with(|| None).take(count).collect();
+    // the progress line starts with the first archive to unpack, not with the downloads
+    let mut named = Some((what, sizes));
+    let mut running: Option<Running> = None;
+    let mut tasks = JoinSet::new();
+    let mut waiting = std::collections::VecDeque::new();
+    let mut failed: Vec<Failed> = Vec::new();
+    let mut open = true;
+    loop {
+        if let Some(running) = &running {
+            while tasks.len() < running.at_once
+                && let Some((index, unpack)) = waiting.pop_front()
+            {
+                running.start(context, cache, &mut tasks, index, unpack);
+            }
+        }
+        if !open && tasks.is_empty() && waiting.is_empty() {
+            break;
+        }
+        tokio::select! {
+            arrived = arriving.recv(), if open => match arrived {
+                Some((index, unpack)) => {
+                    if let Some(unpacked) = recorded(cache, &unpack) {
+                        results[index] = Some(unpacked);
+                    } else {
+                        if let Some((what, sizes)) = named.take() {
+                            let sizes = sizes.into_iter().map(Some);
+                            let ticker = Arc::new(context.output.ticker("Unpacking", what, sizes));
+                            running = Some(Running::new(context, count, ticker));
+                        }
+                        waiting.push_back((index, unpack));
+                    }
                 }
-                tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
-                results[index] = Some(unpacked);
+                None => open = false,
+            },
+            Some(joined) = tasks.join_next(), if !tasks.is_empty() => {
+                match settle(context, cache, joined.map_err(|err| stopped_unexpectedly(&err))?) {
+                    Ok((index, Some(unpacked))) => results[index] = Some(unpacked),
+                    Ok((_, None)) => {}
+                    Err(failure) => failed.push(*failure),
+                }
             }
-            Ok(None) if unpack.lone => tell_lone(&context.output, &unpack.label),
-            // the run says how a person unpacks it where it places the file
-            Ok(None) if archive::unsupported(cache, &unpack.archive, unpack.size).is_some() => {}
-            Ok(None) => context.output.warn(
-                Warning::ArchiveUnreadable,
-                &format!(
-                    "{} is no archive fetchloom can read, so it stays as it is",
-                    unpack.label
-                ),
-            ),
-            Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
-                tell_lone(&context.output, &unpack.label);
-            }
-            Err(err) => failed.push((index, unpack.label.clone(), err)),
         }
     }
-    match unpacks_failed(failed) {
-        Some(error) => Err(error),
-        None => Ok(results),
+    Ok((results, failed))
+}
+
+/// what a batch's unpackings gave: what each unpacked to, by its place, and each that failed.
+type Noted = (Vec<Option<Unpacked>>, Vec<Failed>);
+
+/// for each of the jobs whose files' digests are `digests`, the places in `archives` of those that
+/// hold its file, and for each archive how many jobs it waits on: one index of every file the
+/// archives hold, so the work grows with their files and the jobs, not with the two multiplied.
+fn waits(
+    archives: &[(String, Archive<'_>)],
+    digests: impl Iterator<Item = Option<Sha256>>,
+) -> (Vec<Vec<usize>>, Vec<usize>) {
+    let mut holders: std::collections::HashMap<Sha256, Vec<usize>> =
+        std::collections::HashMap::new();
+    for (at, (_, archive)) in archives.iter().enumerate() {
+        for file in archive.files() {
+            let held = holders.entry(file.sha256).or_default();
+            // an archive holding one file twice waits on it once
+            if held.last() != Some(&at) {
+                held.push(at);
+            }
+        }
     }
+    let owners: Vec<Vec<usize>> = digests
+        .map(|digest| {
+            digest
+                .and_then(|digest| holders.get(&digest))
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let mut left = vec![0_usize; archives.len()];
+    for at in owners.iter().flatten() {
+        left[*at] += 1;
+    }
+    (owners, left)
+}
+
+/// the most downloads whose archives unpack as they end, [`crate::volume::MOST_FLUSHED_ALONE`],
+/// which a debug build's test lowers with `FETCHLOOM_TEST_UNPACKED_EARLY`, so a small sync stands
+/// in for one of many downloads.
+fn most_unpacked_early() -> usize {
+    #[cfg(debug_assertions)]
+    let asked = std::env::var("FETCHLOOM_TEST_UNPACKED_EARLY")
+        .ok()
+        .and_then(|text| text.parse().ok());
+    #[cfg(not(debug_assertions))]
+    let asked = None;
+    lowered(asked)
+}
+
+/// [`crate::volume::MOST_FLUSHED_ALONE`], or `asked` below it: a test may lower the bound on
+/// unpacking early, never raise it.
+fn lowered(asked: Option<usize>) -> usize {
+    let alone = crate::volume::MOST_FLUSHED_ALONE;
+    asked.map_or(alone, |most| most.min(alone))
+}
+
+/// whether a sync's `downloads` unpack their archives as they end: from one to
+/// [`most_unpacked_early`]. a larger batch may name its downloads only as it ends, so its archives
+/// unpack once they all end, and it builds none of the waits.
+fn unpacks_early(downloads: usize) -> bool {
+    (1..=most_unpacked_early()).contains(&downloads)
+}
+
+/// the archive data.lock pins as `archive` in `dataset`, to unpack under its path there.
+fn unpack_of((dataset, archive): &(String, Archive<'_>)) -> Unpack {
+    Unpack::pinned(archive, format!("{dataset}/{}", archive.file.path))
+}
+
+/// what the ends of a batch's downloads leave for unpacking its archives early: the jobs each
+/// archive still waits on, which archives went to be unpacked, and the way to send one, gone once
+/// the downloads end.
+type Arrivals = (
+    Vec<usize>,
+    Vec<bool>,
+    Option<tokio::sync::mpsc::UnboundedSender<(usize, Unpack)>>,
+);
+
+/// what a batch of unpackings shares: how many run at once, the threads and limits each takes, and
+/// the run's progress line.
+struct Running {
+    at_once: usize,
+    writers: Option<usize>,
+    limits: archive::Limits,
+    stops_for_tests: bool,
+    ticker: Arc<Ticker>,
+}
+
+/// one unpacking's place, its archive, how long it took, and what it gave.
+type Ended = (
+    usize,
+    Unpack,
+    Duration,
+    (Result<Option<Unpacked>, Error>, Option<Left>),
+);
+
+/// the error for an unpacking whose thread ended without its result, as a panic ends it.
+fn stopped_unexpectedly(err: &tokio::task::JoinError) -> Error {
+    Error::new(
+        Kind::LocalIo,
+        format!("unpacking stopped unexpectedly: {err}"),
+    )
+}
+
+impl Running {
+    /// the share of the machine `archives` unpackings take, a few at once.
+    fn new(context: &Context, archives: usize, ticker: Arc<Ticker>) -> Running {
+        // each archive keeps a core decompressing and a few threads writing files
+        let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
+        let at_once = processors.div_ceil(4).min(4);
+        let (at_once, writers) = context.threads.archives(at_once, archives);
+        let mut limits = context.settings.archive_limits();
+        // an xz stream of several blocks decodes on the archive's share of the threads
+        let share = writers.map_or_else(|| processors.div_ceil(at_once), |writers| writers + 1);
+        limits.xz_threads = u32::try_from(share).unwrap_or(u32::MAX);
+        Running {
+            at_once,
+            writers,
+            limits,
+            // a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then would
+            stops_for_tests: crate::machine::pretended("FETCHLOOM_TEST_STOP_UNPACKING").is_some(),
+            ticker,
+        }
+    }
+
+    /// starts unpacking `unpack`, at `index`, on a thread of `tasks`.
+    fn start(
+        &self,
+        context: &Context,
+        cache: &Cache,
+        tasks: &mut JoinSet<Ended>,
+        index: usize,
+        unpack: Unpack,
+    ) {
+        let cache = cache.clone();
+        let stop = context.stop.clone();
+        let told = Told::new(&context.output, &unpack, self.ticker.clone());
+        let (limits, writers, stops_for_tests) = (self.limits, self.writers, self.stops_for_tests);
+        tasks.spawn_blocking(move || {
+            let started = Instant::now();
+            let watch = |now: u64| {
+                told.heard(now);
+                stop.is_asked() || stops_for_tests && now > 0
+            };
+            let unpacked = unpack_one(&cache, &unpack, &limits, &watch, writers);
+            drop(told);
+            (index, unpack, started.elapsed(), unpacked)
+        });
+    }
+}
+
+/// says what the unpacking `ended` did, and gives what it unpacked to by its place, or the failure
+/// its batch's error names.
+fn settle(
+    context: &Context,
+    cache: &Cache,
+    ended: Ended,
+) -> Result<(usize, Option<Unpacked>), Box<Failed>> {
+    let (index, unpack, elapsed, (unpacked, left)) = ended;
+    if let (Ok(None), Some(why)) = (&unpacked, left) {
+        tell_left(&context.output, &unpack.label, why);
+        return Ok((index, None));
+    }
+    match unpacked {
+        Ok(Some(unpacked)) => {
+            for digest in &unpacked.added {
+                context.work.wrote(digest);
+            }
+            tell_unpacked(&context.output, &unpack.label, &unpacked, elapsed);
+            return Ok((index, Some(unpacked)));
+        }
+        Ok(None) if unpack.lone => tell_lone(&context.output, &unpack.label),
+        // the run says how a person unpacks it where it places the file
+        Ok(None) if archive::unsupported(cache, &unpack.archive, unpack.size).is_some() => {}
+        Ok(None) => context.output.warn(
+            Warning::ArchiveUnreadable,
+            &format!(
+                "{} is no archive fetchloom can read, so it stays as it is",
+                unpack.label
+            ),
+        ),
+        Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
+            tell_lone(&context.output, &unpack.label);
+        }
+        Err(err) => {
+            tracing::debug!(archive = %unpack.label, "an unpack failed; the others go on");
+            return Err(Box::new((index, unpack.label, err)));
+        }
+    }
+    Ok((index, None))
 }
 
 /// an unpacking that failed: its place in its batch, its archive's label, and why.
@@ -668,14 +882,30 @@ impl Loop<'_> {
     /// unpacks archives the cache holds, remembers their bytes for [`Loop::drop_unpacked`], and
     /// says each one's tree hash, or none for a file whose bytes are no archive after all.
     async fn unpack(&self, archives: Vec<Unpack>) -> Result<Vec<Option<Sha256>>, Error> {
+        let (trees, failed) = self.unpack_noting(archives).await?;
+        match unpacks_failed(failed) {
+            Some(error) => Err(error),
+            None => Ok(trees),
+        }
+    }
+
+    /// [`Loop::unpack`], giving every unpacking that failed beside the others' trees, rather than
+    /// one error for them.
+    async fn unpack_noting(
+        &self,
+        archives: Vec<Unpack>,
+    ) -> Result<(Vec<Option<Sha256>>, Vec<Failed>), Error> {
         // most syncs unpack nothing, and need no progress ticker for it
         if archives.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
         let objects: Vec<Vec<Sha256>> = archives.iter().map(Unpack::objects).collect();
-        let unpacked = unpack_all(self.context, &self.cache, archives).await?;
+        // the batch waits on the heap, so the run's own future, which holds every step before it,
+        // stays small
+        let (unpacked, failed) =
+            Box::pin(unpack_batch(self.context, &self.cache, archives)).await?;
         let mut done = self.unpacked.lock().unwrap_or_else(PoisonError::into_inner);
-        Ok(objects
+        let trees = objects
             .into_iter()
             .zip(unpacked)
             .map(|(objects, unpacked)| {
@@ -684,7 +914,8 @@ impl Loop<'_> {
                     unpacked.tree
                 })
             })
-            .collect())
+            .collect();
+        Ok((trees, failed))
     }
 
     /// unpacks the pinned archives whose files this machine lacks, downloading what the cache
@@ -785,6 +1016,9 @@ impl Loop<'_> {
         let jobs = lacking()
             .map(|(dataset, file)| job(manifest, lock, dataset, file))
             .collect::<Result<Vec<_>, _>>()?;
+        if unpacks_early(jobs.len()) {
+            return Box::pin(self.unpacked_early(archives, jobs)).await;
+        }
         let downloaded = self.download(jobs).await;
         // an archive that came is unpacked though another failed, so its dataset can be placed
         let came: Vec<&(String, Archive<'f>)> = if downloaded.is_ok() {
@@ -814,6 +1048,129 @@ impl Loop<'_> {
             .filter(|((_, archive), tree)| *tree != archive.file.unpacks_to)
             .map(|(archive, _)| archive.clone())
             .collect())
+    }
+
+    /// [`Loop::unpack_checked`] after its downloads begin, `jobs`, the files `archives` lack, few
+    /// enough to unpack early: each archive unpacks as soon as all its files are in the cache, a
+    /// few at once on one share of the machine, while the rest download. as when they unpack after
+    /// the downloads, an archive that came unpacks though another failed to download or unpack,
+    /// what unpacked is remembered for dropping its bytes, and the error naming every unpacking
+    /// that failed goes before a download's.
+    async fn unpacked_early<'f>(
+        &self,
+        archives: &[(String, Archive<'f>)],
+        jobs: Vec<Job>,
+    ) -> Result<Vec<(String, Archive<'f>)>, Error> {
+        tracing::debug!("archives unpack as their downloads end");
+        let held = |at: usize| self.holds_all(&archives[at].1);
+        let unpack = |at: usize| unpack_of(&archives[at]);
+        let (owners, left) = waits(archives, jobs.iter().map(|job| job.fetch.expect.sha256));
+        let (sender, arriving) = tokio::sync::mpsc::unbounded_channel();
+        let state: std::sync::Mutex<Arrivals> =
+            std::sync::Mutex::new((left, vec![false; archives.len()], Some(sender)));
+        // sends archive `at` to be unpacked, once, when all its files are in the cache
+        let offer = |state: &mut Arrivals, at: usize| {
+            if !state.1[at]
+                && held(at)
+                && let Some(sender) = &state.2
+                && sender.send((at, unpack(at))).is_ok()
+            {
+                state.1[at] = true;
+            }
+        };
+        {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            for at in 0..archives.len() {
+                if state.0[at] == 0 {
+                    offer(&mut state, at);
+                }
+            }
+        }
+        let ended = |index: usize| {
+            let mut state = state.lock().unwrap_or_else(PoisonError::into_inner);
+            for &at in &owners[index] {
+                state.0[at] = state.0[at].saturating_sub(1);
+                if state.0[at] == 0 {
+                    offer(&mut state, at);
+                }
+            }
+        };
+        let downloading = async {
+            let downloaded = self.download_telling(jobs, &ended).await;
+            // the channel closes once the downloads end, which ends the unpacking below
+            state.lock().unwrap_or_else(PoisonError::into_inner).2 = None;
+            downloaded
+        };
+        let what = match archives {
+            [(dataset, only)] => format!("{dataset}/{}", only.file.path),
+            _ => units::count(archives.len() as u64, "archive", "archives"),
+        };
+        let sizes = (0..archives.len()).map(|at| unpack(at).size).collect();
+        let unpacking = unpack_arriving(
+            self.context,
+            &self.cache,
+            arriving,
+            archives.len(),
+            (what, sizes),
+        );
+        let (downloaded, early) = tokio::join!(downloading, unpacking);
+        let sent = std::mem::take(&mut state.lock().unwrap_or_else(PoisonError::into_inner).1);
+        self.early_ended(archives, (downloaded.map(drop), early), &sent)
+            .await
+    }
+
+    /// what [`Loop::unpacked_early`] makes of its ended downloads and early unpackings, `ended`,
+    /// with the archives that went to be unpacked, `sent`: those that came and never went unpack
+    /// now, the error naming every unpacking that failed goes first, then a download's, and the
+    /// archives that unpacked to other files than the lock says come back.
+    async fn early_ended<'f>(
+        &self,
+        archives: &[(String, Archive<'f>)],
+        (downloaded, early): (Result<(), Error>, Result<Noted, Error>),
+        sent: &[bool],
+    ) -> Result<Vec<(String, Archive<'f>)>, Error> {
+        // an archive that came is unpacked though another failed, so its dataset can be placed
+        let came: Vec<usize> = (0..archives.len())
+            .filter(|at| downloaded.is_ok() || self.holds_all(&archives[*at].1))
+            .collect();
+        let (early, mut failed) = early?;
+        let rest: Vec<usize> = came.iter().copied().filter(|at| !sent[*at]).collect();
+        let unpacks = rest.iter().map(|at| unpack_of(&archives[*at])).collect();
+        let (late, late_failed) = self.unpack_noting(unpacks).await?;
+        let late_failed = late_failed
+            .into_iter()
+            .map(|(index, label, error)| (rest[index], label, error));
+        failed.extend(late_failed);
+        let mut trees: Vec<Option<Sha256>> = vec![None; archives.len()];
+        {
+            let mut done = self.unpacked.lock().unwrap_or_else(PoisonError::into_inner);
+            for (at, unpacked) in early.into_iter().enumerate() {
+                if let Some(unpacked) = unpacked {
+                    done.extend(unpack_of(&archives[at]).objects());
+                    trees[at] = Some(unpacked.tree);
+                }
+            }
+        }
+        if let Some(error) = unpacks_failed(failed) {
+            return Err(error);
+        }
+        downloaded?;
+        for (at, tree) in rest.into_iter().zip(late) {
+            trees[at] = tree;
+        }
+        Ok(came
+            .into_iter()
+            .filter(|at| trees[*at] != archives[*at].1.file.unpacks_to)
+            .map(|at| archives[at].clone())
+            .collect())
+    }
+
+    /// whether the cache holds every file of `archive`.
+    fn holds_all(&self, archive: &Archive<'_>) -> bool {
+        archive
+            .files()
+            .into_iter()
+            .all(|file| self.cache.find(&file.sha256, Some(file.size)).is_some())
     }
 
     /// drops archives whose members are now cached, each part of a split one, records reused after
@@ -969,6 +1326,65 @@ mod tests {
             }],
             ..Lock::default()
         }
+    }
+
+    /// each job waits on the archives holding its file, found through one index: a file two
+    /// archives share holds both back, a split archive waits on each of its parts, and a job no
+    /// archive holds waits for none.
+    #[test]
+    fn each_job_waits_on_the_archives_holding_its_file() {
+        let file = |path: &str, bytes: &[u8]| {
+            crate::cli::project::tests::pinned_file(path, "https://example.com/file", bytes)
+        };
+        let (x, y, z) = (
+            file("x.zip", b"x"),
+            file("y.zip.001", b"y"),
+            file("y.zip.002", b"z"),
+        );
+        let one = |file| Archive {
+            file,
+            parts: Vec::new(),
+        };
+        let archives = [
+            ("a".to_owned(), one(&x)),
+            (
+                "b".to_owned(),
+                Archive {
+                    file: &y,
+                    parts: vec![&y, &z],
+                },
+            ),
+            ("c".to_owned(), one(&x)),
+        ];
+        let digests = [Some(x.sha256), Some(z.sha256), None, Some(y.sha256)];
+        let (owners, left) = waits(&archives, digests.into_iter());
+        assert_eq!(owners, [vec![0, 2], vec![1], vec![], vec![1]]);
+        assert_eq!(left, [1, 2, 1]);
+    }
+
+    /// archives unpack as their downloads end in a sync of one to as many downloads as are flushed
+    /// alone; a larger one, whose batch may name its downloads only as it ends, builds no waits.
+    #[test]
+    fn only_a_sync_of_a_few_downloads_unpacks_early() {
+        let alone = crate::volume::MOST_FLUSHED_ALONE;
+        let early = [0, 1, alone, alone + 1, 100_000].map(unpacks_early);
+        assert_eq!(early, [false, true, true, false, false]);
+    }
+
+    /// a test's `FETCHLOOM_TEST_UNPACKED_EARLY` lowers the bound on unpacking early, to 0 for the
+    /// path of a sync of many downloads, and never raises it past the count flushed alone.
+    #[test]
+    fn a_test_lowers_the_early_bound_and_never_raises_it() {
+        let alone = crate::volume::MOST_FLUSHED_ALONE;
+        let asked = [
+            None,
+            Some(0),
+            Some(1),
+            Some(alone),
+            Some(alone + 1),
+            Some(100_000),
+        ];
+        assert_eq!(asked.map(lowered), [alone, 0, 1, alone, alone, alone]);
     }
 
     /// a batch's one failed unpacking is its own error, in its archive; several are one error, of

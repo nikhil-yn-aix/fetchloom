@@ -293,8 +293,17 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         (Ok(()), Request::Several(several)) => {
             add_several_held(context, &mut adding, &args, several, &here, starting).await
         }
+        // an import waits on the heap, so the add's own future stays small
         (Ok(()), Request::Path(typed)) => {
-            path_held(context, &mut adding, &args, &typed, &here, starting).await
+            Box::pin(path_held(
+                context,
+                &mut adding,
+                &args,
+                &typed,
+                &here,
+                starting,
+            ))
+            .await
         }
         (Ok(()), Request::ListFile(_)) => unreachable!("a list file is named by its link first"),
         (Err(error), _) => Err(error),

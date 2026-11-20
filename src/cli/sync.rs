@@ -1633,9 +1633,36 @@ impl<'a> Loop<'a> {
         Ok(self.download_with(jobs, Vec::new()).await?.fetched)
     }
 
+    /// [`Loop::download`], telling `came` each job's place among `jobs` as it ends well.
+    pub(super) async fn download_telling(
+        &self,
+        jobs: Vec<Job>,
+        came: &(dyn Fn(usize) + Sync),
+    ) -> Result<Vec<Fetched>, Error> {
+        Ok(self
+            .download_with_telling(jobs, Vec::new(), came)
+            .await?
+            .fetched)
+    }
+
     /// [`Loop::download`], whose line before it also tells `ahead`, the downloads placing makes
     /// later; their hashes come back with what it fetched, and the line after waits for placing's.
-    async fn download_with(&self, jobs: Vec<Job>, mut ahead: Vec<Job>) -> Result<Batch, Error> {
+    fn download_with(
+        &self,
+        jobs: Vec<Job>,
+        ahead: Vec<Job>,
+    ) -> impl Future<Output = Result<Batch, Error>> {
+        self.download_with_telling(jobs, ahead, &|_| {})
+    }
+
+    /// [`Loop::download_with`], telling `came` of each job that ended well, as
+    /// [`fetch::all_telling`] does.
+    async fn download_with_telling(
+        &self,
+        jobs: Vec<Job>,
+        mut ahead: Vec<Job>,
+        came: &(dyn Fn(usize) + Sync),
+    ) -> Result<Batch, Error> {
         if jobs.is_empty() {
             return Ok(Batch::default());
         }
@@ -1696,7 +1723,7 @@ impl<'a> Loop<'a> {
         self.roomy.fetch_or(roomy, Ordering::Relaxed);
         fetch::tell_planned(&self.context.output, &called, &planned);
         let started = Instant::now();
-        let fetched = fetch::all(self.context, &self.net, &self.cache, jobs)
+        let fetched = fetch::all_telling(self.context, &self.net, &self.cache, jobs, came)
             .await
             .map_err(|error| self.as_left(error))?;
         if ahead.is_empty() {

@@ -87,7 +87,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/sync/place/mark.rs` | the `.gitignore` holding `*` in each dataset folder placement fills, recorded in the state before it is made and deleted only by that record, and the root `.gitignore` line hiding the whole data folder, told once | `wanted`, `to_make`, `make`, `retire` | `settled`, `take_back`, `unmarkable`, `tell_hiding_line` |
 | `src/cli/sync/place/put.rs` | many files placed at once, their tally, and how each looked right after | `put_all`, `Tally` |  |
 | `src/cli/sync/place/tell.rs` | the lines placement prints: costs, removals, and each file left alone or put back, with its reason | `tell` | `tell_preview` |
-| `src/cli/sync/unpack.rs` | archives unpacked a few at a time, checked against data.lock, then dropped from the cache unless still needed | `unpack_all`, `drop_archives` | `Unpack`, `unpack_drafts`, `unpack_locked` |
+| `src/cli/sync/unpack.rs` | archives unpacked a few at a time, in a sync of a few downloads each as soon as its own files are in the cache while the others download, checked against data.lock, then dropped from the cache unless still needed | `unpack_all`, `drop_archives` | `Unpack`, `unpack_drafts`, `unpack_locked`, `unpack_arriving` |
 
 ## project
 
