@@ -1408,11 +1408,16 @@ fn ask_room_on(
 
 /// what `doing` needs on the disk holding `place` and what it has free, in words.
 fn shortage(doing: &str, (needed, free): (u64, u64), place: &str) -> String {
-    format!(
-        "{doing} needs at least {} on the disk holding {place}, which has {} free",
-        units::size(needed),
-        units::size(free)
-    )
+    let needs = units::size(needed);
+    let mut has = units::size(free);
+    // sizes that round alike would read as a contradiction, so the gap is said instead
+    if has == needs {
+        has = format!(
+            "{} less than that",
+            units::size(needed.saturating_sub(free))
+        );
+    }
+    format!("{doing} needs at least {needs} on the disk holding {place}, which has {has} free")
 }
 
 /// warns, for a run told `--yes`, that `doing` may lack room on the disk holding `place`: free
@@ -1776,6 +1781,21 @@ mod tests {
             json,
             false,
         ))
+    }
+
+    /// a disk short by less than the sizes' last digit says by how much, so a refusal never reads
+    /// "needs at least 4.0 GiB ... which has 4.0 GiB free"; one short by more reads as before.
+    #[test]
+    fn a_shortage_the_sizes_round_away_names_the_gap() {
+        let place = "the data folder at R:\\p\\data";
+        assert_eq!(
+            shortage("this add", (4 << 30, (4 << 30) - (256 << 10)), place),
+            "this add needs at least 4.0 GiB on the disk holding the data folder at R:\\p\\data, which has 256.0 KiB less than that free"
+        );
+        assert_eq!(
+            shortage("this add", (3 << 30, 1 << 30), place),
+            "this add needs at least 3.0 GiB on the disk holding the data folder at R:\\p\\data, which has 1.0 GiB free"
+        );
     }
 
     /// a rate the settings give becomes the one byte budget the run's networks share.
