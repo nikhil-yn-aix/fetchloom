@@ -49,7 +49,9 @@ pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Unfinished};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
-use crate::volume::{Volume, is_plain, open_unfollowed, read_unfollowed, refuses_links};
+use crate::volume::{
+    Volume, is_plain, name_count, open_unfollowed, read_unfollowed, refuses_links,
+};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 10] = [
@@ -587,24 +589,6 @@ fn write_over(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     file.write_all(bytes)?;
     file.sync_all()
-}
-
-/// how many names the open `file` has.
-fn name_count(file: &File) -> io::Result<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(file.metadata()?.nlink())
-    }
-    #[cfg(windows)]
-    {
-        Ok(winapi_util::file::information(file)?.number_of_links())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = file;
-        Ok(1)
-    }
 }
 
 #[cfg(test)]
@@ -1631,7 +1615,12 @@ impl Cache {
                 }
             }
         }
-        volume.remove(source)?;
+        // the download and the new object are one file until the download's name goes
+        if new {
+            volume.remove_twin(source, path)?;
+        } else {
+            volume.remove(source)?;
+        }
         Ok(new)
     }
 }
@@ -3107,6 +3096,30 @@ pub(crate) mod tests {
             let second = repair(UNIX_EPOCH + Duration::from_secs(1_700_000_010));
             assert!(second > first, "another corruption needs a fresh mark");
         }
+    }
+
+    /// a cache on a disk that links files but refuses to remove a read-only one, as ReFS on windows
+    /// server 2022 does, still takes a sealed download as a new object, leaving no download behind
+    /// and the object read-only, and drops a second download of the same bytes.
+    #[test]
+    fn a_disk_that_links_but_keeps_read_only_files_still_takes_objects() {
+        let (dir, mut cache) = cache();
+        if !hardlinks(dir.path()) {
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        }
+        cache.volume = Arc::new(Volume::refusing(cache.root.join("tmp"), true));
+        let digest = crate::digest::sha256(b"good");
+        for (name, new) in [("first", true), ("second", false)] {
+            let source = dir.path().join(name);
+            fs::write(&source, b"good").unwrap();
+            seal(&source);
+            let stored = cache.link_object(&source, digest, 4, None).unwrap();
+            assert_eq!(stored.new, new, "{name}");
+            assert!(!source.exists(), "{name}");
+        }
+        let object = cache.object_path(&digest);
+        assert_eq!(fs::read(&object).unwrap(), b"good");
+        assert!(fs::metadata(&object).unwrap().permissions().readonly());
     }
 
     /// a project that last checked its hardlink just before the corruption was found must still
