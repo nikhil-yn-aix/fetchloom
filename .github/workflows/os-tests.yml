@@ -1,0 +1,127 @@
+name: os-tests
+
+# scratch only: the os-fix commits' tests, for red, green and break evidence
+# (plan/qa/os-hunt/fixes.md). OS_TESTS_MODE says which tree this branch holds: green runs the
+# whole suite on ubuntu, the new and nearby tests elsewhere and ci's refs lane on windows-2022;
+# red and break run the new tests alone, which must fail there.
+on:
+  push:
+    branches: ['scratch-os-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+  INSTA_UPDATE: 'no'
+  INSTA_FORCE_PASS: '0'
+  PIN_NEXTEST: cargo-nextest@0.9.151
+  OS_TESTS_MODE: green
+  NEW_LIB: >-
+    archive::tests::every_file_this_machine_cannot_store_is_named_in_one_refusal
+    archive::tests::names_windows_refuses_are_named_together
+    cli::tests::a_shortage_the_sizes_round_away_names_the_gap
+    cli::cache::tests::a_project_registered_under_two_spellings_counts_once
+    cache::tests::a_disk_that_links_but_keeps_read_only_files_still_takes_objects
+  NEW_CLI: >-
+    placing::a_file_that_cannot_make_way_leaves_the_other_replacements_placed
+    placing::a_rolled_back_add_that_placed_nothing_takes_its_marker_back
+    docs::data_toml_shows_a_clash_inside_an_archive_as_add_prints_it
+    path::path_takes_a_name_typed_in_the_other_unicode_spelling
+    inputs::names_windows_cannot_store_are_pinned_with_one_warning_per_dataset
+    docs::the_readme_shows_what_its_quick_start_prints
+
+jobs:
+  new:
+    name: new tests on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, windows-2022, windows-11-arm, macos-15]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - if: env.OS_TESTS_MODE != 'green' && matrix.os != 'ubuntu-24.04'
+        run: echo "red and break run on ubuntu alone"
+      - if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        run: rustup toolchain install
+      - name: unit tests
+        if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        continue-on-error: ${{ env.OS_TESTS_MODE != 'green' }}
+        run: |
+          nearby=""
+          if [ "$OS_TESTS_MODE" = green ]; then
+            nearby="archive:: volume:: plan::tests cli::cache::tests cache::tests cli::path"
+          fi
+          cargo test --locked --no-fail-fast --lib -- $NEW_LIB $nearby
+      - name: cli tests
+        if: env.OS_TESTS_MODE == 'green' || matrix.os == 'ubuntu-24.04'
+        continue-on-error: ${{ env.OS_TESTS_MODE != 'green' }}
+        run: |
+          nearby=""
+          if [ "$OS_TESTS_MODE" = green ]; then
+            nearby="placing:: path:: inputs:: archives:: docs:: cache:: project::the_cache_knows_its_projects"
+          fi
+          cargo test --locked --no-fail-fast --test cli -- $NEW_CLI $nearby
+
+  suite:
+    name: whole suite on ubuntu-24.04
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - if: env.OS_TESTS_MODE != 'green'
+        run: echo "the whole suite runs on the green tree alone"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.OS_TESTS_MODE == 'green'
+        with:
+          persist-credentials: false
+      - if: env.OS_TESTS_MODE == 'green'
+        run: rustup toolchain install
+      - if: env.OS_TESTS_MODE == 'green'
+        run: cargo test --locked --no-fail-fast
+
+  refs-2022:
+    name: ci's refs lane on windows-2022
+    runs-on: windows-2022
+    timeout-minutes: 75
+    defaults:
+      run:
+        working-directory: source
+    steps:
+      - if: env.OS_TESTS_MODE != 'green'
+        working-directory: .
+        run: echo "the refs lane runs on the green tree alone"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: env.OS_TESTS_MODE == 'green'
+        with:
+          path: source
+          persist-credentials: false
+      - if: env.OS_TESTS_MODE == 'green'
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@cfdb7ed4ccc7c7dce37759eae89dc5674b469b39 # v2.90.3
+        if: env.OS_TESTS_MODE == 'green'
+        with:
+          tool: ${{ env.PIN_NEXTEST }}
+          fallback: none
+      - name: record cargo test selections
+        if: env.OS_TESTS_MODE == 'green'
+        run: python python/ci_tests.py record
+      - name: archive the windows test build
+        if: env.OS_TESTS_MODE == 'green'
+        run: cargo nextest archive --locked --tests --profile ci --archive-file target/ci/windows-tests.tar.zst
+      - name: run the selected tests on the volume
+        if: env.OS_TESTS_MODE == 'green'
+        shell: pwsh
+        run: .github/scripts/windows-filesystem.ps1 -FileSystem refs
