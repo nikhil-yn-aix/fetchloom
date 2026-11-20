@@ -39,7 +39,7 @@ the client prefixes above and names under `~/Library` compare without case, as a
 
 apfs and hfs+ ignore case by default, as exFAT does, and all three see `café` written with one character and with an `e` and a combining accent as one name. apfs keeps a name in the form that created it, while hfs+ and exFAT list every name in the decomposed form. a file fetchloom placed under one form and listed under the other is the same file: `status` does not report it missing and extra, `sync` does not place it again, and `get` does not count it as a foreign file in its output folder.
 
-two files in a dataset whose paths differ only in case would be one file on such a disk. fetchloom refuses to place them on every platform, so a project works the same on each, and its message names both paths and suggests how to leave one out.
+two files in a dataset whose paths differ only in case would be one file on such a disk. fetchloom refuses to place them on every platform, so a project works the same on each, and its message names both paths. two files the source lists take an `exclude` that leaves one out; two inside one archive keep that archive from unpacking at all, so it stays packed with `extract = false`, as [data.toml](../reference/data-toml.md#destination-paths) says.
 
 ## short name
 
