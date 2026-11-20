@@ -1192,8 +1192,9 @@ impl Survey {
         let path: place::FilePath<'_, (&String, &crate::project::state::Placed)> =
             &|(path, _)| std::borrow::Cow::Owned(native(root, path));
         let ahead = place::ReadAhead::when_cold(&files, path);
-        let intact = place::run_hashes(
+        let intact = place::run_hashes_sized(
             &files,
+            &|(_, placed)| placed.look.size,
             total,
             self.threads,
             ahead.as_ref(),

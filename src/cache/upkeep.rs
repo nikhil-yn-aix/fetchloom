@@ -801,7 +801,12 @@ impl Cache {
         let path: crate::place::FilePath<'_, Object> =
             &|object| std::borrow::Cow::Borrowed(object.path.as_path());
         let ahead = crate::place::ReadAhead::when_cold(&objects, path);
-        let queued = digest::Queued::of(objects.len());
+        let largest = if digest::batches_read_ahead() {
+            digest::largest(objects.iter().map(|object| object.size))
+        } else {
+            Vec::new()
+        };
+        let queued = digest::Queued::of_sized(objects.len(), largest);
         let verify = || {
             loop {
                 let index = next.fetch_add(1, Ordering::Relaxed);
@@ -811,7 +816,7 @@ impl Cache {
                 let Some(object) = objects.get(index) else {
                     break;
                 };
-                queued.begun();
+                let _begun = queued.begun();
                 if stop.is_asked() {
                     break;
                 }

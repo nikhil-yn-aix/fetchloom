@@ -2343,3 +2343,67 @@ fn verify_reads_a_large_object_ahead() -> Result {
     }
     Ok(())
 }
+
+/// a sandbox whose project holds, as a typical one does, two largest files of 6 MiB, three of
+/// 5 MiB, which are large enough to read ahead too, and small ones, added from a local folder.
+fn two_largest_among_others() -> Result<Sandbox> {
+    let sandbox = Sandbox::new()?;
+    let big = sandbox.folder("big")?;
+    let files = [
+        ("one.bin", 7_u32, 6_u32),
+        ("two.bin", 11, 6),
+        ("three.bin", 13, 5),
+        ("four.bin", 17, 5),
+        ("five.bin", 19, 5),
+    ];
+    for (name, seed, mib) in files {
+        let bytes: Vec<u8> = (0..mib << 20).map(|at| (at * seed % 251) as u8).collect();
+        fs::write(big.join(name), &bytes)?;
+    }
+    for n in 0..20 {
+        fs::write(big.join(format!("small{n}.csv")), format!("{n}\n"))?;
+    }
+    let added = sandbox.run(&["add", "../big"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    Ok(sandbox)
+}
+
+/// how many of `-vv`'s lines in `output`, which must have ended well, tell a hash read ahead on a
+/// reader its batch kept.
+fn kept_readers(output: &std::process::Output) -> Result<usize> {
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    Ok(stderr
+        .matches("a hash reads ahead on a reader its batch kept")
+        .count())
+}
+
+/// `status --verify` of a project's two largest files, among three others large enough to read
+/// ahead and small ones, gives each of the two a reader its batch kept, from its first block, as
+/// `-vv` tells once a hash, and says what a run on one thread says, where no hash reads ahead.
+#[test]
+fn status_verify_reads_both_large_files_ahead() -> Result {
+    let sandbox = two_largest_among_others()?;
+    let mut told = Vec::new();
+    for threads in [None, Some("1")] {
+        let mut command = sandbox.command(&["-vv", "status", "--verify"]);
+        if let Some(threads) = threads {
+            command.env("FETCHLOOM_THREADS", threads);
+        }
+        let output = command.output()?;
+        let expected = if threads.is_none() && hashes_on_threads() {
+            2
+        } else {
+            0
+        };
+        assert_eq!(
+            kept_readers(&output)?,
+            expected,
+            "{}",
+            text(&output.stderr)?
+        );
+        told.push(text(&output.stdout)?);
+    }
+    assert_eq!(told[0], told[1]);
+    Ok(())
+}

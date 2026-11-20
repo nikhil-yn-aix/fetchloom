@@ -151,9 +151,17 @@ pub(crate) const AHEAD_FROM: u64 = 4 << 20;
 /// the other is read.
 const AHEAD_BUFFERS: usize = 2;
 
-/// the most reading threads hashes run at once: one, which starts only beside no other hash. tests
-/// in one process share the count, so theirs is high enough that none is refused for another's.
-const AHEAD_READERS: usize = if cfg!(test) { 256 } else { 1 };
+/// the most reading threads the alone rule runs: one, which starts only beside no other hash and
+/// no reader a batch kept. tests in one process share the count, so theirs is high enough that
+/// none is refused for another's.
+const AHEAD_READERS: usize = if cfg!(test) {
+    256
+} else {
+    SHIPPED_AHEAD_READERS
+};
+
+/// [`AHEAD_READERS`] outside tests.
+const SHIPPED_AHEAD_READERS: usize = 1;
 
 /// the reading threads hashes run now, at most [`AHEAD_READERS`].
 static READERS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -183,8 +191,9 @@ impl Drop for Reader<'_> {
 /// hashes anything.
 static AHEAD: AtomicBool = AtomicBool::new(false);
 
-/// reads each large file or range a hash takes on a second thread, a block ahead of the hash, once
-/// it is the only hash in progress, for the rest of the run.
+/// reads each large file or range a hash takes on a second thread, a block ahead of the hash: from
+/// its first block when its batch kept it a reader, else once it is the only hash in progress, for
+/// the rest of the run.
 pub(crate) fn read_ahead() {
     AHEAD.store(true, Ordering::Relaxed);
 }
@@ -192,6 +201,136 @@ pub(crate) fn read_ahead() {
 /// whether a hash of `most` bytes may read ahead on a second thread.
 pub(crate) fn reads_ahead(most: u64) -> bool {
     most >= AHEAD_FROM && AHEAD.load(Ordering::Relaxed)
+}
+
+/// the most reading threads hashes run at once, counted with the alone rule's in one count: a
+/// batch's two, or the alone rule's one beside none kept. tests share the count as
+/// [`AHEAD_READERS`] says.
+const BATCH_READERS: usize = if cfg!(test) {
+    256
+} else {
+    SHIPPED_BATCH_READERS
+};
+
+/// [`BATCH_READERS`] outside tests.
+const SHIPPED_BATCH_READERS: usize = 2;
+
+/// how many of a batch's largest files it keeps reading threads for, all of them or none.
+const BATCH_LARGE: usize = 2;
+
+/// whether batches of hashes keep reading threads for their largest files: whenever hashes read
+/// ahead.
+pub(crate) fn batches_read_ahead() -> bool {
+    AHEAD.load(Ordering::Relaxed)
+}
+
+/// whether a file of `size` bytes is large enough for its hash to read ahead.
+fn large(size: u64) -> bool {
+    size.saturating_add(1) >= AHEAD_FROM
+}
+
+/// the sizes of the files of `sizes` a batch keeps reading threads for: its two largest, those
+/// that are large, largest first.
+pub(crate) fn largest(sizes: impl IntoIterator<Item = u64>) -> Vec<u64> {
+    let mut top = [0_u64; BATCH_LARGE];
+    for size in sizes {
+        if size > top[BATCH_LARGE - 1] {
+            top[BATCH_LARGE - 1] = size;
+            top.sort_unstable_by(|one, other| other.cmp(one));
+        }
+    }
+    top.into_iter().filter(|size| large(*size)).collect()
+}
+
+/// the reading threads a batch kept for its largest hashes, each taken once as one of them begins,
+/// the rest given back when the batch ends.
+pub(crate) struct Kept<'r> {
+    /// the size of the file each reader not taken yet is kept for.
+    left: std::sync::Mutex<Vec<u64>>,
+    readers: &'r std::sync::atomic::AtomicUsize,
+}
+
+impl<'r> Kept<'r> {
+    /// one of `readers` for each file of the sizes `kept`, as [`largest`] gives them, all of them
+    /// or none: none for no file or more than a batch keeps, or when taking them all would pass
+    /// `most`.
+    fn all_or_none(
+        kept: Vec<u64>,
+        readers: &'r std::sync::atomic::AtomicUsize,
+        most: usize,
+    ) -> Option<Kept<'r>> {
+        let large = kept.len();
+        if large == 0 || large > BATCH_LARGE {
+            return None;
+        }
+        readers
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |taken| {
+                (taken + large <= most).then_some(taken + large)
+            })
+            .ok()?;
+        Some(Kept {
+            left: std::sync::Mutex::new(kept),
+            readers,
+        })
+    }
+
+    /// the reader kept for a file of the size a hash reading at most `most` bytes has, its size and
+    /// one, while it is left: each of the batch's largest files takes its own, whatever order
+    /// they begin in.
+    fn take(&self, most: u64) -> Option<Reader<'r>> {
+        let size = most.checked_sub(1)?;
+        let mut left = self
+            .left
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let at = left.iter().position(|kept| *kept == size)?;
+        left.swap_remove(at);
+        Some(Reader(self.readers))
+    }
+}
+
+impl Drop for Kept<'_> {
+    fn drop(&mut self) {
+        let left = self
+            .left
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.readers.fetch_sub(left.len(), Ordering::Relaxed);
+    }
+}
+
+thread_local! {
+    /// the readers kept by the batch whose hash this thread runs now.
+    static KEPT: std::cell::RefCell<Option<std::sync::Arc<Kept<'static>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// a reader the batch whose hash this thread runs kept, for a hash reading at most `most` bytes,
+/// taken once.
+fn kept_reader(most: u64) -> Option<Reader<'static>> {
+    KEPT.with_borrow(|kept| kept.as_ref().and_then(|kept| kept.take(most)))
+}
+
+/// one of a batch's hashes in progress on this thread, which may take a reader its batch kept,
+/// until dropped.
+pub(crate) struct Begun(bool);
+
+impl Begun {
+    fn of(kept: Option<std::sync::Arc<Kept<'static>>>) -> Begun {
+        let set = kept.is_some();
+        if set {
+            KEPT.set(kept);
+        }
+        Begun(set)
+    }
+}
+
+impl Drop for Begun {
+    fn drop(&mut self) {
+        if self.0 {
+            KEPT.set(None);
+        }
+    }
 }
 
 /// the hashes that count themselves while reads ahead are on: those in progress, and those batches
@@ -254,12 +393,25 @@ impl Drop for Hashing<'_> {
 pub(crate) struct Queued<'c> {
     counts: Option<&'c Counts>,
     left: std::sync::atomic::AtomicUsize,
+    /// the reading threads it kept for its large hashes.
+    kept: Option<std::sync::Arc<Kept<'static>>>,
 }
 
 impl Queued<'static> {
     /// a batch of `count` hashes, none begun.
     pub(crate) fn of(count: usize) -> Queued<'static> {
         Queued::of_in(&COUNTS, AHEAD.load(Ordering::Relaxed), count)
+    }
+
+    /// [`Queued::of`] a batch whose largest files are `largest`, as [`largest`] gives them, which
+    /// keeps a reading thread for each, all or none, when hashes read ahead.
+    pub(crate) fn of_sized(count: usize, largest: Vec<u64>) -> Queued<'static> {
+        let mut queued = Queued::of(count);
+        if batches_read_ahead() {
+            queued.kept =
+                Kept::all_or_none(largest, &READERS, BATCH_READERS).map(std::sync::Arc::new);
+        }
+        queued
     }
 }
 
@@ -272,11 +424,14 @@ impl<'c> Queued<'c> {
         Queued {
             counts: on.then_some(counts),
             left: std::sync::atomic::AtomicUsize::new(count),
+            kept: None,
         }
     }
 
-    /// one of the batch's hashes begun.
-    pub(crate) fn begun(&self) {
+    /// one of the batch's hashes begun on this thread, which may take a reader the batch kept
+    /// while the result lives.
+    #[must_use = "the hash may take a reader its batch kept only while this lives"]
+    pub(crate) fn begun(&self) -> Begun {
         if let Some(counts) = self.counts
             && self
                 .left
@@ -287,6 +442,7 @@ impl<'c> Queued<'c> {
         {
             counts.queued.fetch_sub(1, Ordering::Relaxed);
         }
+        Begun::of(self.kept.clone())
     }
 }
 
@@ -338,27 +494,30 @@ fn alone() -> bool {
 /// whether a read ahead was told in the debug log yet, once a run.
 static TOLD_AHEAD: std::sync::Once = std::sync::Once::new();
 
-/// when a hash may hand its reads to a second thread: while `alone` says so and one of `readers`
-/// is free, of `most`.
+/// when a hash may hand its reads to a second thread: at its first block when `kept` gives it a
+/// reader its batch kept, else while `alone` says so and one of `readers` is free, of `most`.
 struct Admission<'a> {
+    kept: &'a dyn Fn(u64) -> Option<Reader<'a>>,
     alone: &'a dyn Fn() -> bool,
     readers: &'a std::sync::atomic::AtomicUsize,
     most: usize,
 }
 
 /// hands `take` the blocks `fill` reads into `block`, in order, until `fill` reads nothing or fails
-/// or `take` breaks with a value, as one loop of reading and hashing would. the reads go in turn on
-/// this thread until this hash is the only one in progress, with none queued, and the reading
-/// thread is free; then the rest go a block ahead on that thread. so a lone large file gets the
-/// thread after its first block, and the large files of a batch never, until the last runs alone.
-/// a thread once started reads to the end, whatever hashes begin after it. one the system refuses
-/// leaves the rest in turn.
+/// or `take` breaks with a value, as one loop of reading and hashing would. one of a batch's two
+/// largest hashes, given a reader the batch kept, reads a block ahead on that thread from its first
+/// block. any other reads in turn on this thread until it is the only hash in progress, with none
+/// queued, and the reading thread is free; then the rest go a block ahead on that thread. so a
+/// lone large file gets the thread after its first block, and a batch's other large files never,
+/// until the last runs alone. a thread once started reads to the end, whatever hashes begin after
+/// it. one the system refuses leaves the rest in turn.
 pub(crate) fn taken_ahead<B>(
     block: Block,
     fill: &mut (dyn FnMut(&mut [u8]) -> io::Result<usize> + Send),
     take: &mut dyn FnMut(&[u8]) -> std::ops::ControlFlow<B>,
 ) -> io::Result<Option<B>> {
     let admission = Admission {
+        kept: &kept_reader,
         alone: &alone,
         readers: &READERS,
         most: AHEAD_READERS,
@@ -373,16 +532,30 @@ fn taken_ahead_when<B>(
     admission: &Admission<'_>,
 ) -> io::Result<Option<B>> {
     let mut refused = false;
+    let mut first = true;
     loop {
-        if !refused
-            && (admission.alone)()
-            && let Some(_reader) = Reader::take(admission.readers, admission.most)
-        {
-            match read_ahead_with(block, fill, take) {
-                Ok(taken) => return taken,
-                Err(back) => {
-                    block = back;
-                    refused = true;
+        if !refused {
+            // a reader its batch kept goes to one of its largest hashes at its first block
+            let kept = if std::mem::take(&mut first) {
+                (admission.kept)(block.most)
+            } else {
+                None
+            };
+            if kept.is_some() {
+                tracing::debug!("a hash reads ahead on a reader its batch kept");
+            }
+            let reader = kept.or_else(|| {
+                (admission.alone)()
+                    .then(|| Reader::take(admission.readers, admission.most))
+                    .flatten()
+            });
+            if let Some(_reader) = reader {
+                match read_ahead_with(block, fill, take) {
+                    Ok(taken) => return taken,
+                    Err(back) => {
+                        block = back;
+                        refused = true;
+                    }
                 }
             }
         }
@@ -1121,6 +1294,7 @@ mod tests {
                 made >= from && until.is_none_or(|until| made < until)
             };
             let admission = Admission {
+                kept: &|_| None,
                 alone: &alone,
                 readers: &readers,
                 most: 1,
@@ -1157,6 +1331,163 @@ mod tests {
         }
     }
 
+    /// a batch keeps a reading thread for each of its large files, all of them or none: none for no
+    /// large file, more than a batch keeps, or too few places free; the ones no hash took go back
+    /// when the batch ends, and each one taken when its hash does.
+    #[test]
+    fn a_batch_keeps_a_reader_for_each_large_file_or_none() {
+        let readers = std::sync::atomic::AtomicUsize::new(0);
+        assert!(Kept::all_or_none(Vec::new(), &readers, 4).is_none());
+        assert!(Kept::all_or_none(vec![0; BATCH_LARGE + 1], &readers, 4).is_none());
+        let two = Kept::all_or_none(vec![0, 0], &readers, 2).unwrap();
+        assert_eq!(readers.load(Ordering::Relaxed), 2);
+        assert!(Kept::all_or_none(vec![0], &readers, 2).is_none());
+        let taken = two.take(1).unwrap();
+        drop(two);
+        assert_eq!(readers.load(Ordering::Relaxed), 1);
+        drop(taken);
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+        let one = Kept::all_or_none(vec![0], &readers, 2).unwrap();
+        assert!(one.take(1).is_some());
+        assert!(one.take(1).is_none());
+        drop(one);
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+    }
+
+    /// a batch keeps a reader for each of its two largest files, when they are large, which only a
+    /// hash of that size takes, however many other large files it holds and whatever order they
+    /// begin in.
+    #[test]
+    fn a_batch_keeps_readers_for_its_two_largest_files() {
+        const MIB: u64 = 1 << 20;
+        let typical = [5 * MIB, 524 * MIB, 52 * MIB, 524 * MIB, 52 * MIB, 1024];
+        assert_eq!(largest(typical), [524 * MIB, 524 * MIB]);
+        assert_eq!(largest([600 * MIB, 1024]), [600 * MIB]);
+        assert_eq!(largest([1024; 3]), Vec::<u64>::new());
+        assert_eq!(largest([AHEAD_FROM - 1, AHEAD_FROM - 2]), [AHEAD_FROM - 1]);
+        let readers = std::sync::atomic::AtomicUsize::new(0);
+        let kept = Kept::all_or_none(largest(typical), &readers, 2).unwrap();
+        assert!(
+            kept.take(52 * MIB + 1).is_none(),
+            "a medium file takes none"
+        );
+        assert!(kept.take(524 * MIB + 1).is_some());
+        assert!(kept.take(524 * MIB + 1).is_some());
+        assert!(kept.take(524 * MIB + 1).is_none());
+        drop(kept);
+        // the second-largest files beginning first leave the largest its own
+        let kept = Kept::all_or_none(largest([10 * MIB, 8 * MIB, 8 * MIB]), &readers, 2).unwrap();
+        assert!(kept.take(8 * MIB + 1).is_some());
+        assert!(kept.take(8 * MIB + 1).is_none());
+        assert!(kept.take(10 * MIB + 1).is_some());
+    }
+
+    /// with a shipped build's caps, batches and a lone hash take readers from one count: a batch
+    /// keeping two leaves no place for another batch's or a lone hash's, one ending unused gives
+    /// back what it kept, so the next keeps its own, and one ending with a reader taken gives back
+    /// only the untaken, never the one a hash still reads on.
+    #[test]
+    fn batches_and_a_lone_hash_take_readers_from_one_count() {
+        let readers = std::sync::atomic::AtomicUsize::new(0);
+        let count = || readers.load(Ordering::Relaxed);
+        let batch = |large| Kept::all_or_none(vec![0; large], &readers, SHIPPED_BATCH_READERS);
+        let lone = || Reader::take(&readers, SHIPPED_AHEAD_READERS);
+        let a = batch(2).unwrap();
+        assert!(batch(1).is_none() && batch(2).is_none() && lone().is_none());
+        assert_eq!(count(), 2);
+        drop(a);
+        assert_eq!(count(), 0);
+        let c = batch(2).unwrap();
+        assert_eq!(count(), 2);
+        let reading = c.take(1).unwrap();
+        drop(c);
+        assert_eq!(count(), 1);
+        assert!(lone().is_none());
+        let d = batch(1).unwrap();
+        assert!(batch(1).is_none() && lone().is_none());
+        drop(d);
+        assert_eq!(count(), 1);
+        drop(reading);
+        assert_eq!(count(), 0);
+        let alone = lone().unwrap();
+        assert!(batch(2).is_none());
+        let e = batch(1).unwrap();
+        assert_eq!(count(), 2);
+        drop((alone, e));
+        assert_eq!(count(), 0);
+    }
+
+    /// a large hash given a reader its batch kept reads ahead from its first block, though other
+    /// hashes run beside it; the batch's next large hash finds none left and reads in turn.
+    #[test]
+    fn a_batch_s_large_hash_reads_ahead_from_its_first_block() {
+        let bytes: Vec<u8> = (0..=250).cycle().take(3 * BLOCK + 3).collect();
+        let here = std::thread::current().id();
+        let readers = std::sync::atomic::AtomicUsize::new(0);
+        let kept = Kept::all_or_none(vec![bytes.len() as u64], &readers, 2).unwrap();
+        let admission = Admission {
+            kept: &|most| kept.take(most),
+            alone: &|| false,
+            readers: &readers,
+            most: 1,
+        };
+        for ahead in [true, false] {
+            let mut input = bytes.as_slice();
+            let mut fills = Vec::new();
+            let mut taken = Vec::new();
+            let ended = taken_ahead_when(
+                Block::sized(bytes.len() as u64 + 1),
+                &mut |buffer| {
+                    fills.push(std::thread::current().id());
+                    input.read(buffer)
+                },
+                &mut |block| {
+                    taken.extend_from_slice(block);
+                    std::ops::ControlFlow::<()>::Continue(())
+                },
+                &admission,
+            );
+            assert_eq!(ended.unwrap(), None);
+            assert_eq!(taken, bytes, "{ahead}");
+            assert!(fills.iter().all(|id| (*id != here) == ahead), "{ahead}");
+        }
+        drop(kept);
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+    }
+
+    /// while one of a batch's hashes runs on a thread it may take each reader its batch kept, once,
+    /// and none after; the batch's untaken readers go back when it ends.
+    #[test]
+    fn a_begun_hash_takes_a_reader_its_batch_kept_once() {
+        let readers: &'static std::sync::atomic::AtomicUsize =
+            Box::leak(Box::new(std::sync::atomic::AtomicUsize::new(0)));
+        let counts: &'static Counts = Box::leak(Box::new(Counts::new()));
+        let mut queued = Queued::of_in(counts, true, 3);
+        queued.kept = Kept::all_or_none(vec![0, 0], readers, 2).map(std::sync::Arc::new);
+        assert_eq!(readers.load(Ordering::Relaxed), 2);
+        assert!(kept_reader(1).is_none(), "no batch's hash runs here yet");
+        {
+            let _begun = queued.begun();
+            let (first, second) = (kept_reader(1), kept_reader(1));
+            assert!(first.is_some() && second.is_some());
+            assert!(kept_reader(1).is_none());
+            assert_eq!(readers.load(Ordering::Relaxed), 2);
+        }
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+        assert!(kept_reader(1).is_none(), "no batch's hash runs here now");
+        drop(queued);
+        // a batch whose hashes take one of its two readers gives the other back as it ends
+        let mut queued = Queued::of_in(counts, true, 3);
+        queued.kept = Kept::all_or_none(vec![0, 0], readers, 2).map(std::sync::Arc::new);
+        {
+            let _begun = queued.begun();
+            assert!(kept_reader(1).is_some());
+        }
+        assert_eq!(readers.load(Ordering::Relaxed), 1);
+        drop(queued);
+        assert_eq!(readers.load(Ordering::Relaxed), 0);
+    }
+
     /// the reading thread's place is given back however a read ahead ends: at the end, at a failed
     /// read, and at a taker that stops, so the next large hash may take it.
     #[test]
@@ -1164,6 +1495,7 @@ mod tests {
         let bytes = vec![5_u8; 4 * BLOCK];
         let readers = std::sync::atomic::AtomicUsize::new(0);
         let admission = Admission {
+            kept: &|_| None,
             alone: &|| true,
             readers: &readers,
             most: 1,
@@ -1205,14 +1537,14 @@ mod tests {
         assert!(counts.alone());
         let batch = Queued::of_in(&counts, true, 2);
         assert!(!counts.alone());
-        batch.begun();
+        drop(batch.begun());
         assert!(!counts.alone());
-        batch.begun();
-        batch.begun();
+        drop(batch.begun());
+        drop(batch.begun());
         assert!(counts.alone());
         drop(batch);
         let unbegun = Queued::of_in(&counts, true, 3);
-        unbegun.begun();
+        drop(unbegun.begun());
         assert!(!counts.alone());
         drop(unbegun);
         assert!(counts.alone());
@@ -1222,7 +1554,7 @@ mod tests {
             Hashing::begin_in(&counts, false),
             Queued::of_in(&counts, false, 5),
         );
-        off.1.begun();
+        drop(off.1.begun());
         assert_eq!(
             (
                 counts.hashing.load(Ordering::Relaxed),

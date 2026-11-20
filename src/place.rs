@@ -1466,14 +1466,32 @@ pub(crate) fn run_hashes<T: Sync, R: Send>(
     ahead: Option<&ReadAhead<'_, T>>,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
+    run_hashes_sized(items, &|_| 0, bytes, cap, ahead, job)
+}
+
+/// [`run_hashes`] of items of the sizes `size` gives, so the batch may keep a reading thread for
+/// each of its two largest files that are large, both or none.
+pub(crate) fn run_hashes_sized<T: Sync, R: Send>(
+    items: &[T],
+    size: &dyn Fn(&T) -> u64,
+    bytes: u64,
+    cap: Threads,
+    ahead: Option<&ReadAhead<'_, T>>,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
     let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
-    let queued = crate::digest::Queued::of(items.len());
+    let largest = if crate::digest::batches_read_ahead() {
+        crate::digest::largest(items.iter().map(size))
+    } else {
+        Vec::new()
+    };
+    let queued = crate::digest::Queued::of_sized(items.len(), largest);
     run_work(
         items,
         hash_workers(items.len(), bytes, processors, cap),
         ahead,
         |item| {
-            queued.begun();
+            let _begun = queued.begun();
             job(item)
         },
     )

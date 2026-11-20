@@ -320,7 +320,7 @@ every layer shares these small types and limits; [primitives](primitives.md) giv
 
 | file | owns | start at | other items |
 |---|---|---|---|
-| `src/digest.rs` | typed digests: SHA-256, the identity of a file, and MD5, which is checked but never trusted as one; incremental hashing, and a large file's reads a block ahead of its hash on a second thread while it hashes alone | `Sha256`, `Hasher` | `Md5`, `from_hex`, `of_reader`, `sha256`, `read_ahead`, `taken_ahead`, `Hashing`, `Queued` |
+| `src/digest.rs` | typed digests: SHA-256, the identity of a file, and MD5, which is checked but never trusted as one; incremental hashing, and a large file's reads a block ahead of its hash on a second thread while it hashes alone or is one of its batch's two largest | `Sha256`, `Hasher` | `Md5`, `from_hex`, `of_reader`, `sha256`, `read_ahead`, `taken_ahead`, `Hashing`, `Queued`, `largest` |
 | `src/name.rs` | names windows and linux can both store: suggested names, path checks, dataset names, typo suggestions, alias folding, and `folder/name` as listings write it | `sanitize`, `fold` | `dataset_name`, `title_name`, `reference_name`, `escapes`, `metadata`, `unstorable`, `closest`, `joined` |
 | `src/glob.rs` | `select` and `exclude` patterns, matched against a whole path inside a dataset | `Glob` | `Glob::new`, `matches`, `is_top_level_only` |
 | `src/units.rs` | one way to write sizes, rates, durations, counts, lists and paths everywhere: lists of names cut to the first few, and sizes typed as `512M` read back | `size`, `duration` | `rate`, `speed`, `count`, `clip`, `clip_middle`, `grouped`, `listed`, `some_of`, `bytes` |

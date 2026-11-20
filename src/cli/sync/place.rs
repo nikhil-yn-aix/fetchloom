@@ -1375,8 +1375,9 @@ impl<'a> Placing<'a> {
         let path: place::FilePath<'_, (Sha256, u64, &str)> =
             &|(digest, ..)| std::borrow::Cow::Owned(cache.object_path(digest));
         let ahead = place::ReadAhead::when_cold(&objects, path);
-        let intact = place::run_hashes(
+        let intact = place::run_hashes_sized(
             &objects,
+            &|(_, size, _)| *size,
             total,
             self.survey.threads,
             ahead.as_ref(),
