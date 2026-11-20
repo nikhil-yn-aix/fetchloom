@@ -25,7 +25,7 @@ fetchloom add [options] -i <file>
 |---|---|
 | `--as <name>` | choose the dataset name and its default folder under `data/`; one link only |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more patterns |
-| `--exclude <glob>` | drop matching files; repeat for more exclusions |
+| `--exclude <glob>` | drop matching files; repeat for more exclusions. with one link, a web server's folder that a pattern leaves out whole, as `big/**` does `big`, is not listed |
 | `--no-extract` | keep archives packed and record `extract = false`; webdataset loaders read `.tar` shards packed |
 | `--decompress` | place each single `.gz`, `.bz2`, `.xz` or `.zst` file decompressed, under its name without the ending, and record `decompress = true`; a compressed tar such as `.tar.gz` stays extract's |
 | `--web-page` | pin the web page a link answers with as the data and record `web_page = true`; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |

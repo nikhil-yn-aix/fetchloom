@@ -1579,9 +1579,10 @@ impl<'a> Loop<'a> {
             }
             let net = self.net.clone();
             let select = select.clone();
+            let exclude = entry.source.exclude.clone();
             let reference = parsed.reference.taking_page(entry.source.web_page);
             tasks.spawn(async move {
-                let listing = reference.resolve_in(&*net, &select).await;
+                let listing = reference.resolve_within(&*net, &select, &exclude).await;
                 (name, listing)
             });
         }
@@ -2693,16 +2694,18 @@ fn first_pin(
 pub(super) use draft::{filter, without_files};
 
 /// resolves a reference, with progress or plain lines while its source takes its time, listing
-/// only the folders that may hold a file the `select` patterns match where the source can.
+/// only the folders that may hold a file the `select` patterns match where the source can, and
+/// no folder of a web server an `exclude` pattern leaves out whole.
 pub(super) async fn resolve(
     output: &Output,
     reference: &Reference,
     net: &Net,
     select: &[crate::glob::Glob],
+    exclude: &[crate::glob::Glob],
 ) -> Result<Listing, Error> {
     let _waiting =
         (!resolves_locally(reference)).then(|| output.wait("Resolving", reference.to_string()));
-    reference.resolve_in(net, select).await
+    reference.resolve_within(net, select, exclude).await
 }
 
 /// whether a reference resolves without asking anyone, as a plain link does. such a link may

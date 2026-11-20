@@ -461,7 +461,8 @@ async fn one_link(
     } else {
         net.trust(parsed.reference.written_origin());
         let select = crate::glob::patterns_of(&wanted_patterns(args, &parsed));
-        let listing = engine::resolve(&context.output, &parsed.reference, net, &select)
+        let pruning = crate::glob::patterns_of(&args.filter.exclude);
+        let listing = engine::resolve(&context.output, &parsed.reference, net, &select, &pruning)
             .await
             .map_err(|error| unlisted_offline(context.offline, error))?;
         let files = told(context, args, &parsed, &listing)?;

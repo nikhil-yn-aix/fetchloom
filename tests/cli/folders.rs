@@ -1530,3 +1530,76 @@ fn listings_asked_together_add_as_listings_asked_in_turn() -> Result {
     );
     Ok(())
 }
+
+/// an `--exclude` that leaves out a folder whole, as `big/**`, keeps the walk from asking for
+/// that folder's listing, in the add, its dry run and a later upgrade by data.toml's exclude.
+/// they plan and pin what excludes that leave out the same files but may not leave out a folder
+/// whole, `big/*` and `big/*/*`, plan and pin listing it.
+#[test]
+fn an_exclude_of_a_whole_folder_adds_without_its_listing() -> Result {
+    let server = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            nginx("/data/", &["iris.csv", "sub/", "big/"]),
+        ),
+        ("/data/sub/".to_owned(), nginx("/data/sub/", &["tips.csv"])),
+        (
+            "/data/big/".to_owned(),
+            nginx("/data/big/", &["new.csv", "more/"]),
+        ),
+        (
+            "/data/big/more/".to_owned(),
+            nginx("/data/big/more/", &["new.csv"]),
+        ),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/sub/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+        ("/data/big/new.csv".to_owned(), file(NEW, "\"n1\"")),
+        ("/data/big/more/new.csv".to_owned(), file(NEW, "\"n2\"")),
+    ])?;
+    let folder = format!("{}/data/", server.url);
+    let mut arms = Vec::new();
+    for excluded in [
+        &["--exclude", "big/**"][..],
+        &["--exclude", "big/*", "--exclude", "big/*/*"][..],
+    ] {
+        let sandbox = Sandbox::new()?;
+        sandbox.allow(&server.url);
+        let before = server.targets().len();
+        let run = |args: &[&str]| -> Result<std::process::Output> {
+            let output = sandbox.command(args).output()?;
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{excluded:?} {args:?}: {}",
+                text(&output.stderr)?
+            );
+            Ok(output)
+        };
+        let dry = run(&[&["--json", "add", &folder, "--dry-run"][..], excluded].concat())?;
+        run(&[&["add", &folder][..], excluded].concat())?;
+        run(&["lock", "--upgrade"])?;
+        let asked: Vec<String> = server.targets()[before..].to_vec();
+        let listed_big = asked.iter().any(|target| target.starts_with("/data/big/"));
+        assert_eq!(listed_big, excluded.len() > 2, "{excluded:?}: {asked:?}");
+        let tops = asked.iter().filter(|target| *target == "/data/").count();
+        assert_eq!(
+            tops, 3,
+            "the dry run, the add and the upgrade each list: {asked:?}"
+        );
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        let lock: Vec<String> = lock
+            .lines()
+            .filter(|line| !line.starts_with("locked = ") && !line.starts_with("spec = "))
+            .map(str::to_owned)
+            .collect();
+        arms.push((json(&dry)?["result"]["changes"].clone(), lock));
+    }
+    assert_eq!(arms[1], arms[0]);
+    let lock = &arms[0].1;
+    assert!(
+        lock.iter().any(|line| line.contains("sub/tips.csv")),
+        "{lock:?}"
+    );
+    assert!(!lock.iter().any(|line| line.contains("big/")), "{lock:?}");
+    Ok(())
+}

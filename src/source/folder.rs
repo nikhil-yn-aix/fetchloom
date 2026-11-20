@@ -759,9 +759,15 @@ impl Folder {
     }
 
     /// every file in the folder and in the folders inside it, by their listings, or only those in
-    /// the folders the `select` patterns may reach, when each says where its files lie. a link
-    /// ending in `/` that answers with a file, not a page, is that file's plain link.
-    pub(super) async fn resolve(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
+    /// the folders the `select` patterns may reach, when each says where its files lie, and none
+    /// in a folder an `exclude` pattern leaves out whole, which is not listed. a link ending in `/`
+    /// that answers with a file, not a page, is that file's plain link.
+    pub(super) async fn resolve(
+        &self,
+        api: &impl Api,
+        select: &[Glob],
+        exclude: &[Glob],
+    ) -> Result<Listing, Error> {
         let response = api.get_with(&self.url, LISTING).await?;
         self.answered(&response, &self.url, "")?;
         let text = response.text();
@@ -782,6 +788,8 @@ impl Folder {
             folder: self,
             most: api.most_files(),
             select: if scopes.is_some() { select } else { &[] },
+            exclude,
+            pruned: 0,
             files: Vec::new(),
             folders: VecDeque::new(),
             counted: 0,
@@ -800,7 +808,7 @@ impl Folder {
             let index = self.listed(&response.text(), &response, &url, &path)?;
             walk.add(&path, &url, index)?;
         }
-        if walk.files.is_empty() && scopes.is_none() {
+        if walk.files.is_empty() && scopes.is_none() && walk.pruned == 0 {
             return Err(Error::new(
                 Kind::ReferenceUnresolved,
                 format!("{} lists no files", self.shown()),
@@ -1066,6 +1074,10 @@ struct Walk<'a> {
     folder: &'a Folder,
     most: usize,
     select: &'a [Glob],
+    /// the patterns whose files are not wanted, and how many folders one left out whole, which
+    /// the walk did not list.
+    exclude: &'a [Glob],
+    pruned: usize,
     files: Vec<Remote>,
     folders: VecDeque<(String, Url)>,
     /// the folders listed or waiting to be, which count against the most files as files do.
@@ -1093,8 +1105,12 @@ impl Walk<'_> {
             let at = crate::name::joined(path, &entry.name);
             if entry.folder {
                 if self.opens(&at) {
-                    self.counted += 1;
-                    self.folders.push_back((at, entry.link));
+                    if self.prunes(&at) {
+                        self.pruned += 1;
+                    } else {
+                        self.counted += 1;
+                        self.folders.push_back((at, entry.link));
+                    }
                 }
             } else if self.keeps(&at) {
                 if let Some(about) = entry.about {
@@ -1164,6 +1180,12 @@ impl Walk<'_> {
     /// whether the folder at `path` may hold a wanted file, at any depth.
     fn opens(&self, path: &str) -> bool {
         self.select.is_empty() || self.select.iter().any(|glob| glob.may_reach(path))
+    }
+
+    /// whether an exclude pattern leaves out every path below the folder at `path`, so its
+    /// listing holds nothing wanted.
+    fn prunes(&self, path: &str) -> bool {
+        self.exclude.iter().any(|glob| glob.covers(path))
     }
 
     /// whether the file at `path` lies in the folders a pattern's scope names, so the listing

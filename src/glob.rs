@@ -146,6 +146,54 @@ impl Glob {
         (folders.len() <= names.len() || deep) && Glob::lead(&names, &folders)
     }
 
+    /// whether the pattern matches every path below `folder`, inside a dataset, at any depth, so
+    /// excluding it leaves nothing there to list: `access/**` covers `access` and each folder in
+    /// it, `**/tmp/**` every `tmp`, and `**` every folder; `access/*` covers none, as it leaves a
+    /// folder's folders in.
+    pub(crate) fn covers(&self, folder: &str) -> bool {
+        // where the parts may stand after the folder's names: the next part to match
+        let mut at = self.past_any(&[0]);
+        for name in folder.split('/').filter(|name| !name.is_empty()) {
+            let next: Vec<usize> = at
+                .iter()
+                .filter_map(|&part| match self.parts.get(part)? {
+                    Part::Any => Some(part),
+                    Part::Name(tokens) => matches_name(tokens, name).then_some(part + 1),
+                })
+                .collect();
+            at = self.past_any(&next);
+        }
+        at.iter().any(|&part| {
+            let rest = &self.parts[part..];
+            let names = rest
+                .iter()
+                .filter(|part| matches!(part, Part::Name(_)))
+                .count();
+            rest.iter().any(|part| matches!(part, Part::Any))
+                && names <= 1
+                && rest.iter().all(|part| match part {
+                    Part::Any => true,
+                    Part::Name(tokens) => tokens.iter().all(|token| *token == Token::Many),
+                })
+        })
+    }
+
+    /// `at`, and where the parts may stand once each `**` there matches no folder.
+    fn past_any(&self, at: &[usize]) -> Vec<usize> {
+        let mut reached = Vec::new();
+        for &start in at {
+            let mut part = start;
+            reached.push(part);
+            while matches!(self.parts.get(part), Some(Part::Any)) {
+                part += 1;
+                reached.push(part);
+            }
+        }
+        reached.sort_unstable();
+        reached.dedup();
+        reached
+    }
+
     /// whether the file at `path` lies in the folders [`Glob::scope`] names: directly in one,
     /// or at any depth below one when the pattern has a `**`.
     pub(crate) fn scope_holds(&self, path: &str) -> bool {
@@ -460,6 +508,52 @@ mod tests {
 
     fn matches(pattern: &str, path: &str) -> bool {
         Glob::new(pattern).unwrap().matches(path)
+    }
+
+    /// a pattern covers a folder when it matches every path below it, at every depth, as an
+    /// exclude that leaves nothing in it to list; any name or depth it leaves out, or a folder
+    /// beside the one it names, is not covered.
+    #[test]
+    fn a_pattern_covers_a_folder_whose_every_path_it_matches() {
+        for (pattern, folder, covered) in [
+            ("access/**", "access", true),
+            ("access/**", "access/2023", true),
+            ("access/**", "", false),
+            ("access/**", "archive", false),
+            ("access/**", "accessible", false),
+            ("access/**/*", "access", true),
+            ("access/*/**", "access", true),
+            ("access/*/**", "access/2023", true),
+            ("access/*", "access", false),
+            ("access/*.csv", "access", false),
+            ("**", "", true),
+            ("**", "a/b", true),
+            ("**/tmp/**", "a/tmp", true),
+            ("**/tmp/**", "tmp", true),
+            ("**/tmp/**", "a/tmpx", false),
+            ("**/tmp/**", "tmp/a", true),
+            ("*/**", "a", true),
+            ("*/**", "", true),
+            ("*/*/**", "", false),
+            ("**/*", "x", true),
+            ("**/*.csv", "x", false),
+            ("a?c/**", "abc", true),
+            ("[ab]/**", "c", false),
+            ("access", "access", false),
+        ] {
+            let glob = Glob::new(pattern).unwrap();
+            assert_eq!(glob.covers(folder), covered, "{pattern} over {folder:?}");
+            if covered {
+                for below in ["x", "x/y", ".z", "a b/c.csv"] {
+                    let path = if folder.is_empty() {
+                        below.to_owned()
+                    } else {
+                        format!("{folder}/{below}")
+                    };
+                    assert!(glob.matches(&path), "{pattern} misses {path}");
+                }
+            }
+        }
     }
 
     /// each word a shell would split or expand reads back whole from the flag, in powershell too,

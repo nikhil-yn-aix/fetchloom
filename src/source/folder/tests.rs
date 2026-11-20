@@ -380,7 +380,7 @@ fn a_folder_linked_without_its_slash_is_listed_as_a_folder() {
     let recorded = Recorded::default()
         .on(DATA, 200, top.as_bytes().to_vec())
         .on(&sub, 200, nginx(&sub, &["tips.csv"]));
-    let listing = block_on(folder(DATA).resolve(&recorded, &[])).unwrap();
+    let listing = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap();
     assert_eq!(paths(&listing), ["iris.csv", "sub/tips.csv"]);
     assert_eq!(listing.warnings, Vec::<String>::new());
     assert_eq!(recorded.asked(), [listed(DATA), listed(&sub)]);
@@ -472,7 +472,7 @@ fn a_listing_titled_otherwise_reads_only_by_its_own_folder() {
         let recorded = Recorded::default()
             .on(DATA, 200, page(parent, "x.csv"))
             .redirected(DATA, "https://other.example/data/");
-        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
         assert_eq!(error.kind, Kind::SourceInvalid, "{parent}");
     }
 }
@@ -627,7 +627,7 @@ fn a_link_is_read_with_its_character_references_undone() {
 #[test]
 fn a_folder_lists_every_file_below_it() {
     let recorded = nested();
-    let listing = block_on(folder(DATA).resolve(&recorded, &[])).unwrap();
+    let listing = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap();
     assert_eq!(listing.resolved, Reference::Folder(folder(DATA)));
     assert_eq!(listing.access, Access::Unknown);
     assert_eq!(paths(&listing), ["iris.csv", "sub/tips.csv"]);
@@ -667,7 +667,7 @@ fn a_pattern_lists_only_the_folders_it_reaches() {
     ] {
         let recorded = nested();
         let select = [Glob::new(pattern).unwrap()];
-        let listing = block_on(folder(DATA).resolve(&recorded, &select)).unwrap();
+        let listing = block_on(folder(DATA).resolve(&recorded, &select, &[])).unwrap();
         let asked: Vec<String> = asked.iter().map(|link| listed(link)).collect();
         assert_eq!(recorded.asked(), asked, "{pattern}");
         assert_eq!(paths(&listing), files, "{pattern}");
@@ -683,7 +683,7 @@ fn a_folder_that_lists_a_folder_above_it_again_is_refused() {
     let recorded = Recorded::default()
         .on(DATA, 200, nginx(DATA, &["a.csv", "loop/"]))
         .on(&looped, 200, nginx(&looped, &["a.csv", "loop/"]));
-    let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+    let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert_eq!(
         error.message,
@@ -701,7 +701,7 @@ fn a_folder_that_lists_a_folder_above_it_again_is_refused() {
 fn a_redirect_out_of_the_folder_and_too_many_entries_are_refused() {
     let elsewhere = "https://example.org/elsewhere/";
     let recorded = nested().redirected(&format!("{DATA}sub/"), elsewhere);
-    let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+    let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert_eq!(
         error.message,
@@ -714,12 +714,12 @@ fn a_redirect_out_of_the_folder_and_too_many_entries_are_refused() {
     let recorded = Recorded::default()
         .on(http, 200, titled.as_bytes().to_vec())
         .redirected(http, DATA);
-    let error = block_on(folder(http).resolve(&recorded, &[])).unwrap_err();
+    let error = block_on(folder(http).resolve(&recorded, &[], &[])).unwrap_err();
     assert_eq!(
         error.message,
         format!("{http} sends fetchloom on to {DATA}, outside the folder")
     );
-    let error = block_on(folder(DATA).resolve(&nested().most(1), &[])).unwrap_err();
+    let error = block_on(folder(DATA).resolve(&nested().most(1), &[], &[])).unwrap_err();
     assert!(
         error.message.contains("lists more than 1 file"),
         "{}",
@@ -732,7 +732,7 @@ fn a_redirect_out_of_the_folder_and_too_many_entries_are_refused() {
 #[test]
 fn a_folder_link_that_answers_with_a_file_is_that_file() {
     let recorded = Recorded::default().on(DATA, 200, b"sepal,petal\n5.1,1.4\n".to_vec());
-    let listing = block_on(folder(DATA).resolve(&recorded, &[])).unwrap();
+    let listing = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap();
     assert_eq!(listing.resolved, Reference::Url(url(DATA)));
     assert_eq!(listing.files.len(), 1);
     assert!(listing.files[0].named_by_server);
@@ -793,7 +793,7 @@ fn answers_that_are_no_listing_end_in_what_to_do() {
             ),
         ),
     ] {
-        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
         assert_eq!((error.kind, error.message), (kind, message.clone()));
         assert!(error.help.is_some(), "{message}");
     }
@@ -804,7 +804,7 @@ fn answers_that_are_no_listing_end_in_what_to_do() {
         let recorded = Recorded::default()
             .on(DATA, 200, page.to_vec())
             .redirected(DATA, bucket_page);
-        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
         assert!(
             error.message.contains("S3 bucket noaa-global-hourly-pds"),
             "{bucket_page}"
@@ -826,7 +826,7 @@ fn answers_that_are_no_listing_end_in_what_to_do() {
         let recorded = Recorded::default()
             .on(DATA, 200, page.to_vec())
             .redirected(DATA, elsewhere);
-        let error = block_on(folder(DATA).resolve(&recorded, &[])).unwrap_err();
+        let error = block_on(folder(DATA).resolve(&recorded, &[], &[])).unwrap_err();
         assert_eq!(
             error.message,
             format!("{DATA} sends fetchloom on to {elsewhere}, outside the folder")
@@ -962,12 +962,17 @@ impl Api for Overlapping {
     }
 }
 
-/// what a walk of [`DATA`] over `recorded`, asking for up to `window` listings at once, ends
-/// in: its files, warnings, folders and rounded sizes, or its error, then the requests it made
-/// and the most that waited together.
-fn walked(recorded: &Recorded, select: &[Glob], window: usize) -> (String, Vec<String>, usize) {
+/// what a walk of [`DATA`] over `recorded`, with `select` and `exclude` patterns, asking for up
+/// to `window` listings at once, ends in: its files, warnings, folders and rounded sizes, or its
+/// error, then the requests it made and the most that waited together.
+fn walked(
+    recorded: &Recorded,
+    select: &[Glob],
+    exclude: &[Glob],
+    window: usize,
+) -> (String, Vec<String>, usize) {
     let network = Overlapping::new(recorded, window);
-    let ended = match block_on(folder(DATA).resolve(&network, select)) {
+    let ended = match block_on(folder(DATA).resolve(&network, select, exclude)) {
         Ok(listing) => {
             let mut rounded: Vec<_> = listing.rounded.unwrap_or_default().into_iter().collect();
             rounded.sort();
@@ -1079,8 +1084,8 @@ fn a_walk_asking_for_listings_together_ends_as_one_asking_in_turn() {
         ("too many files", wide().most(5), Vec::new(), false),
     ];
     for (case, recorded, select, ends_alike) in cases {
-        let (one, one_asked, one_most) = walked(&recorded, &select, 1);
-        let (four, four_asked, _) = walked(&recorded, &select, 4);
+        let (one, one_asked, one_most) = walked(&recorded, &select, &[], 1);
+        let (four, four_asked, _) = walked(&recorded, &select, &[], 4);
         assert_eq!(one.starts_with('['), ends_alike, "{case}: {one}");
         assert_eq!(four, one, "{case}");
         assert_eq!(one_most, 1, "{case}");
@@ -1097,8 +1102,72 @@ fn a_walk_asking_for_listings_together_ends_as_one_asking_in_turn() {
 #[test]
 fn a_walk_asks_for_as_many_listings_at_once_as_its_window() {
     for (window, most) in [(1, 1), (2, 2), (4, 4)] {
-        let (_, asked, waited) = walked(&wide(), &[], window);
+        let (_, asked, waited) = walked(&wide(), &[], &[], window);
         assert_eq!(waited, most, "a window of {window}");
         assert_eq!(asked.len(), 7, "a window of {window}");
     }
+}
+
+/// an exclude pattern that leaves out a folder whole, as `c/**` or `**/d/**`, stops the walk
+/// asking for that folder's listing, and for those of the folders in it; the files are those the
+/// whole walk lists that the pattern leaves in. one that may leave a file of the folder in, as
+/// `c/*.csv`, lists it.
+#[test]
+fn an_exclude_that_leaves_out_a_folder_whole_is_never_listed() {
+    let all = block_on(folder(DATA).resolve(&wide(), &[], &[])).unwrap();
+    for (pattern, select, unasked) in [
+        ("c/**", None, &["c/", "c/d/"][..]),
+        ("**/d/**", None, &["c/d/"][..]),
+        ("c/*.csv", None, &[][..]),
+        ("e/**", Some("**/*.csv"), &["e/"][..]),
+        ("c/d/**", Some("c/**"), &["c/d/"][..]),
+    ] {
+        let recorded = wide();
+        let exclude = [Glob::new(pattern).unwrap()];
+        let select: Vec<Glob> = select
+            .into_iter()
+            .map(|glob| Glob::new(glob).unwrap())
+            .collect();
+        let listing = block_on(folder(DATA).resolve(&recorded, &select, &exclude)).unwrap();
+        let asked = recorded.asked();
+        for folder in unasked {
+            assert!(
+                !asked.contains(&listed(&format!("{DATA}{folder}"))),
+                "{pattern}: {asked:?}"
+            );
+        }
+        let left_in = |path: &&str| {
+            !exclude[0].matches(path)
+                && (select.is_empty() || select.iter().any(|glob| glob.matches(path)))
+        };
+        let kept: Vec<&str> = paths(&listing).into_iter().filter(left_in).collect();
+        let whole: Vec<&str> = paths(&all).into_iter().filter(left_in).collect();
+        assert_eq!(kept, whole, "{pattern}");
+    }
+}
+
+/// a walk that leaves every folder out lists no file without calling the folder empty, so the
+/// files select and exclude leave are told as for any listing; and a folder left out is never
+/// asked, so one that is gone stops nothing.
+#[test]
+fn a_folder_left_out_whole_is_not_asked_even_when_gone() {
+    let at = |path: &str| format!("{DATA}{path}");
+    let folders = Recorded::default()
+        .on(DATA, 200, nginx(DATA, &["a/", "b/"]))
+        .on(&at("a/"), 200, nginx(&at("a/"), &["a.csv"]))
+        .on(&at("b/"), 200, nginx(&at("b/"), &["b.csv"]));
+    let everything = [Glob::new("**").unwrap()];
+    let listing = block_on(folder(DATA).resolve(&folders, &[], &everything)).unwrap();
+    assert_eq!(paths(&listing), Vec::<&str>::new());
+    assert_eq!(folders.asked(), [listed(DATA)]);
+    let gone = wide().answer(&at("b/"), 404, Vec::new());
+    let error = block_on(folder(DATA).resolve(&gone, &[], &[])).unwrap_err();
+    assert!(
+        error.message.contains("lists the folder b"),
+        "{}",
+        error.message
+    );
+    let without = [Glob::new("b/**").unwrap()];
+    let listing = block_on(folder(DATA).resolve(&gone, &[], &without)).unwrap();
+    assert!(!paths(&listing).iter().any(|path| path.starts_with("b/")));
 }

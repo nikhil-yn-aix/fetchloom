@@ -25,7 +25,7 @@ path = "measurements"
 | `project.data_dir` | folder relative to the project root | `"data"` |
 | `ref` | a reference from [sources](../sources/README.md), `"local"` for [imported files](#imported-files), or `list:` and a list's link or its path in the project for [a list of files](#lists-of-files) | required, nonempty string |
 | `select` | keep files matching any of these patterns | all files; for a `ref` that links one file or folder inside a dataset, that file or everything below that folder |
-| `exclude` | drop files matching any of these patterns | none |
+| `exclude` | drop files matching any of these patterns; a web server's folder one leaves out whole, as `big/**` does `big`, is not listed | none |
 | `extract` | unpack recognized archive names | `true` |
 | `web_page` | pin the web page a link answers with as the file, where a page is otherwise refused; see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) | `false` |
 | `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |

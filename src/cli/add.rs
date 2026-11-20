@@ -1227,11 +1227,12 @@ async fn resolve_add(
         args.filter.select.clone()
     };
     let patterns = crate::glob::patterns_of(&select);
+    let pruning = crate::glob::patterns_of(&args.filter.exclude);
     let listing = match &parsed.reference {
         Reference::List(list) if list.in_project().is_some() => {
             list.read_in(root, crate::net::Api::most_files(net))?
         }
-        reference => engine::resolve(&context.output, reference, net, &patterns).await?,
+        reference => engine::resolve(&context.output, reference, net, &patterns, &pruning).await?,
     };
     let reference = stored_reference(link, parsed);
     // patterns from the command line are checked before any byte moves, and no line of

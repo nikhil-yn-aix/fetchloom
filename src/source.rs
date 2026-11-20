@@ -698,6 +698,17 @@ impl Reference {
         api: &impl Api,
         select: &[Glob],
     ) -> Result<Listing, Error> {
+        self.resolve_within(api, select, &[]).await
+    }
+
+    /// [`Reference::resolve_in`], listing no folder of a web server an `exclude` pattern leaves
+    /// out whole.
+    pub(crate) async fn resolve_within(
+        &self,
+        api: &impl Api,
+        select: &[Glob],
+        exclude: &[Glob],
+    ) -> Result<Listing, Error> {
         let span = tracing::debug_span!("resolve", reference = %self.shown());
         let listing = async {
             match self {
@@ -722,13 +733,13 @@ impl Reference {
                             }
                             None => Err(doi.not_listed(url)),
                         },
-                        other => other.resolve_direct(api, select).await,
+                        other => other.resolve_direct(api, select, exclude).await,
                     };
                     let mut listing = listing.map_err(|error| error.via(doi.to_string()))?;
                     listing.doi.get_or_insert_with(|| doi.name().to_owned());
                     Ok(listing)
                 }
-                other => other.resolve_direct(api, select).await,
+                other => other.resolve_direct(api, select, exclude).await,
             }
         }
         .instrument(span)
@@ -787,7 +798,12 @@ impl Reference {
     /// asks this reference's own source, which may ask only the origins its descriptor names. a
     /// link to a record's page on an invenioRDM install is that record once one request for it
     /// there says so, and otherwise the plain link or the folder it is.
-    async fn resolve_direct(&self, api: &impl Api, select: &[Glob]) -> Result<Listing, Error> {
+    async fn resolve_direct(
+        &self,
+        api: &impl Api,
+        select: &[Glob],
+        exclude: &[Glob],
+    ) -> Result<Listing, Error> {
         let page = match self {
             Reference::Url(url) => Some(url),
             Reference::Folder(folder) => Some(folder.link()),
@@ -837,7 +853,7 @@ impl Reference {
             Reference::S2Paper(paper) => paper.resolve(api).await,
             Reference::S2Dataset(dataset) => dataset.resolve(api).await,
             Reference::List(list) => list.resolve(api).await,
-            Reference::Folder(folder) => folder.resolve(api, select).await,
+            Reference::Folder(folder) => folder.resolve(api, select, exclude).await,
             Reference::Local => Err(local::unlisted()),
         }
     }
