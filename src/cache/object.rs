@@ -487,6 +487,15 @@ impl NewObject {
         self.file.try_clone()
     }
 
+    /// another handle on the object, for [`start_writeback`] elsewhere, once it holds at least
+    /// `from` bytes.
+    pub(crate) fn writeback_handle(&self, from: u64) -> Option<File> {
+        if self.written < from {
+            return None;
+        }
+        self.file.try_clone().ok()
+    }
+
     /// closes the object. with `flush` its bytes reach the disk first, so a power cut cannot
     /// leave it empty; without, the caller flushes a whole batch at once before publishing any.
     pub(crate) fn seal(self, flush: bool) -> io::Result<Sealed> {
@@ -519,6 +528,19 @@ impl NewObject {
             cloned: false,
         })
     }
+}
+
+/// starts the disk writing `file`'s bytes without waiting for them: on linux `fadvise` with
+/// `DONTNEED` starts write-back of dirty pages, as `sync_file_range` would without unsafe code, and
+/// leaves those still dirty or being written in memory. it can wait while the disk is busy, so a
+/// writer leaves it to another thread. elsewhere it does nothing.
+pub(crate) fn start_writeback(file: &File) {
+    #[cfg(target_os = "linux")]
+    if let Err(err) = rustix::fs::fadvise(file, 0, None, rustix::fs::Advice::DontNeed) {
+        tracing::debug!(%err, "could not start writing an archive's member to the disk");
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = file;
 }
 
 impl Sealed {

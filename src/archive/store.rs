@@ -31,6 +31,42 @@ const LARGE: u64 = 4 << 20;
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
 const MOST_WRITERS: usize = 8;
 
+/// the smallest member whose write-back starts as it is sealed: the disk has a member's worth to
+/// write, and a call for each small member would cost more than it saves.
+const EARLY_FROM: u64 = 1 << 20;
+
+/// the most members waiting for [`Advice`]'s thread to start their write-back.
+const ADVICE_QUEUE: usize = 8;
+
+#[cfg(test)]
+thread_local! {
+    /// how many members this thread offered [`Advice`], for a test that seals on its own thread.
+    static OFFERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// hands each sealed member of [`EARLY_FROM`] bytes or more to one thread that starts its
+/// write-back, which can wait while the disk is busy, so no writer waits on it and the members
+/// read meanwhile do not pile up in memory. a member offered while that thread is behind is let
+/// be: it is only advice, and the archive's flush writes it either way.
+struct Advice(Mutex<Option<SyncSender<File>>>);
+
+impl Advice {
+    fn offer(&self, object: &NewObject) {
+        if let Some(advised) = &*locked(&self.0)
+            && let Some(handle) = object.writeback_handle(EARLY_FROM)
+            && advised.try_send(handle).is_ok()
+        {
+            #[cfg(test)]
+            OFFERED.set(OFFERED.get() + 1);
+        }
+    }
+
+    /// offers nothing more, so the thread ends once it has started what it holds.
+    fn close(&self) {
+        locked(&self.0).take();
+    }
+}
+
 enum Job {
     #[cfg(test)]
     Pause {
@@ -51,6 +87,8 @@ pub(super) struct Writers<'s> {
     few: Option<&'s Few>,
     failed: &'s AtomicBool,
     streaming: bool,
+    /// where a sealed member's write-back starts.
+    advice: Option<&'s Advice>,
 }
 
 impl Writers<'_> {
@@ -93,7 +131,7 @@ impl Writers<'_> {
         if let Some(jobs) = &self.jobs {
             jobs.send(job).map_err(|_| stopped())
         } else {
-            if let Some(sealed) = seal(self.staging, job, self.flush_each, self.few)? {
+            if let Some(sealed) = seal(self.staging, job, self.flush_each, self.few, self.advice)? {
                 locked(self.sealed).push(sealed);
             }
             Ok(())
@@ -119,6 +157,10 @@ pub(super) fn store_all(
 }
 
 /// with `ahead`, a large archive's flush starts on xfs while its members are still written.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the writers, the early flush and the write-back advice start and stop in order in one scope"
+)]
 fn store_with(
     cache: &Cache,
     threads: usize,
@@ -145,6 +187,12 @@ fn store_with(
     let flush_each = true;
     let few = Few::new();
     let keeps = (cfg!(target_os = "linux") && !flush_each).then_some(&few);
+    // a member flushed on its own as it is sealed has nothing to start early, and a capped run
+    // starts no thread past its cap to start it
+    let early = cfg!(target_os = "linux") && !flush_each && ahead;
+    let (handing, waiting) = sync_channel::<File>(ADVICE_QUEUE);
+    let advice = Advice(Mutex::new(early.then_some(handing)));
+    let advice = early.then_some(&advice);
     #[cfg(not(target_os = "linux"))]
     let _ = ahead;
     let done = AtomicBool::new(false);
@@ -169,7 +217,7 @@ fn store_with(
             if failed.load(Ordering::Relaxed) {
                 continue;
             }
-            match seal(&staging, job, flush_each, keeps) {
+            match seal(&staging, job, flush_each, keeps, advice) {
                 Ok(Some(done)) => locked(&sealed).push(done),
                 Ok(None) => {}
                 Err(err) => {
@@ -188,6 +236,17 @@ fn store_with(
         let flusher = (ahead && threaded)
             .then(|| flushing_ahead(scope, batch.as_ref(), &sealed, &done))
             .flatten();
+        // what is still waiting once every member is sealed is left to the archive's flush
+        let finished = &done;
+        let advising = advice.map(|_| {
+            crate::threads::scoped(scope, move || {
+                for file in &waiting {
+                    if !finished.load(Ordering::Relaxed) {
+                        crate::cache::start_writeback(&file);
+                    }
+                }
+            })
+        });
         let writers = Writers {
             staging: &staging,
             jobs: threaded.then_some(jobs),
@@ -196,6 +255,7 @@ fn store_with(
             few: keeps,
             failed: &failed,
             streaming: threads > 1,
+            advice,
         };
         // with no live consumer the reader stores inline; joining before closing would hang
         let result = read(&writers);
@@ -204,6 +264,12 @@ fn store_with(
             worker.join();
         }
         done.store(true, Ordering::Relaxed);
+        if let Some(advice) = advice {
+            advice.close();
+        }
+        if let Some(advising) = advising {
+            advising.join();
+        }
         #[cfg(target_os = "linux")]
         let result = result.and(
             flusher
@@ -299,6 +365,7 @@ fn seal(
     job: Job,
     flush: bool,
     few: Option<&Few>,
+    advice: Option<&Advice>,
 ) -> Result<Option<(String, Sealed)>, Error> {
     let (path, object) = match job {
         #[cfg(test)]
@@ -320,6 +387,9 @@ fn seal(
     let sealed = (|| {
         if let Some(few) = few {
             few.keep(&object)?;
+        }
+        if let Some(advice) = advice {
+            advice.offer(&object);
         }
         object.seal(flush)
     })();
@@ -510,6 +580,57 @@ mod tests {
         .map(|(members, _)| members)
     }
 
+    /// a run free to start threads offers each member of 1 MiB or more, as it is sealed, to the
+    /// thread that starts its write-back, and a capped run offers none; both store every member
+    /// whole under its digest once the archive's flush is done.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn large_members_start_writing_as_they_are_sealed() {
+        let members: Vec<(String, Vec<u8>)> = [
+            (b'a', 10),
+            (b'b', (1 << 20) - 1),
+            (b'c', 1 << 20),
+            (b'd', 3 << 20),
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, (byte, size))| (format!("{index}.csv"), vec![byte; size]))
+        .collect();
+        for (uncapped, offered) in [(true, 2), (false, 0)] {
+            let scratch = Scratch::new();
+            let limits = Limits::default();
+            let meter = Meter::default();
+            // as if the archive were as large as its members, so no ratio refuses them
+            meter.count(members.iter().map(|(_, bytes)| bytes.len()).sum());
+            let never = |_: u64| false;
+            let mut guard = Guard::new(&limits, &never, &meter);
+            OFFERED.set(0);
+            // no writer threads, so every member is sealed on this thread, which counts its offers
+            let (mut stored, _) = store_with(&scratch.cache, 0, uncapped, false, |writers| {
+                let mut buffer = vec![0; 64 << 10];
+                for (path, bytes) in &members {
+                    writers.keep(
+                        &mut guard,
+                        path.clone(),
+                        bytes.len() as u64,
+                        &mut &bytes[..],
+                        &mut buffer,
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(OFFERED.get(), offered, "{uncapped}");
+            stored.sort_by(|a, b| a.path.cmp(&b.path));
+            assert_eq!(stored.len(), members.len());
+            for (member, (path, bytes)) in stored.iter().zip(&members) {
+                assert_eq!(&member.path, path);
+                assert_eq!(member.sha256, crate::digest::sha256(bytes), "{path}");
+                scratch.assert_stored(member, bytes);
+            }
+        }
+    }
+
     /// a few members flush through their own handles; only a larger archive flushes the filesystem.
     #[cfg(target_os = "linux")]
     #[test]
@@ -528,7 +649,7 @@ mod tests {
             let few = Few::new();
             for index in 0..members {
                 let job = Job::Bytes(format!("{index}.csv"), index.to_string().into_bytes());
-                seal(&staging, job, false, Some(&few)).unwrap();
+                seal(&staging, job, false, Some(&few), None).unwrap();
             }
 
             let flushed = few.flush(&failing(), 2);

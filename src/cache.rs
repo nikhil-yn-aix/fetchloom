@@ -31,6 +31,7 @@ use serde::{Deserialize, Serialize};
 pub(crate) use changed::{Doubt, Identity, may_follow};
 pub(crate) use failure::Failure;
 pub(crate) use held::Access;
+pub(crate) use object::start_writeback;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(crate) use object::{Batch, batch_in};
 pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned, sha256_of};
