@@ -14,6 +14,7 @@ import signal
 import subprocess
 import time
 from urllib.parse import urlsplit
+import uuid
 
 import fixtures
 import lab
@@ -398,14 +399,15 @@ def exact_command(argv, workdir):
     return result
 
 
-def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
+def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run_id=None):
     """one measured run of a tool on a case, from cold caches unless the scenario is warm; appends
-    the row to runs.jsonl and returns it."""
+    the row to runs.jsonl and returns it. its log is named by a run id of one length for every arm,
+    as every path a run touches is, so no arm's names cost more lookups."""
+    run_id = run_id or uuid.uuid4().hex[:6]
     row = dict(kind="lab", tool=tool.name, scenario=case["id"], profile=case["profile"],
                filesystem=workdir.parent.name, round=number, warmup=warmup, quick=case["quick"],
-               count=case["count"], file_size=case["size"], status="failed")
-    label = f"{row['filesystem']}-{case['profile']}-{case['id']}-{number}-{tool.name}"
-    log = out / (label + ".log")
+               count=case["count"], file_size=case["size"], status="failed", run_id=run_id, log=f"{run_id}.log")
+    log = out / row["log"]
     try:
         tools.reset(workdir)
         cold = case["id"] not in fixtures.WARM
@@ -478,7 +480,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         row["error"] = f"{type(error).__name__}: {error}"
     finally:
         if (workdir / "prepare.log").exists():
-            shutil.copyfile(workdir / "prepare.log", out / (label + "-prepare.log"))
+            shutil.copyfile(workdir / "prepare.log", out / f"{run_id}-prepare.log")
     append(out / "runs.jsonl", row)
     return row
 
@@ -613,7 +615,9 @@ def measure_case(args, fs, specification, adapters, meta):
                            error=preparation_errors[name])
                 append(args.out / "runs.jsonl", row)
             else:
-                row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus)
+                meta["runs"] = meta.get("runs", 0) + 1
+                row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus,
+                              run_id=f"{meta['runs']:06}")
             meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
             failures += row["status"] != "passed"
             wall = f"{row['wall_seconds']:.3f}s" if "wall_seconds" in row else row.get("error", "no timing")

@@ -304,6 +304,7 @@ class MeasurementTests(unittest.TestCase):
         import tools
         root = Path(tempfile.mkdtemp(prefix="fl-bench-"))
         child = root / "child"
+        (root / "project").mkdir()
         try:
             class Slow(tools.Tool):
                 def command(self, scenario, workdir):
@@ -586,6 +587,21 @@ class ToolTests(unittest.TestCase):
         adapter("unused").command(dict(id=scenario, files=files or self.FILES[:1], members=list(members)), self.work)
         return (self.work / "command.sh").read_text().splitlines()
 
+    def test_every_arm_and_tool_runs_in_paths_of_one_length(self):
+        # past about 165 bytes every path lookup costs more kernel time, so a longer name runs slower
+        work = Path("/srv/fl-bench/fs/ext4/work")
+        adapters = tools.available("/bin/fetchloom", [("aa", {"FETCHLOOM_EXP_NONE": "1"}),
+                                                     ("a-longer-label", {"FETCHLOOM_EXP_LONGER": "1"})])
+
+        def paths(tool):
+            env = tool.env(work)
+            return [tool.cwd(work), tool.cache(work)] + [env[key] for key in (
+                "HOME", "TMPDIR", "XDG_CACHE_HOME", "FETCHLOOM_CACHE", "POOCH_CACHE", "DVC_SITE_CACHE_DIR")]
+
+        lengths = {name: [len(str(path)) for path in paths(tool)] for name, tool in adapters.items()}
+        self.assertEqual(len(lengths), len(tools.CLASSES) + 2)
+        self.assertEqual(len({tuple(value) for value in lengths.values()}), 1, lengths)
+
     def test_a_version_the_tool_cannot_give_is_the_reason_why(self):
         class Missing(tools.Tool):
             name = "no-such-benchmark-tool"
@@ -624,10 +640,10 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(tools.Fetchloom("unused").outputs(case, self.work),
                          [(self.work / "project/data/f00000/file-00000.bin", "1" * 64)])
         self.assertEqual(tools.Pooch("unused").outputs(case, self.work),
-                         [(self.work / "cache/pooch/unpacked/file-00000.bin", "1" * 64)])
+                         [(self.work / "cache/tool/unpacked/file-00000.bin", "1" * 64)])
         plain = dict(id="s1", files=self.FILES, members=[])
         self.assertEqual(tools.Pooch("unused").outputs(plain, self.work),
-                         [(self.work / "cache/pooch" / item["name"], item["sha256"]) for item in self.FILES])
+                         [(self.work / "cache/tool" / item["name"], item["sha256"]) for item in self.FILES])
         self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
                          [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
 
@@ -730,7 +746,7 @@ class ToolTests(unittest.TestCase):
             dvc.prepare(dict(id="s1", prepared=str(prepared)), workdir)
         self.assertEqual((workdir / "project/data.dvc").read_text(), "outs: []\n")
         # the cache is in the measured folder, so its disk use counts as fetchloom's does
-        self.assertEqual(configured.call_args.args[0], ["dvc", "config", "cache.dir", str(workdir / "cache/dvc")])
+        self.assertEqual(configured.call_args.args[0], ["dvc", "config", "cache.dir", str(workdir / "cache/tool")])
         self.assertEqual((configured.call_args.kwargs["cwd"], configured.call_args.kwargs["check"]), (workdir / "project", True))
         self.assertEqual(dvc.cwd(workdir), workdir / "project")
         self.assertEqual(dvc.command(dict(id="s1"), workdir), ["dvc", "pull", "-j", "4"])

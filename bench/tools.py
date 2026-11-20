@@ -60,15 +60,19 @@ class Tool:
         return self.name
 
     def cwd(self, workdir):
-        return workdir
+        return workdir / "project"
+
+    def cache(self, workdir):
+        """the tool's own cache: one path for every tool, since each runs alone in its work folder,
+        and a longer path costs every lookup more kernel time."""
+        return workdir / "cache" / "tool"
 
     def env(self, workdir):
         env = lab.environment()
         env.update(HOME=str(workdir / "home"), TMPDIR=str(workdir / "scratch"), XDG_CACHE_HOME=str(workdir / "cache"),
-                   FETCHLOOM_CACHE=str(workdir / "cache" / "fetchloom"),
-                   POOCH_CACHE=str(workdir / "cache" / "pooch"),
+                   FETCHLOOM_CACHE=str(self.cache(workdir)), POOCH_CACHE=str(self.cache(workdir)),
                    # dvc keeps its index under /var/tmp otherwise, outside the measured disk
-                   DVC_SITE_CACHE_DIR=str(workdir / "cache" / "dvc-site"))
+                   DVC_SITE_CACHE_DIR=str(workdir / "cache" / "site"))
         return env
 
     def prepare(self, scenario, workdir):
@@ -132,9 +136,6 @@ class Fetchloom(Tool):
     def populate(self, scenario, workdir):
         for name in ("data.toml", "data.lock"):
             shutil.copyfile(Path(scenario["prepared"]) / self.prepared_as / name, workdir / "project" / name)
-
-    def cwd(self, workdir):
-        return workdir / "project"
 
     def command(self, scenario, workdir):
         return [self.fetchloom, "-q", "--yes", "sync"]
@@ -290,7 +291,7 @@ class Pooch(Tool):
                     **{key: calls[key] for key in ("wall_seconds", "user_seconds", "sys_seconds")})
 
     def outputs(self, scenario, workdir):
-        root = workdir / "cache" / "pooch"
+        root = self.cache(workdir)
         if scenario["members"]:
             root /= "unpacked"
         return [(root / item["name"], item["sha256"]) for item in scenario["members"] or scenario["files"]]
@@ -303,11 +304,8 @@ class Dvc(Tool):
 
     def populate(self, scenario, workdir):
         shutil.copytree(Path(scenario["prepared"]) / self.name, workdir / "project", dirs_exist_ok=True)
-        subprocess.run(["dvc", "config", "cache.dir", str(workdir / "cache" / "dvc")],
+        subprocess.run(["dvc", "config", "cache.dir", str(self.cache(workdir))],
                        cwd=workdir / "project", env=self.env(workdir), check=True, capture_output=True)
-
-    def cwd(self, workdir):
-        return workdir / "project"
 
     def command(self, scenario, workdir):
         return ["dvc", "pull", "-j", str(BUDGET)]

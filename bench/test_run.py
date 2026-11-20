@@ -281,6 +281,8 @@ class ManyVariantTests(unittest.TestCase):
                 meta = json.loads((out / "meta.json").read_text())
                 rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
                 self.assertEqual(len(rows), 39)
+                # every run's log has a name of its own, of one length
+                self.assertEqual([row["log"] for row in rows], [f"{n:06}.log" for n in range(1, 40)])
                 self.assertEqual(sum(r["warmup"] for r in rows), 13)
                 for row in rows:
                     settings = {key: value for key, value in row["environment"].items() if key.startswith("FETCHLOOM_EXP_")}
@@ -632,6 +634,21 @@ class OneRunTests(unittest.TestCase):
         self.assertEqual((row["link_drop"]["dropped_at"], row["body_bytes_ratio"]), (10.0, 6 / 4))
         self.assertNotIn("the download ended before the link came back", row["checks"])
 
+    def test_every_arm_logs_under_a_name_of_one_length(self):
+        logs = []
+
+        def measured(argv, cwd, env, logfile, *args, **kwargs):
+            logs.append(Path(logfile).name)
+            return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+        rows = []
+        for name in ("a", "fetchloom+a-much-longer-label"):
+            named = type("Named", (tools.Tool,), dict(name=name, command=lambda self, scenario, workdir: ["true"]))
+            rows.append(self.one_run(named("unused"), measured))
+        self.assertEqual([row["log"] for row in rows], logs)
+        self.assertEqual(len({len(log) for log in logs}), 1, logs)
+        self.assertNotEqual(*logs)
+
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):
             name = "dvc"
@@ -666,7 +683,7 @@ class OneRunTests(unittest.TestCase):
 
         row = self.one_run(Broken("unused"), lambda *args, **kwargs: None)
         self.assertEqual((row["status"], row["error"]), ("failed", "RuntimeError: the clone failed"))
-        self.assertEqual((self.root / "ext4-lan-s1-1-broken-prepare.log").read_text(), "cloning\n")
+        self.assertEqual((self.root / f"{row['run_id']}-prepare.log").read_text(), "cloning\n")
         self.assertEqual(json.loads((self.root / "runs.jsonl").read_text()), row)
 
 
