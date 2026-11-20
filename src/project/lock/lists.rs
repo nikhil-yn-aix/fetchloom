@@ -477,6 +477,123 @@ pub(crate) fn read(
     Ok(rows)
 }
 
+/// [`read`] building only the rows whose paths `keep` takes, every other row checked as [`read`]
+/// and data.lock's reader check it, the whole list counted, summed and hashed against what
+/// data.lock records. none when a row unpacks an archive, when another row's link holds what only
+/// a closer look can clear (`@`, `?` or `#`), or when anything is not as [`read`] takes it, which
+/// then says what.
+pub(crate) fn read_some(
+    root: &Path,
+    name: &str,
+    listed: &Listed,
+    budget: &mut super::Budget,
+    keep: &dyn Fn(&str) -> bool,
+) -> Option<Vec<LockedFile>> {
+    let count = usize::try_from(listed.count).ok()?;
+    if !named_as_written(name, listed) || count > super::most_files() {
+        return None;
+    }
+    folder(root).ok()?;
+    let mut rows = Vec::new();
+    let mut hasher = Hasher::default();
+    let (mut bytes, mut seen) = (0, 0);
+    let mut previous = String::new();
+    let mut line = Vec::new();
+    for part in &listed.parts {
+        let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let file = crate::volume::read_unfollowed(&path).ok()?;
+        let mut decoder = zstd::stream::read::Decoder::new(file).ok()?;
+        decoder.window_log_max(WINDOW_LOG).ok()?;
+        let mut reader = BufReader::new(decoder);
+        let mut number = 0;
+        loop {
+            line.clear();
+            let read = (&mut reader)
+                .take(LONGEST)
+                .read_until(b'\n', &mut line)
+                .ok()?;
+            if read == 0 {
+                break;
+            }
+            number += 1;
+            if line.last() != Some(&b'\n') {
+                return None;
+            }
+            hasher.update(&line);
+            if number == 1 {
+                if line != HEADER.as_bytes() {
+                    return None;
+                }
+                continue;
+            }
+            let text = std::str::from_utf8(&line[..line.len() - 1]).ok()?;
+            let row = Fields::of(text)?;
+            if row.unpacks || seen == count || (seen > 0 && previous.as_str() >= &*row.path) {
+                return None;
+            }
+            budget
+                .take(name, (row.path.len() + row.url.len()) as u64)
+                .ok()?;
+            if keep(&row.path) {
+                rows.push(LockedFile::parse_row(text)?);
+            } else if crate::name::escapes(&row.path).is_some() || row.url.contains(['@', '?', '#'])
+            {
+                return None;
+            }
+            seen += 1;
+            bytes = add(bytes, row.size);
+            previous.clear();
+            previous.push_str(&row.path);
+        }
+        if number == 0 {
+            return None;
+        }
+    }
+    (seen == count && bytes == listed.bytes && hasher.finish().0 == listed.sha256).then_some(rows)
+}
+
+/// a row's fields as [`LockedFile::parse_row`] takes them, read without building the file:
+/// none for a row it refuses.
+struct Fields<'a> {
+    path: std::borrow::Cow<'a, str>,
+    size: u64,
+    url: std::borrow::Cow<'a, str>,
+    /// whether the row is an archive fetchloom unpacks.
+    unpacks: bool,
+}
+
+impl<'a> Fields<'a> {
+    fn of(line: &'a str) -> Option<Fields<'a>> {
+        let unescaped = |text: &'a str| -> Option<std::borrow::Cow<'a, str>> {
+            if text.contains('\\') {
+                unescape(text).map(std::borrow::Cow::Owned)
+            } else {
+                Some(std::borrow::Cow::Borrowed(text))
+            }
+        };
+        let mut fields = line.split('\t');
+        let path = unescaped(fields.next()?)?;
+        let size = size(fields.next()?)?;
+        Sha256::from_hex(fields.next()?)?;
+        let md5 = fields.next()?;
+        if !md5.is_empty() {
+            Md5::from_hex(md5)?;
+        }
+        let url = unescaped(fields.next()?)?;
+        let unpacks_to = fields.next()?;
+        if !unpacks_to.is_empty() {
+            Sha256::from_hex(unpacks_to)?;
+        }
+        let fits = path.len() <= LONGEST_PATH && url.len() <= LONGEST_URL;
+        (fields.next().is_none() && fits).then_some(Fields {
+            path,
+            size,
+            url,
+            unpacks: !unpacks_to.is_empty(),
+        })
+    }
+}
+
 /// the error for `part`, a list whose `header` names a column this fetchloom does not know, as a
 /// newer fetchloom may add one: none when it names no columns at all, or only known ones, as a
 /// damaged part's first line does.

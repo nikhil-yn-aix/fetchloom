@@ -50,18 +50,15 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
             None => error,
         }
     })?;
-    let lock = pins(&project, &manifest, name)?;
-    let scope = answered(&project, &manifest, lock.as_ref(), name, args.locked)?;
     let mut cache = None;
-    let path = if let Some(path) = ready_path(
+    let (lock, scope, ready) = first_look(
         context,
-        &project,
-        &manifest,
-        lock.as_ref(),
+        (&project, &manifest),
         &mut cache,
-        name,
-        file,
-    )? {
+        (name, file),
+        args.locked,
+    )?;
+    let path = if let Some(path) = ready {
         path
     } else {
         drop(lock);
@@ -281,6 +278,59 @@ fn pins(project: &Project, manifest: &Manifest, name: &str) -> Result<Option<Loc
         lock.refuse_waiting([name])?;
     }
     Ok(lock)
+}
+
+/// data.lock as path reads it for `name`, the scope of its answer, and the answer when what it
+/// names is in place; a `file` named in the dataset is answered from that dataset's rows at the
+/// file alone when they can tell.
+fn first_look(
+    context: &Context,
+    (project, manifest): (&Project, &Manifest),
+    cache: &mut Option<Cache>,
+    (name, file): (&str, Option<&str>),
+    is_locked: bool,
+) -> Result<(Option<Lock>, Scope, Option<PathBuf>), Error> {
+    let asked = file.filter(|file| !is_locked && !file.is_empty());
+    if let Some(asked) = asked
+        && let Some(lock) = pins_one(project, manifest, name, asked)
+        && let Ok(ready) = ready_path(context, project, manifest, Some(&lock), cache, name, file)
+    {
+        let scope = answered(project, manifest, Some(&lock), name, is_locked)?;
+        return Ok((Some(lock), scope, ready));
+    }
+    let lock = pins(project, manifest, name)?;
+    let scope = answered(project, manifest, lock.as_ref(), name, is_locked)?;
+    let ready = ready_path(context, project, manifest, lock.as_ref(), cache, name, file)?;
+    Ok((lock, scope, ready))
+}
+
+/// [`pins`] with of `name` only the files at `asked`, inside it or above it, as a disk that ignores
+/// case compares paths, so planning finds every clash with the files asked for: none when data.lock
+/// would not answer from them as from all of its rows, as for an archive, and [`pins`] reads it.
+fn pins_one(project: &Project, manifest: &Manifest, name: &str, asked: &str) -> Option<Lock> {
+    let needed = needed(manifest, name);
+    project.lock_rows(&|other| needed.contains(other), name, &|path| {
+        related(path, asked)
+    })
+}
+
+/// whether `path`, a file of a dataset, is `asked`, inside it or above it, compared as a disk that
+/// ignores case compares them.
+fn related(path: &str, asked: &str) -> bool {
+    if path.is_ascii() && asked.is_ascii() {
+        let (short, long) = if path.len() <= asked.len() {
+            (path, asked)
+        } else {
+            (asked, path)
+        };
+        return long.as_bytes()[..short.len()].eq_ignore_ascii_case(short.as_bytes())
+            && long
+                .as_bytes()
+                .get(short.len())
+                .is_none_or(|&next| next == b'/');
+    }
+    let (path, asked) = (name::fold(path), name::fold(asked));
+    is_inside(&path, &asked) || is_inside(&asked, &path)
 }
 
 /// the datasets path reads from data.lock for `name`: it, and those whose folders meet its folder,

@@ -907,6 +907,73 @@ impl Lock {
         Ok(lock)
     }
 
+    /// [`Lock::read_waiting`] of the datasets `keep` accepts, with of dataset `name` only the files
+    /// whose paths `row` takes, each list checked whole as [`lists::read_some`] checks it. none
+    /// when a whole read could answer otherwise: a list part missing, an archive or a dataset not
+    /// downloaded yet in `name`, or anything a whole read refuses, which the caller then reads.
+    pub(crate) fn read_rows(
+        text: &str,
+        root: &Path,
+        keep: &dyn Fn(&str) -> bool,
+        name: &str,
+        row: &dyn Fn(&str) -> bool,
+    ) -> Option<Lock> {
+        let memory = ROOM.get().copied().unwrap_or(u64::MAX);
+        let mut parsed = parse_within(text, keep, memory).ok()?;
+        parsed.retain(|entry| keep(entry.name()));
+        if parsed.iter().any(|entry| entry.written().is_some()) {
+            lists::folder(root).ok()?;
+        }
+        if parsed
+            .iter()
+            .any(|entry| missing_part(entry, root).is_some())
+        {
+            return None;
+        }
+        let mut budget = Budget::of(&parsed, memory).ok()?;
+        let mut lock = Lock::default();
+        for entry in parsed {
+            match entry {
+                Parsed::Source(mut dataset, listed) => {
+                    check_resolved(&dataset).ok()?;
+                    let is_listed = listed.is_some();
+                    let named = dataset.name == name;
+                    if let Some(listed) = listed {
+                        dataset.files = if named {
+                            lists::read_some(root, name, &listed, &mut budget, row)?
+                        } else {
+                            let parts = lists::Parts::Folder(root);
+                            lists::read(parts, &dataset.name, &listed, &mut budget).ok()?
+                        };
+                        let paths = dataset.files.iter().map(|file| &file.path);
+                        check_paths(&dataset.name, paths).ok()?;
+                    }
+                    let links = dataset.files.iter().map(|file| (&file.path, &file.url));
+                    check_links(&dataset.name, links, is_listed).ok()?;
+                    // a list's rows were checked and kept as they were read
+                    if named && !is_listed {
+                        if dataset.files.iter().any(|file| file.unpacks_to.is_some()) {
+                            return None;
+                        }
+                        dataset.files.retain(|file| row(&file.path));
+                    }
+                    lock.datasets.push(dataset);
+                }
+                Parsed::Stated(stated) => {
+                    check_resolved(&stated.pin).ok()?;
+                    check_stated_count(&stated, lists::inline().min(most_files())).ok()?;
+                    let links = stated.files.iter().map(|file| (&file.path, &file.url));
+                    check_links(stated.name(), links, false).ok()?;
+                    if stated.name() == name {
+                        return None;
+                    }
+                    lock.stated.push(stated);
+                }
+            }
+        }
+        Some(lock)
+    }
+
     /// the dataset named `name` that waits for its list, as [`Lock::read_waiting`] found it,
     /// unless another list pins it again.
     pub(crate) fn waits(&self, name: &str) -> Option<&Waiting> {
@@ -2451,6 +2518,84 @@ mod tests {
             error.help.as_deref(),
             Some("raise the container's memory limit by 1 B or more")
         );
+    }
+
+    /// a read of dataset iris's rows at a path keeps the rows a whole read keeps there, and other
+    /// datasets whole, while every row is still checked: a list changed by a byte, a part gone, an
+    /// archive and a link a closer look must clear each leave the answer to a whole read.
+    #[test]
+    fn reading_the_rows_at_a_path_keeps_what_a_whole_read_keeps() {
+        fn iris(lock: &mut Lock) -> &mut Locked {
+            let found = lock
+                .datasets
+                .iter_mut()
+                .find(|dataset| dataset.name == "iris");
+            found.unwrap()
+        }
+        let file = |path: &str| LockedFile {
+            path: path.to_owned(),
+            size: path.len() as u64,
+            sha256: digest::sha256(path.as_bytes()),
+            md5: None,
+            url: format!("https://example.org/{path}"),
+            unpacks_to: None,
+        };
+        let write = |lock: &Lock| {
+            let root = tempfile::tempdir().unwrap();
+            std::fs::create_dir(root.path().join(lists::FOLDER)).unwrap();
+            for (part, text) in lock.lists_with(1) {
+                let compressed = lists::compress(&text).unwrap();
+                std::fs::write(root.path().join(part), compressed).unwrap();
+            }
+            (root, lock.render_with(1))
+        };
+        let mut lock = sample_sorted();
+        iris(&mut lock).files = ["a/deep/z.csv", "a/x.csv", "a/y.csv", "b.csv", "c/w.csv"]
+            .into_iter()
+            .map(file)
+            .collect();
+        let below_a = |path: &str| path == "a" || path.starts_with("a/");
+        let (root, text) = write(&lock);
+        let whole = Lock::read_waiting(&text, root.path(), &|_| true).unwrap();
+        let some = Lock::read_rows(&text, root.path(), &|_| true, "iris", &below_a).unwrap();
+        assert_eq!(some.datasets.len(), whole.datasets.len());
+        for (whole, some) in whole.datasets.iter().zip(&some.datasets) {
+            let kept: Vec<&LockedFile> = whole
+                .files
+                .iter()
+                .filter(|file| whole.name != "iris" || below_a(&file.path))
+                .collect();
+            assert_eq!(
+                some.files.iter().collect::<Vec<_>>(),
+                kept,
+                "{}",
+                whole.name
+            );
+        }
+        assert_eq!(
+            some.datasets.iter().map(|d| d.files.len()).sum::<usize>(),
+            4
+        );
+        let edits: [fn(&mut Locked); 2] = [
+            |iris| iris.files[3].url.push_str("?token=x"),
+            |iris| iris.files[4].unpacks_to = Some(digest::sha256(b"tree")),
+        ];
+        for edit in edits {
+            let mut changed = lock.clone();
+            edit(iris(&mut changed));
+            let (root, text) = write(&changed);
+            assert!(Lock::read_rows(&text, root.path(), &|_| true, "iris", &below_a).is_none());
+        }
+        let (root, text) = write(&lock);
+        let part = root.path().join(&parts(&text)[0]);
+        let listed = zstd::decode_all(std::fs::File::open(&part).unwrap()).unwrap();
+        let other = String::from_utf8(listed)
+            .unwrap()
+            .replace("b.csv\t5", "b.csv\t6");
+        std::fs::write(&part, lists::compress(&other).unwrap()).unwrap();
+        assert!(Lock::read_rows(&text, root.path(), &|_| true, "iris", &below_a).is_none());
+        std::fs::remove_file(&part).unwrap();
+        assert!(Lock::read_rows(&text, root.path(), &|_| true, "iris", &below_a).is_none());
     }
 
     /// a list's part holds one file at least, so a lock naming more parts than its files fill is

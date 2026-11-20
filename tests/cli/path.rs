@@ -4,7 +4,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH, added, clone};
-use crate::support::{Result, Sandbox, Server, file, json, text};
+use crate::support::{Result, Sandbox, Server, delete, file, json, text, ways_left_out};
 
 #[test]
 fn path_prints_where_a_dataset_or_file_is() -> Result {
@@ -376,5 +376,107 @@ fn a_target_that_names_no_dataset_is_refused_as_typed() -> Result {
     }
     let member = sandbox.run(&["path", "iris/iris.csv"])?;
     assert_eq!(member.status.code(), Some(0), "{}", text(&member.stderr)?);
+    Ok(())
+}
+
+/// a file named in a listed dataset is answered from its own rows: in place, a folder in it, its
+/// path in another case, a typo, a file deleted, which path syncs back first, and the whole
+/// dataset each get the answer, or the refusal, reading every row gives; and the plan of a file in
+/// place holds that file alone.
+#[test]
+fn path_answers_from_a_files_own_rows() -> Result {
+    let unknown = |asked: &str| {
+        format!(
+            "error: flowers has no file or folder called {asked}\n  help: did you mean `fetchloom path flowers/petals/red.csv`?\n"
+        )
+    };
+    let put_back = "     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n";
+    let targets = [
+        (
+            "flowers/sepals.csv",
+            false,
+            Some(0),
+            "/sepals.csv",
+            String::new(),
+        ),
+        ("flowers/petals", false, Some(0), "/petals", String::new()),
+        (
+            "flowers/petals/deep/violet.csv",
+            false,
+            Some(0),
+            "/petals/deep/violet.csv",
+            String::new(),
+        ),
+        (
+            "flowers/Petals/red.csv",
+            false,
+            Some(2),
+            "",
+            unknown("Petals/red.csv"),
+        ),
+        (
+            "flowers/petal/red.csv",
+            false,
+            Some(2),
+            "",
+            unknown("petal/red.csv"),
+        ),
+        ("flowers", false, Some(0), "", String::new()),
+        (
+            "flowers/petals/red.csv",
+            true,
+            Some(0),
+            "/petals/red.csv",
+            put_back.to_owned(),
+        ),
+    ];
+    for (target, deleted, code, out, err) in targets {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("flowers")?;
+        fs::create_dir_all(folder.join("petals/deep"))?;
+        fs::write(folder.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
+        fs::write(folder.join("petals/red.csv"), b"length\n1.4\n")?;
+        fs::write(folder.join("petals/deep/violet.csv"), b"length\n1.9\n")?;
+        let added = sandbox
+            .command(&["add", "../flowers"])
+            .env("FETCHLOOM_TEST_INLINE", "1")
+            .output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        let work = sandbox.work();
+        assert!(work.join("data.lock.d").is_dir());
+        let red = work.join("data/flowers/petals/red.csv");
+        if deleted {
+            delete(&red)?;
+        }
+        let output = sandbox.run(&["path", target])?;
+        // paths as on every system, without the way files were placed, which follows the disk
+        let shown = |bytes: &[u8]| -> Result<String> {
+            let told = text(bytes)?.replace(&work.display().to_string(), "<work>");
+            Ok(ways_left_out(&told).replace('\\', "/"))
+        };
+        let answer = if code == Some(0) {
+            format!("<work>/data/flowers{out}\n")
+        } else {
+            String::new()
+        };
+        assert_eq!(output.status.code(), code, "{target}");
+        assert_eq!(shown(&output.stdout)?, answer, "{target}");
+        assert_eq!(shown(&output.stderr)?, err, "{target}");
+        assert!(red.exists(), "{target}");
+        if target == "flowers/sepals.csv" {
+            let trace = work.join("path.trace.json");
+            let traced = sandbox
+                .command(&["path", target])
+                .env("FETCHLOOM_TRACE", &trace)
+                .output()?;
+            assert_eq!(traced.status.code(), Some(0), "{}", text(&traced.stderr)?);
+            let events: Vec<serde_json::Value> = serde_json::from_slice(&fs::read(&trace)?)?;
+            let planned = events
+                .iter()
+                .find(|event| event["ph"] == "E" && event["name"] == "plan")
+                .map(|event| event["args"]["files"].clone());
+            assert_eq!(planned, Some(serde_json::json!("1")));
+        }
+    }
     Ok(())
 }

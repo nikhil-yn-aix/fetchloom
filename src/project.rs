@@ -419,6 +419,20 @@ impl Project {
         self.lock_by(|text| Lock::read_waiting(text, &self.root, keep))
     }
 
+    /// [`Project::lock_only`] with of dataset `name` only the files whose paths `row` takes, as
+    /// [`Lock::read_rows`] reads it: none when that would not answer as a whole read does, or
+    /// data.lock does not read, which [`Project::lock_only`] then says why.
+    pub(crate) fn lock_rows(
+        &self,
+        keep: &dyn Fn(&str) -> bool,
+        name: &str,
+        row: &dyn Fn(&str) -> bool,
+    ) -> Option<Lock> {
+        let _span = tracing::debug_span!("read_lock").entered();
+        let text = self.lock_text().ok()??;
+        Lock::read_rows(&text, &self.root, keep, name, row)
+    }
+
     fn lock_by(
         &self,
         read: impl Fn(&str) -> Result<Lock, Error>,
