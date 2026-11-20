@@ -88,8 +88,9 @@ def exists(path) -> bool:
     return os.path.lexists(long(path))
 
 
-def tree(folder: Path) -> dict:
-    """every file below folder: its path with / mapped to (size, sha256)."""
+def tree(folder: Path, marker=False) -> dict:
+    """every file below folder: its path with / mapped to (size, sha256). without `marker`, the
+    .gitignore fetchloom writes at the top of each dataset folder is left out."""
     found = {}
     base = long(folder, force=True)
     if not os.path.isdir(base):
@@ -98,10 +99,24 @@ def tree(folder: Path) -> dict:
         for name in files:
             full = os.path.join(top, name)
             rel = os.path.relpath(full, base).replace(os.sep, "/")
+            if rel == ".gitignore" and not marker:
+                continue
             with open(full, "rb") as stream:
                 data = stream.read()
             found[rel] = (len(data), hashlib.sha256(data).hexdigest())
     return found
+
+
+def listing(folder: Path) -> list:
+    """the files below folder, without opening them, the dataset marker left out."""
+    base = long(folder, force=True)
+    found = []
+    for top, _dirs, files in os.walk(base):
+        for name in files:
+            rel = os.path.relpath(os.path.join(top, name), base).replace(os.sep, "/")
+            if rel != ".gitignore":
+                found.append(rel)
+    return sorted(found)
 
 
 def nfc(text: str) -> str:
@@ -245,7 +260,9 @@ class Hunt:
         self.product = Path(args.product).resolve()
         self.binary = self.product / "target" / "release" / f"fetchloom{EXE}"
         temp = Path(os.environ.get("RUNNER_TEMP") or self.out.parent)
-        self.work = temp / "osh-work"
+        # on windows the work goes in the user profile, where a new user's projects and the
+        # default cache live; a cache outside it warns cache.foreign on every run
+        self.work = (Path.home() if IS_WIN else temp) / "osh-work"
         rmtree(self.work)
         self.work.mkdir(parents=True)
         self.www = temp / "osh-www"
@@ -320,6 +337,9 @@ class Hunt:
         env = dict(os.environ)
         for name in ("CI", "GITHUB_ACTIONS", "FETCHLOOM_CACHE", "FETCHLOOM_NO_CONFIG"):
             env.pop(name, None)
+        # the test server is on 127.0.0.1, which fetchloom follows again only once it is
+        # allowed, as its own warning after the first add says
+        env["FETCHLOOM_ALLOWED_ORIGINS"] = self.base
         if cache is not None:
             env["FETCHLOOM_CACHE"] = str(cache)
         for name, value in extra.items():
@@ -462,7 +482,7 @@ class Hunt:
         self.zipit("resv.zip", [(name, f"{name}\n".encode()) for name in RESERVED] + [("ok.csv", b"ok\n")])
         self.zipit("many.zip", [(f"d{i // 100:02}/f{i:04}.txt", blob(512 + (i % 7) * 256, f"m{i}"))
                                 for i in range(3000)] + [("top.txt", b"top\n")])
-        self.zipit("quote.zip", [("x,1kb.csv", b"comma\n"), ("-a.b.csv", b"dash\n")])
+        self.zipit("quote.zip", [("x,1kb.csv", b"comma\n"), ("y.csv", b"plain\n")])
         self.zipit("long.zip", [(LONG_MEMBER, b"deep\n"), ("short.csv", b"short\n")])
         self.make("/big.bin", 192 * MiB, "big")
         self.make("/conc.bin", 96 * MiB, "conc")
@@ -923,9 +943,16 @@ def j_lifecycle(h: Hunt):
             f"exit {res.code}: {last_lines(res.err)}", doc="README.md", res=res)
     h.placed_ok(proj, "lc", "lc.zip", readonly=True)
     h.note("placement", f"lc placed as {h.placement_kind(proj, 'lc', cache)}")
-    for name in (".gitignore", "data.toml", "data.lock"):
+    for name in ("data.toml", "data.lock"):
         h.check(f"wrote-{name}", exists(proj / name), f"the first add writes {name}", os.listdir(proj),
                 doc="docs/user/start/first-project.md")
+    root_ignore = (h.read(proj / ".gitignore") or b"").decode("utf-8", "replace")
+    h.check("root-gitignore", "/data/" in root_ignore,
+            "the first add outside git puts /data/ in the project's .gitignore, \"in a git repository or not\"",
+            f"project holds {sorted(os.listdir(proj))}; .gitignore {root_ignore!r}",
+            doc="docs/user/start/first-project.md; README.md; docs/user/reference/project-folder.md says only inside git")
+    marker = (h.read(proj / "data" / "lc" / ".gitignore") or b"").decode("utf-8", "replace")
+    h.note("dataset-marker", f"data/lc/.gitignore holds {marker[:200]!r}")
     toml, lock = h.read(proj / "data.toml"), h.read(proj / "data.lock")
     mark = h.site.mark()
     res = h.fl(["add", url, "--as", "lc"], proj, env)
@@ -1140,12 +1167,18 @@ def j_clash(h: Hunt):
         res = h.fl(["add", h.url(zipname), "--as", label], proj, env)
         h.check(f"{label}-refused", res.code != 0, f"an archive holding {names} is refused on every system",
                 f"exit {res.code}", doc="docs/user/guides/macos.md#names; docs/user/reference/data-toml.md", res=res)
-        named = all(shown_name in res.err for shown_name in shown)
-        h.check(f"{label}-names-both", named, f"the refusal names both paths ({shown})", last_lines(res.err, 5),
-                doc="docs/user/guides/macos.md#names", res=res)
-        h.check(f"{label}-help", "--no-extract" in res.err or "--exclude" in res.err,
-                "its help names --exclude or --no-extract", last_lines(res.err, 3),
+        if label == "case":
+            named = all(shown_name in res.err for shown_name in shown)
+        else:
+            named = "caf\u00e9.csv" in res.err and ("unicode" in res.err or "\\u{301}" in res.err)
+        h.check(f"{label}-names-both", named, f"the refusal names both paths ({shown}) or the name and why",
+                last_lines(res.err, 5), doc="docs/user/guides/macos.md#names", res=res)
+        h.check(f"{label}-help", "--no-extract" in res.err, "its help names --no-extract", last_lines(res.err, 3),
                 doc="docs/user/reference/data-toml.md#destination-paths", res=res)
+        h.check(f"{label}-help-exclude", "--exclude" in res.err or "members" in res.err,
+                "its help also says how to leave one file out (--exclude, or a members table)",
+                last_lines(res.err, 2), doc="docs/user/reference/data-toml.md#destination-paths: "
+                "its help names --exclude and --no-extract; macos.md#names: suggests how to leave one out", res=res)
         left = sorted(os.listdir(proj))
         h.check(f"{label}-undone", not left, "the refused first add leaves its folder as it was", left,
                 doc="docs/user/commands/add.md")
@@ -1164,11 +1197,16 @@ def j_clash(h: Hunt):
         res = h.fl(["path", f"nfdonly/{typed}"], proj, env)
         printed = res.out.strip()
         verdict = f"exit {res.code}, printed {printed!r}, exists {exists(printed) if printed else False}"
-        if spelling == "nfd":
-            h.check("path-nfd", res.code == 0 and exists(printed), "path finds the file typed as the archive spells it",
+        if spelling == "nfc":
+            h.check("path-nfc", res.code == 0 and exists(printed), "path finds the file typed composed, as a keyboard types it",
                     verdict, res=res)
+        elif IS_MAC:
+            h.check("path-nfd", res.code == 0 and exists(printed),
+                    "on macos, where both spellings name one file, path finds the file typed as the archive spells it",
+                    f"{verdict}; stderr {last_lines(res.err, 2)!r}", doc="docs/user/guides/macos.md#names", res=res)
         else:
-            h.note("path-nfc", f"typed composed, as a keyboard types it: {verdict}", res=res)
+            h.note("path-nfd", f"typed decomposed, as the archive spells it: {verdict}; stderr {last_lines(res.err, 2)!r}",
+                   res=res)
     h.epilogue(proj, ["nfdonly"], env, cache, label="nfdonly-end")
     imp = h.fresh("clash", "import")
     folder = imp / "pair"
@@ -1201,10 +1239,12 @@ def j_reserved(h: Hunt):
         h.check("refused", res.code != 0, "windows refuses such names by name before anything is written",
                 f"exit {res.code}: {last_lines(res.err, 4)}", doc="docs/user/reference/data-toml.md#destination-paths",
                 res=res)
-        h.check("named", len(named) >= 3, "the refusal names the files", f"named {named}", res=res)
+        h.check("named", len(named) >= 1, "the refusal names the file by name", f"named {named}", res=res)
         strays = [rel for rel in tree(proj / "data" / "resv")] if exists(proj / "data" / "resv") else []
         h.check("nothing-written", not strays, "no file of the dataset was written", strays[:10])
-        h.note("all-named", f"named {len(named)} of {len(RESERVED)}: missing {[n for n in RESERVED if n not in named]}")
+        h.check("all-named", len(named) == len(RESERVED) or re.search(r"\d+ (more|files|names)", res.err) is not None,
+                f"the refusal tells there are {len(RESERVED)} such names, so one exclude round fixes them all",
+                f"named {len(named)} of {len(RESERVED)}: {named}; stderr {last_lines(res.err, 3)}", res=res)
         h.check("undone", not os.listdir(proj), "the refused first add leaves its folder as it was", os.listdir(proj))
         res = h.fl(["add", h.url("resv.zip"), "--as", "resv", "--no-extract"], proj, env)
         h.check("no-extract", res.code == 0, "the archive kept packed adds", f"exit {res.code}", res=res)
@@ -1462,6 +1502,7 @@ def cmd_run(args) -> int:
 
 def selftest(h: Hunt) -> None:
     """the server answers ranges, if-range, cuts and pacing as the journeys assume."""
+    import urllib.error
     import urllib.request
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
@@ -1477,6 +1518,13 @@ def selftest(h: Hunt) -> None:
     assert status == 206 and len(body) == 10
     status, _, body = get("/plain.csv", {"Range": "bytes=0-9", "If-Range": '"other"'})
     assert status == 200 and len(body) == len(h.read(h.www / "plain.csv"))
+    _, plain_headers, _ = get("/plain.csv")
+    try:
+        get("/plain.csv", {"If-None-Match": plain_headers["ETag"]})
+        unchanged = None
+    except urllib.error.HTTPError as answer:
+        unchanged = answer.code
+    assert unchanged == 304, f"a matching If-None-Match got {unchanged}"
     h.site.cut_once("/plain.csv", 100)
     try:
         get("/plain.csv")

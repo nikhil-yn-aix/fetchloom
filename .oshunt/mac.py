@@ -168,6 +168,11 @@ def j_exfat(h):
             f"exit {res.code}: {last_lines(res.err, 4)}", doc="docs/user/reference/data-toml.md#destination-paths", res=res)
     toml = (h.read(proj / "data.toml") or b"").decode()
     h.note("reserved-state", f"exit {res.code}; data.toml has resv: {'[datasets.resv]' in toml}")
+    if res.code == 0:
+        h.placed_ok(proj, "resv", "resv.zip", label="exfat")
+        h.note("reserved-listed", f"exfat lists {[ascii(n) for n in sorted(os.listdir(proj / 'data' / 'resv'))]}")
+        res = h.fl(["status", "--check"], proj, env)
+        h.note("reserved-status", f"status --check exit {res.code}: {res.out[:300]}", res=res)
     if "[datasets.resv]" in toml:
         h.fl(["remove", "resv", "--yes"], proj, env)
     mirror = mount / "mirror"
@@ -219,8 +224,11 @@ def j_quarantine(h):
     folder = h.fresh("quarantine")
     marked = folder / "fetchloom"
     shutil.copy2(h.binary, marked)
-    res = h.sh(["xattr", "-w", "com.apple.quarantine", f"0081;{int(time.time()):x};Safari;", marked])
-    h.check("marked", res.code == 0, "the quarantine mark goes on", f"exit {res.code}", res=res)
+    mark = f"0083;{int(time.time()):x};Safari;F643CD5F-6071-46AB-83AB-390BA944DEC5"
+    res = h.sh(["xattr", "-w", "com.apple.quarantine", mark, marked])
+    h.check("marked", res.code == 0, "the quarantine mark goes on, as safari writes it", f"exit {res.code}", res=res)
+    res = h.sh(["xattr", "-p", "com.apple.quarantine", marked])
+    h.note("mark", res.out.strip())
     for argv in (["spctl", "--status"], ["spctl", "-a", "-vv", "-t", "execute", marked], ["codesign", "-dv", marked]):
         res = h.sh(argv, timeout=120)
         h.note(argv[0] + ("-assess" if "-a" in argv else ""), f"exit {res.code}: {' '.join(res.text.split())[:300]}")

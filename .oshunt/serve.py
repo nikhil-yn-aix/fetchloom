@@ -1,9 +1,10 @@
 """a small http server for the os hunt.
 
 it serves files from a folder, or bytes made on the fly for a big file, over http/1.1 with a
-strong etag, ranges and if-range, as a real file server does. a file can be slowed to a total
-rate across all its connections, or cut once after some bytes, and every request is logged, so a
-journey can tell a resumed download from one that started over.
+strong etag, ranges, if-range and 304 answers to conditional requests, as a real file server
+does. a file can be slowed to a total rate across all its connections, or cut once after some
+bytes, and every request is logged, so a journey can tell a resumed download from one that
+started over.
 """
 from __future__ import annotations
 
@@ -179,6 +180,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         entry = {
             "t": time.time(), "method": self.command, "path": path,
             "range": self.headers.get("Range"), "if_range": self.headers.get("If-Range"),
+            "if_none_match": self.headers.get("If-None-Match"),
+            "if_modified_since": self.headers.get("If-Modified-Since"),
             "status": None, "start": 0, "end": 0, "sent": 0, "done": False, "cut": None,
         }
         with self.site.lock:
@@ -192,6 +195,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             entry["done"] = True
             return
         size, etag, source = found
+        tags = [tag.strip() for tag in (self.headers.get("If-None-Match") or "").split(",") if tag.strip()]
+        since = self.headers.get("If-Modified-Since")
+        if (tags and (etag in tags or "*" in tags)) or (not tags and since and since.strip() == LAST_MODIFIED):
+            entry["status"] = 304
+            self.send_response(304)
+            self.send_header("ETag", etag)
+            self.send_header("Last-Modified", LAST_MODIFIED)
+            self.end_headers()
+            entry["done"] = True
+            return
         asked = parse_range(self.headers.get("Range"), size)
         if_range = self.headers.get("If-Range")
         if asked is not None and if_range is not None and if_range.strip() not in (etag, LAST_MODIFIED):

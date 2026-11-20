@@ -16,7 +16,7 @@ from ctypes import wintypes
 from pathlib import Path
 
 import hunt
-from hunt import MiB, Skip, exists, last_lines, long, sha256_file, tree, writable
+from hunt import MiB, Skip, exists, last_lines, listing, long, sha256_file, tree, writable
 
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 FLAGS = {"case_sensitive_search": 0x1, "case_preserved_names": 0x2, "unicode_on_disk": 0x4,
@@ -213,6 +213,10 @@ def vhd_detach(h, image) -> None:
 PS_SCRIPT = r"""
 $ErrorActionPreference = 'Continue'
 $r = [ordered]@{}
+if ($env:OSH_OEM -eq '1') {
+  try { [Console]::OutputEncoding = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage) }
+  catch { $r.oem_error = "$_" }
+}
 $r.ps = $PSVersionTable.PSVersion.ToString()
 $r.console_output_encoding = [Console]::OutputEncoding.WebName
 $out = fetchloom status 2>&1
@@ -235,19 +239,22 @@ $r.suggest_exists = [bool]("$s" -and (Test-Path -LiteralPath "$s"))
 """
 
 CMD_SCRIPT = r"""@echo off
+CODEPAGE
+chcp > "%OSH_OUT%.chcp.txt"
 fetchloom status > "%OSH_OUT%.status.txt" 2>&1
-echo %ERRORLEVEL%> "%OSH_OUT%.status.code"
+> "%OSH_OUT%.status.code" echo %ERRORLEVEL%
 for /f "usebackq delims=" %%p in (`fetchloom path lc/tables/a.csv`) do (
-  echo %%p> "%OSH_OUT%.path.txt"
-  if exist "%%p" (echo yes> "%OSH_OUT%.path.exists") else (echo no> "%OSH_OUT%.path.exists")
+  > "%OSH_OUT%.path.txt" echo %%p
+  if exist "%%p" (> "%OSH_OUT%.path.exists" echo yes) else (> "%OSH_OUT%.path.exists" echo no)
 )
 SUGGESTION > "%OSH_OUT%.suggest.txt" 2>&1
-echo %ERRORLEVEL%> "%OSH_OUT%.suggest.code"
+> "%OSH_OUT%.suggest.code" echo %ERRORLEVEL%
 """
 
 
 def j_shells(h):
-    """windows powershell 5.1, powershell 7 and cmd, in a folder with a space and an accent."""
+    """windows powershell 5.1, powershell 7 and cmd, in a folder with a space and an accent, with
+    the runner's console code page and with the oem one a fresh windows console starts in."""
     proj = h.fresh("shells", "Datos Econ\u00f3micos", "proyecto")
     cache = h.cache_dir("shells")
     path = str(h.binary.parent) + os.pathsep + os.environ.get("PATH", "")
@@ -259,62 +266,75 @@ def j_shells(h):
     res = h.fl(["path", "q/nope.csv"], proj, env)
     offered = [c for c in re.findall(r"`(fetchloom [^`]+)`", res.err) if "q/" in c]
     suggestion = offered[0] if offered else 'fetchloom path "q/x,1kb.csv"'
-    h.check("suggestion", bool(offered) and '"' in suggestion, "a help line suggests a command with the name in double quotes",
-            last_lines(res.err), doc="docs/user/guides/windows.md#commands-in-help-lines", res=res)
-    h.note("suggestion-text", suggestion)
-    for shell in ("powershell", "pwsh"):
-        script = h.work / f"shells-{shell}.ps1"
-        script.write_text(PS_SCRIPT.replace("SUGGESTION", suggestion), encoding="utf-8-sig")
-        result = h.work / f"shells-{shell}.json"
-        res = h.sh([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
-                   cwd=proj, env=dict(env, OSH_OUT=str(result)), timeout=300)
-        if res.code == 127 and not result.exists():
-            h.skip(shell, f"{shell} is not on this runner")
-            continue
-        try:
-            r = json.loads(result.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as err:
-            raise RuntimeError(f"{shell} wrote no result: {err}; exit {res.code}, {res.err[-500:]}")
-        h.say(f"  {shell}: {json.dumps(r, ensure_ascii=False)[:1500]}")
-        h.check(f"{shell}-2>&1-exit", r.get("status_exit") == 0,
-                f"`fetchloom status 2>&1` in {shell} leaves $LASTEXITCODE at 0",
-                f"{r.get('status_exit')}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell")
-        red = "NativeCommandError" in (r.get("status_text") or "")
-        if shell == "powershell":
-            h.check("powershell-red-text", red, "windows powershell 5.1 shows stderr as NativeCommandError text with 2>&1, as the docs say",
-                    f"text {(r.get('status_text') or '')[:300]!r}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell",
-                    kind="note")
-        else:
-            h.check("pwsh-plain-text", not red, "powershell 7 shows the lines as they are with 2>&1",
-                    f"text {(r.get('status_text') or '')[:300]!r}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell")
-        h.note(f"{shell}-dollar-q", f"$? after `fetchloom status 2>&1` is {r.get('status_dollar_q')}; record types {r.get('status_types')}")
-        h.check(f"{shell}-stop-preference", r.get("stop_survived") is True,
-                f"`fetchloom status 2>&1` survives $ErrorActionPreference = 'Stop' in {shell}",
-                f"{r.get('stop_error')}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell", kind="note")
-        h.check(f"{shell}-path-usable", r.get("path_exit") == 0 and r.get("path_exists") is True,
-                f"`$p = fetchloom path lc/tables/a.csv` in {shell} gives a path Test-Path finds, in a folder named Datos Econ\u00f3micos",
-                f"exit {r.get('path_exit')}, $p = {r.get('path')!r}, exists {r.get('path_exists')}, console encoding "
-                f"{r.get('console_output_encoding')}", doc="docs/user/guides/windows.md#paths-and-open-files")
-        h.check(f"{shell}-suggestion-pastes", r.get("suggest_exit") == 0 and r.get("suggest_exists") is True,
-                f"the suggested `{suggestion}` runs as written in {shell}",
-                f"exit {r.get('suggest_exit')}, printed {r.get('suggest_out')!r}",
-                doc="docs/user/guides/windows.md#commands-in-help-lines")
-    batch = h.work / "shells.cmd"
-    batch.write_text(CMD_SCRIPT.replace("SUGGESTION", suggestion), encoding="ascii")
-    result = h.work / "shells-cmd"
-    res = h.sh(["cmd", "/d", "/c", str(batch)], cwd=proj, env=dict(env, OSH_OUT=str(result)), timeout=300)
+    h.check("suggestion", bool(offered), "a help line suggests a command for a path q holds", last_lines(res.err), res=res)
+    h.check("suggestion-quoted", '"q/x,1kb.csv"' in suggestion,
+            "a suggested name holding a comma is in double quotes, which powershell 5.1 would otherwise split",
+            suggestion, doc="docs/user/guides/windows.md#commands-in-help-lines")
+    oem = reg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", "OEMCP") or "437"
+    for console in ("runner", "oem"):
+        for shell in ("powershell", "pwsh"):
+            label = f"{shell}-{console}"
+            script = h.work / f"shells-{label}.ps1"
+            script.write_text(PS_SCRIPT.replace("SUGGESTION", suggestion), encoding="utf-8-sig")
+            result = h.work / f"shells-{label}.json"
+            res = h.sh([shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", script],
+                       cwd=proj, env=dict(env, OSH_OUT=str(result), OSH_OEM="1" if console == "oem" else "0"),
+                       timeout=300)
+            if res.code == 127 and not result.exists():
+                h.skip(label, f"{shell} is not on this runner")
+                continue
+            try:
+                r = json.loads(result.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as err:
+                raise RuntimeError(f"{label} wrote no result: {err}; exit {res.code}, {res.err[-500:]}")
+            h.say(f"  {label}: {json.dumps(r, ensure_ascii=False)[:1500]}")
+            h.check(f"{label}-2>&1-exit", r.get("status_exit") == 0,
+                    f"`fetchloom status 2>&1` in {shell} leaves $LASTEXITCODE at 0",
+                    f"{r.get('status_exit')}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell")
+            if console == "runner":
+                red = "NativeCommandError" in (r.get("status_text") or "")
+                if shell == "powershell":
+                    h.check("powershell-red-text", red,
+                            "windows powershell 5.1 shows stderr as NativeCommandError text with 2>&1, as the docs say",
+                            f"text {(r.get('status_text') or '')[:300]!r}",
+                            doc="docs/user/guides/windows.md#red-text-in-windows-powershell", kind="note")
+                else:
+                    h.check("pwsh-plain-text", not red, "powershell 7 shows the lines as they are with 2>&1",
+                            f"text {(r.get('status_text') or '')[:300]!r}",
+                            doc="docs/user/guides/windows.md#red-text-in-windows-powershell")
+                h.note(f"{shell}-dollar-q", f"$? after `fetchloom status 2>&1` is {r.get('status_dollar_q')}; "
+                       f"record types {r.get('status_types')}")
+                h.check(f"{shell}-stop-preference", r.get("stop_survived") is True,
+                        f"`fetchloom status 2>&1` survives $ErrorActionPreference = 'Stop' in {shell}",
+                        f"{r.get('stop_error')}", doc="docs/user/guides/windows.md#red-text-in-windows-powershell",
+                        kind="note")
+            h.check(f"{label}-path-usable", r.get("path_exit") == 0 and r.get("path_exists") is True,
+                    f"`$p = fetchloom path lc/tables/a.csv` in {shell} ({console} console, "
+                    f"{r.get('console_output_encoding')}) gives a path Test-Path finds, in a folder named Datos Econ\u00f3micos",
+                    f"exit {r.get('path_exit')}, $p = {r.get('path')!r}, exists {r.get('path_exists')}, "
+                    f"{r.get('oem_error') or ''}", doc="docs/user/guides/windows.md#paths-and-open-files")
+            h.check(f"{label}-suggestion-pastes", r.get("suggest_exit") == 0 and r.get("suggest_exists") is True,
+                    f"the suggested `{suggestion}` runs as written in {shell}",
+                    f"exit {r.get('suggest_exit')}, printed {r.get('suggest_out')!r}",
+                    doc="docs/user/guides/windows.md#commands-in-help-lines")
+        batch = h.work / f"shells-{console}.cmd"
+        codepage = f"chcp {oem} > nul" if console == "oem" else "rem the runner's code page"
+        batch.write_text(CMD_SCRIPT.replace("SUGGESTION", suggestion).replace("CODEPAGE", codepage), encoding="ascii")
+        result = h.work / f"shells-cmd-{console}"
+        res = h.sh(["cmd", "/d", "/c", str(batch)], cwd=proj, env=dict(env, OSH_OUT=str(result)), timeout=300)
 
-    def part(suffix):
-        target = Path(f"{result}.{suffix}")
-        return target.read_bytes().decode("utf-8", "replace").strip() if target.exists() else None
-    h.say(f"  cmd: status {part('status.code')}, path {part('path.txt')!r} exists {part('path.exists')}, "
-          f"suggest {part('suggest.code')} {part('suggest.txt')!r}")
-    h.check("cmd-status", part("status.code") == "0", "`fetchloom status` in cmd exits 0", part("status.code"))
-    h.check("cmd-path-usable", part("path.exists") == "yes",
-            "a path captured with `for /f` in cmd names a file `if exist` finds, in a folder named Datos Econ\u00f3micos",
-            f"captured {part('path.txt')!r}, exists {part('path.exists')}", kind="note")
-    h.check("cmd-suggestion-pastes", part("suggest.code") == "0", f"the suggested `{suggestion}` runs as written in cmd",
-            f"exit {part('suggest.code')}: {part('suggest.txt')!r}", doc="docs/user/guides/windows.md#commands-in-help-lines")
+        def part(suffix):
+            target = Path(f"{result}.{suffix}")
+            return target.read_bytes().decode("utf-8", "replace").strip() if target.exists() else None
+        h.say(f"  cmd ({console}): {part('chcp.txt')}; status {part('status.code')}, path {part('path.txt')!r} "
+              f"exists {part('path.exists')}, suggest {part('suggest.code')} {part('suggest.txt')!r}")
+        h.check(f"cmd-{console}-status", part("status.code") == "0", "`fetchloom status` in cmd exits 0", part("status.code"))
+        h.check(f"cmd-{console}-path-usable", part("path.exists") == "yes",
+                f"a path captured with `for /f` in cmd ({part('chcp.txt')}) names a file `if exist` finds, in a folder named "
+                f"Datos Econ\u00f3micos", f"captured {part('path.txt')!r}, exists {part('path.exists')}", kind="note")
+        h.check(f"cmd-{console}-suggestion-pastes", part("suggest.code") == "0",
+                f"the suggested `{suggestion}` runs as written in cmd",
+                f"exit {part('suggest.code')}: {part('suggest.txt')!r}", doc="docs/user/guides/windows.md#commands-in-help-lines")
     h.epilogue(proj, ["lc", "q"], env, cache)
 
 
@@ -344,8 +364,9 @@ def j_held(h):
         h.check("copy-held", named and not res.timed_out,
                 "a sync that must replace the held file names it and says to close the program holding it",
                 f"exit {res.code}: {last_lines(res.err, 4)}", doc="docs/user/guides/windows.md#paths-and-open-files", res=res)
-        h.note("copy-held-exit", f"exit {res.code}; other files writable: "
-               f"{sum(writable(proj / 'data' / 'lc' / rel) for rel in tree(proj / 'data' / 'lc'))} of {len(tree(proj / 'data' / 'lc'))}")
+        files = listing(proj / "data" / "lc")
+        h.note("copy-held-exit", f"exit {res.code}; writable now: "
+               f"{sum(writable(proj / 'data' / 'lc' / rel) for rel in files)} of {len(files)}")
     res = h.fl(["sync"], proj, env)
     h.check("copy-after-release", res.code == 0, "once the file is closed, sync finishes", f"exit {res.code}: {last_lines(res.err)}",
             res=res)
@@ -553,12 +574,24 @@ def j_refs(h):
     proj.mkdir()
     cache = Path(f"{letter}:\\cache")
     env = h.env(cache)
+    failed = []
     for name, url in (("lc", h.url("lc.zip")), ("mid", h.url("mid.bin"))):
         res = h.fl(["add", url, "--as", name], proj, env, timeout=400)
-        h.check(f"add-{name}", res.code == 0, f"add {name} on ReFS exits 0", f"exit {res.code}: {last_lines(res.err)}", res=res)
-        if res.code == 50 and "name" in res.err:
+        h.check(f"add-{name}", res.code == 0, f"add {name} on ReFS, with the cache there as the windows guide suggests, exits 0",
+                f"exit {res.code}: {last_lines(res.err)}", doc="docs/user/guides/windows.md#defender-and-new-files", res=res)
+        if res.code == 50 and "its name" in res.err:
             h.note("refs-lockup", "the naming lock-up the windows guide describes", res=res,
                    doc="docs/user/guides/windows.md#a-run-that-stops-on-a-dev-drive")
+        if res.code:
+            failed.append(name)
+    if failed:
+        for argv in (["icacls", f"{letter}:\\"], ["icacls", str(cache)], ["icacls", str(cache / "objects")],
+                     ["whoami", "/groups"]):
+            res = h.sh(argv, timeout=60)
+            h.note("acl-" + "-".join(Path(a).name or a for a in argv[1:])[:40], " ".join(res.text.split())[:900])
+        res = h.fl(["-vv", "add", h.url("plain.csv"), "--as", "plain"], proj, env, timeout=400)
+        h.note("debug-add", f"exit {res.code}; debug tail: {' | '.join(res.err.strip().splitlines()[-25:])[:3000]}", res=res)
+        raise Skip(f"add failed on this ReFS volume ({failed}), so the rest of the journey has nothing to work on")
     h.placed_ok(proj, "lc", "lc.zip", readonly=True)
     report = h.cache_report(proj, env)
     h.note("placement", f"lc {h.placement_kind(proj, 'lc', cache)}, mid {h.placement_kind(proj, 'mid', cache)}; "
@@ -590,7 +623,7 @@ def j_refs(h):
 
 def j_fat32(h):
     """a FAT32 volume, as a usb stick is: copies, coarse times, a mirror, the 4 GiB limit."""
-    letter, image, how = vhd(h, "fat", "FAT32", 4096)
+    letter, image, how = vhd(h, "fat", "FAT32", 16384)
     proj = Path(f"{letter}:\\p")
     proj.mkdir()
     cache = h.cache_dir("fat32")
@@ -632,6 +665,28 @@ def j_fat32(h):
             h.fl(["remove", "huge", "--yes"], proj, env)
     h.epilogue(proj, ["lc"], env, cache, sole=False)
     h.epilogue(clone, ["lc"], cenv, h.cache_dir("fat32-clone"), label="clone-end")
+    small_stick(h)
+
+
+def small_stick(h):
+    """a stick too small for the file: when does fetchloom say so, and how."""
+    letter, image, how = vhd(h, "small", "FAT32", 1024)
+    proj = Path(f"{letter}:\\p")
+    proj.mkdir()
+    env = h.env(h.cache_dir("fat32-small"))
+    h.make("/stick.bin", 1536 * MiB, "stick")
+    free = shutil.disk_usage(f"{letter}:\\").free
+    mark = h.site.mark()
+    res = h.fl(["add", h.url("stick.bin"), "--as", "stick"], proj, env, timeout=900)
+    sent = h.site.sent_since(mark, "/stick.bin")
+    h.check("small-refused", res.code != 0 and res.err.strip(), "a 1.5 GiB file for a 1 GiB stick is refused with a message",
+            f"exit {res.code}: {last_lines(res.err)}", res=res)
+    h.check("small-before-download", sent < 64 * MiB,
+            "the size the server states up front is checked against the stick's free space before downloading",
+            f"{sent / MiB:.0f} MiB downloaded first; stick had {free / MiB:.0f} MiB free; {last_lines(res.err, 2)}",
+            doc="docs/user/concepts/questions-and-interruptions.md#approval (free space is checked before anything starts)",
+            res=res)
+    h.note("small-message", f"{last_lines(res.err, 3)}; free {free} bytes, file {1536 * MiB} bytes")
 
 
 JOURNEYS = [("shells", j_shells), ("held", j_held), ("junction", j_junction), ("longpath", j_longpath),
