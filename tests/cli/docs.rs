@@ -557,6 +557,37 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
     Ok(())
 }
 
+/// data-toml.md shows the refusal of two files of one archive that are one name on a disk that
+/// ignores case as an add prints it, since keeping that archive packed is the only way on.
+#[test]
+fn data_toml_shows_a_clash_inside_an_archive_as_add_prints_it() -> Result {
+    use crate::support::{Server, file, text, zip_of};
+
+    let page = fs::read_to_string(repository().join("docs/user/reference/data-toml.md"))?;
+    let shown = text_block(&page, "error: the archive holds \"Data.csv\"")
+        .ok_or("data-toml.md shows no clash inside an archive")?;
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("Data.csv", b"a\n"), ("data.csv", b"b\n")])?;
+    let server = Server::start("/case.zip", vec![file(&zip, "\"c1\"")])?;
+    let added = sandbox.run(&["add", &server.url, "--as", "case"])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(10), "{stderr}");
+    assert!(
+        stderr.contains(&shown),
+        "data-toml.md shows\n{shown}\nwhere add printed\n{stderr}"
+    );
+    Ok(())
+}
+
+/// the first ```text block of `page` that starts with `first`, without its fences.
+fn text_block(page: &str, first: &str) -> Option<String> {
+    page.split("```text\n")
+        .skip(1)
+        .filter_map(|rest| rest.split_once("```").map(|(block, _)| block))
+        .find(|block| block.starts_with(first))
+        .map(str::to_owned)
+}
+
 /// the lines of `text` a terminal keeps once its bars clear, those of work under way left out, with
 /// the time a line says its work took, as `in 214 ms`, as `in [time]`, and no rate after it, which a
 /// transfer of a second or more adds.
