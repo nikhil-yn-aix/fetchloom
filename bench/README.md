@@ -64,15 +64,16 @@ full lab and live runs. ext4 runs every scenario on every link it applies to. xf
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan,home,poor --scenarios s1,s2r,s3,s4,s5,s6,s7,s8,s9,s10 \
+  --variant aa:FETCHLOOM_EXP_NONE=1 \
   --fs ext4 --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-ext4"
 python3 bench/run.py --fetchloom "$benchmark_binary" \
-  --profiles lan --scenarios s5,s6 \
+  --profiles lan --scenarios s5,s6 --variant aa:FETCHLOOM_EXP_NONE=1 \
   --fs xfs --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-xfs"
 python3 bench/live.py --fetchloom "$benchmark_binary" \
   --seed 1729 --out "$FL_BENCH_ROOT/results/full/live"
 ```
 
-there are 10 measured rounds on every link, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
+the a/a arm, `--variant aa:FETCHLOOM_EXP_NONE=1`, runs fetchloom again under a setting it never reads; on lan and home its interval decides whether a case may have a verdict, so a comparison includes it. there are 10 measured rounds on every link, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
 smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 and s10 keep their link's whole large file, 256 MiB at home and 64 MiB on the poor link, so it is still downloading when SIGINT arrives or the link drops at 10 s.
 
