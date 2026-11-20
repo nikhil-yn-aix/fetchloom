@@ -1347,18 +1347,15 @@ mod tests {
     #[test]
     fn a_sweep_reports_refused_removals() {
         let (_dir, mut cache) = cache();
-        if !super::super::tests::hardlinks(cache.root()) {
-            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
-        }
         let stored = store(&cache, b"cannot remove");
         let object = cache.object_path(&stored.digest);
         let leftover = cache.root.join("tmp").join("left.new");
         fs::write(&leftover, b"leftover").unwrap();
         seal(&leftover);
-        cache.volume = std::sync::Arc::new(crate::volume::Volume::refusing(
-            cache.root.join("tmp"),
-            true,
-        ));
+        cache.volume = std::sync::Arc::new(
+            crate::volume::Volume::new(cache.root.join("tmp"))
+                .with_removal(|_| Err(io::ErrorKind::PermissionDenied.into())),
+        );
         let freed = cache.sweep(
             &Needed::default(),
             SystemTime::now() + GRACE + Duration::from_secs(60),
