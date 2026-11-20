@@ -1706,6 +1706,31 @@ const NEAR_MISSES: [&str; 28] = [
     "\r",
 ];
 
+/// the lines a table cites read as the map they replaced: the line a key was given last, none
+/// for a key never given, and none at all until one is given and once cleared.
+#[test]
+fn cited_lines_read_as_a_map_of_them() {
+    let mut lines = Lines::default();
+    lines.insert("ref", "data.toml:1".to_owned());
+    lines.insert("ref", "data.toml:2".to_owned());
+    assert_eq!(lines.get("ref").map(String::as_str), Some("data.toml:2"));
+    let mut rng = fastrand::Rng::with_seed(6);
+    for _ in 0..500 {
+        let (mut map, mut lines) = (BTreeMap::new(), Lines::default());
+        for at in 0..rng.usize(0..12) {
+            let key = DATASET_KEYS[rng.usize(..4)];
+            map.insert(key, format!("data.toml:{at}"));
+            lines.insert(key, format!("data.toml:{at}"));
+        }
+        for key in DATASET_KEYS.into_iter().chain(["members", "nothing"]) {
+            assert_eq!(lines.get(key), map.get(key), "{key}");
+        }
+        assert_eq!(lines.is_empty(), map.is_empty());
+        lines.clear();
+        assert!(lines.is_empty());
+    }
+}
+
 /// [`read_plain`] reads a data.toml only as [`Manifest::parse`] reads it: the data folder and each
 /// dataset's name and ref. tables `add` writes, some lines swapped for near misses, check it; what
 /// it declines goes to the parser.

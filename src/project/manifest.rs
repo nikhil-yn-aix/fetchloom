@@ -73,7 +73,7 @@ pub(crate) struct Entry {
     /// drop` freed here, which a run that does not name it leaves out.
     pub(crate) place: bool,
     /// each key's line in data.toml, as `data.toml:7   select = ["*.edf"]`, for messages.
-    pub(crate) lines: BTreeMap<&'static str, String>,
+    pub(crate) lines: Lines,
 }
 
 /// a dataset fetched from a source.
@@ -239,6 +239,54 @@ impl<'m> IntoIterator for &'m Members {
     }
 }
 
+/// each key's line in data.toml, by its key, for messages. a table has few keys, so they are a
+/// list: a map's first node holds room for eleven, about 450 bytes a dataset.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Lines(Vec<(&'static str, String)>);
+
+impl Lines {
+    /// the line of `key`, if the table has it.
+    pub(crate) fn get(&self, key: &str) -> Option<&String> {
+        self.0
+            .iter()
+            .find(|(held, _)| *held == key)
+            .map(|(_, line)| line)
+    }
+
+    /// keeps `line` as `key`'s, in place of any it had.
+    pub(crate) fn insert(&mut self, key: &'static str, line: String) {
+        match self.0.iter_mut().find(|(held, _)| *held == key) {
+            Some((_, held)) => *held = line,
+            None => self.0.push((key, line)),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub(crate) fn clear(&mut self) {
+        self.0.clear();
+    }
+}
+
+impl Extend<(&'static str, String)> for Lines {
+    fn extend<I: IntoIterator<Item = (&'static str, String)>>(&mut self, lines: I) {
+        for (key, line) in lines {
+            self.insert(key, line);
+        }
+    }
+}
+
+#[cfg(test)]
+impl std::ops::Index<&str> for Lines {
+    type Output = String;
+
+    fn index(&self, key: &str) -> &String {
+        self.get(key).unwrap_or_else(|| panic!("no line for {key}"))
+    }
+}
+
 /// the files kept of each archive the key covers, by their paths in it, top folder included.
 /// they change where files go, not what data.lock pins, so they stay out of the spec.
 #[derive(Clone, Debug)]
@@ -246,7 +294,7 @@ pub(crate) struct MemberFilter {
     pub(crate) select: glob::Set,
     pub(crate) exclude: glob::Set,
     /// the table's line in data.toml, as `members`, and each key's, for messages.
-    pub(crate) lines: BTreeMap<&'static str, String>,
+    pub(crate) lines: Lines,
 }
 
 impl MemberFilter {
@@ -450,7 +498,7 @@ fn put_plain(
             path: None,
             at: None,
             place: true,
-            lines: BTreeMap::new(),
+            lines: Lines::default(),
         },
     );
     Some(())
@@ -508,7 +556,7 @@ impl Reader<'_> {
             )
         })?;
         self.known(table, &DATASET_KEYS, &format!(" in datasets.{name}"))?;
-        let mut lines = BTreeMap::new();
+        let mut lines = Lines::default();
         for key in DATASET_KEYS {
             if let Some(span) = table.key(key).and_then(Key::span) {
                 lines.insert(key, self.cite(span.start));
@@ -738,7 +786,7 @@ impl Reader<'_> {
                 &MEMBER_KEYS,
                 &format!(" in datasets.{name}.members.\"{archive}\""),
             )?;
-            let mut lines = BTreeMap::new();
+            let mut lines = Lines::default();
             lines.extend(span.map(|span| ("members", self.cite(span.start))));
             for key in MEMBER_KEYS {
                 if let Some(span) = filter.key(key).and_then(Key::span) {
