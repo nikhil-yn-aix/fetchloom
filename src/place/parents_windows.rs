@@ -3,12 +3,13 @@
 //! in sharing as it counts no open that only reads attributes, so no one renames or removes one of
 //! them meanwhile. a folder above the root that this user may not traverse is only looked at.
 
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::fs::{self, File, Metadata};
 use std::io;
 use std::os::windows::fs::OpenOptionsExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use crate::volume::stall::naming;
 
@@ -22,10 +23,142 @@ struct Root {
     _handles: Vec<File>,
 }
 
+/// the most folder handles a batch keeps open between its files, each kept chain counted by its
+/// length. a batch places the first file of every folder before any second, so without a bound a
+/// batch of many small folders would keep a chain for each.
+const MOST_HELD: usize = 1024;
+
+/// the folders of one batch of files, each chain of held folders opened for the batch's first
+/// file there and let go once its last file is located, while the kept chains hold no more than
+/// [`MOST_HELD`] handles; a folder past that is held for each of its files alone. opening and
+/// checking each file's chain anew cost two opens and two queries a file.
+pub(super) struct FolderHandles(Mutex<Held>);
+
+/// the chains a batch keeps, the handles they hold now, the most they may hold and the most they
+/// held at once.
+struct Held {
+    folders: HashMap<PathBuf, Kept>,
+    handles: usize,
+    most: usize,
+    peak: usize,
+}
+
+/// a folder's held chain, once opened, and how many of the batch's files there are still to
+/// locate.
+struct Kept {
+    chain: Option<Arc<Vec<File>>>,
+    left: usize,
+}
+
+impl FolderHandles {
+    /// for a batch whose files go in the folders `relatives`, below the root, one a file.
+    pub(super) fn of<'p>(relatives: impl IntoIterator<Item = &'p Path>) -> FolderHandles {
+        FolderHandles::keeping_at_most(MOST_HELD, relatives)
+    }
+
+    /// [`FolderHandles::of`] with kept chains holding no more than `most` handles.
+    pub(super) fn keeping_at_most<'p>(
+        most: usize,
+        relatives: impl IntoIterator<Item = &'p Path>,
+    ) -> FolderHandles {
+        let mut folders: HashMap<PathBuf, Kept> = HashMap::new();
+        for relative in relatives {
+            folders
+                .entry(relative.to_path_buf())
+                .or_insert(Kept {
+                    chain: None,
+                    left: 0,
+                })
+                .left += 1;
+        }
+        FolderHandles(Mutex::new(Held {
+            folders,
+            handles: 0,
+            most,
+            peak: 0,
+        }))
+    }
+
+    /// the handles the kept chains hold now, and the most they held at once.
+    #[cfg(test)]
+    pub(super) fn holding(&self) -> (usize, usize) {
+        let held = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        (held.handles, held.peak)
+    }
+}
+
+impl Parents {
+    /// [`Parents::locate`] of a file of the batch whose folders `handles` counts, making no folder:
+    /// its folders' held chain is the one opened for the batch's first file there.
+    pub(super) fn locate_kept(
+        &self,
+        handles: &FolderHandles,
+        root: &Path,
+        below: &Path,
+        real_root: bool,
+    ) -> io::Result<Location> {
+        let relative = below
+            .parent()
+            .ok_or_else(|| invalid("a placement path is outside its root"))?;
+        let name = below
+            .file_name()
+            .ok_or_else(|| invalid("a placement has no filename"))?;
+        plain(name)?;
+        let kept = {
+            let mut held = handles.0.lock().unwrap_or_else(PoisonError::into_inner);
+            let Held {
+                folders, handles, ..
+            } = &mut *held;
+            folders.get_mut(relative).and_then(|kept| {
+                kept.left = kept.left.saturating_sub(1);
+                if kept.left == 0 {
+                    let chain = kept.chain.take();
+                    *handles -= chain.as_ref().map_or(0, |chain| chain.len());
+                    chain
+                } else {
+                    kept.chain.clone()
+                }
+            })
+        };
+        if let (Some(chain), Some(opened)) = (kept, self.root.get()) {
+            let mut path = opened.path.clone();
+            for part in parts(relative)? {
+                path.push(part);
+            }
+            path.push(name);
+            return Ok(Location {
+                root: Arc::clone(opened),
+                path,
+                parents: chain,
+            });
+        }
+        let location = self.locate(root, below, real_root, false)?;
+        let mut held = handles.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let Held {
+            folders,
+            handles,
+            most,
+            peak,
+        } = &mut *held;
+        let length = location.parents.len();
+        if *handles + length <= *most
+            && let Some(kept) = folders.get_mut(relative)
+            && kept.left > 0
+            && kept.chain.is_none()
+        {
+            kept.chain = Some(Arc::clone(&location.parents));
+            *handles += length;
+            *peak = (*peak).max(*handles);
+        }
+        drop(held);
+        Ok(location)
+    }
+}
+
 pub(super) struct Location {
     root: Arc<Root>,
     path: PathBuf,
-    _parents: Vec<File>,
+    parents: Arc<Vec<File>>,
 }
 
 impl Parents {
@@ -80,7 +213,7 @@ impl Parents {
         Ok(Location {
             root,
             path,
-            _parents: parents,
+            parents: Arc::new(parents),
         })
     }
 }

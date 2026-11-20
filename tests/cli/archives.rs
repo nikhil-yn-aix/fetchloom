@@ -271,6 +271,14 @@ fn several_archives_unpack_flushing_one_at_a_time() -> Result {
     several_archives_land("unpacked files flush to disk one at a time")
 }
 
+/// windows places a sync's files holding each folder once for the batch's files there, as `-vv`
+/// tells, and every member lands with its bytes.
+#[cfg(windows)]
+#[test]
+fn several_archives_place_holding_each_folder_once() -> Result {
+    several_archives_land("the batch holds each folder once for its files")
+}
+
 /// syncs three zips of 30 members each, in folders of their own: `-vv` says `told`, and every
 /// member lands with its bytes.
 #[cfg(windows)]

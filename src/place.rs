@@ -9,7 +9,7 @@ mod schedule;
 mod synced;
 pub(crate) use synced::remember as remember_synced;
 
-use parents::{Location, Parents, Staged};
+use parents::{FolderHandles, Location, Parents, Staged};
 
 use std::borrow::Cow;
 use std::collections::HashSet;
@@ -469,7 +469,7 @@ impl Placer {
         writable: bool,
     ) -> io::Result<Method> {
         self.check_folders(destination, true)?;
-        match self.put(object, destination, writable, false)? {
+        match self.put(object, destination, writable, false, None)? {
             Put::Placed(method, _) => Ok(method),
             Put::Waiting(method, staged) => staged.publish().map(|_| method),
         }
@@ -488,12 +488,19 @@ impl Placer {
         let mut folders = schedule::Folders::new(count);
         // whether each folder passed its check, so the check runs once per folder, not per file
         let mut checked = Vec::new();
+        // the folder below the root of each file, for the folders a windows batch holds once
+        #[cfg(windows)]
+        let mut relatives = Vec::new();
         let ready = spread((0..count).filter_map(|index| {
             if let Err(err) = self.stop.check_io() {
                 results.push((index, Err(err)));
                 return None;
             }
             let order = order(index);
+            #[cfg(windows)]
+            if let Ok(below) = self.below_root(&order.destination) {
+                relatives.push(below.parent().map(Path::to_path_buf).unwrap_or_default());
+            }
             let (group, first) = folders.record(index, &order.destination);
             if first {
                 checked.push(false);
@@ -512,6 +519,12 @@ impl Placer {
             }
             Some((index, group))
         }));
+        #[cfg(windows)]
+        let held = held_by_batch(&relatives);
+        #[cfg(windows)]
+        let handles = Some(&held);
+        #[cfg(not(windows))]
+        let handles: Option<&FolderHandles> = None;
         let this = &*self;
         let observe = |metadata: &Metadata| {
             #[cfg(test)]
@@ -538,7 +551,13 @@ impl Placer {
             let _permit = grouped.enter(*index);
             let order = order(*index);
             let placed = this
-                .put(&order.object, &order.destination, order.writable, batch)
+                .put(
+                    &order.object,
+                    &order.destination,
+                    order.writable,
+                    batch,
+                    handles,
+                )
                 .map(|put| match put {
                     Put::Placed(method, metadata) => Put::Placed(method, observe(&metadata)),
                     Put::Waiting(method, staged) => Put::Waiting(method, staged),
@@ -598,9 +617,13 @@ impl Placer {
         destination: &Path,
         writable: bool,
         batch: bool,
+        handles: Option<&FolderHandles>,
     ) -> io::Result<Put<Metadata>> {
         self.stop.check_io()?;
-        let location = Arc::new(self.location(destination, false)?);
+        let location = Arc::new(match handles {
+            Some(handles) => self.location_kept(handles, destination)?,
+            None => self.location(destination, false)?,
+        });
         let early_hardlink = cfg!(windows)
             && !writable
             && self.synced.is_none()
@@ -1269,6 +1292,15 @@ impl Placer {
         self.parents.locate(root, &below, self.checks_root, make)
     }
 
+    /// [`Placer::location`] of a file of the batch whose folders `handles` counts, making no
+    /// folder: the folders on its way are held once for the batch's files there.
+    fn location_kept(&self, handles: &FolderHandles, destination: &Path) -> io::Result<Location> {
+        let below = self.below_root(destination)?;
+        let root = self.opened_at.as_deref().unwrap_or(&self.root);
+        self.parents
+            .locate_kept(handles, root, &below, self.checks_root)
+    }
+
     fn can_hardlink(&self) -> Option<bool> {
         if let Some(links) = self.links.get() {
             return Some(*links);
@@ -1646,6 +1678,17 @@ fn cold<T>(items: &[T], path: FilePath<'_, T>) -> bool {
 #[cfg(not(target_os = "linux"))]
 fn cold<T>(_: &[T], _: FilePath<'_, T>) -> bool {
     false
+}
+
+/// the folders a windows batch of files at `relatives`, below the root, holds once, from the first
+/// file placed in each to the last.
+#[cfg(windows)]
+fn held_by_batch(relatives: &[PathBuf]) -> FolderHandles {
+    tracing::debug!(
+        files = relatives.len(),
+        "the batch holds each folder once for its files"
+    );
+    FolderHandles::of(relatives.iter().map(PathBuf::as_path))
 }
 
 /// `results`, each tagged with the index of its item among `count`, in the order of the items.

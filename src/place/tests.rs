@@ -573,6 +573,271 @@ fn a_held_folder_cannot_be_renamed_or_removed_meanwhile() {
     fs::rename(&inner, outer.join("c")).unwrap();
 }
 
+/// a windows batch holds a folder's chain from its first file to its last, so no one renames or
+/// removes the folder between them, and lets it go after the last; a batch bound to keep no
+/// handle holds nothing past its file.
+#[cfg(windows)]
+#[test]
+fn a_batch_holds_each_folder_from_its_first_file_to_its_last() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let folder = root.join("a").join("b");
+    fs::create_dir_all(&folder).unwrap();
+    let parents = Parents::default();
+    let below = |name: &str| Path::new("a").join("b").join(name);
+    let relatives = [Path::new("a/b"), Path::new("a/b"), Path::new("a/b")];
+    let handles = FolderHandles::of(relatives.iter().copied());
+
+    for name in ["1.csv", "2.csv"] {
+        let located = parents
+            .locate_kept(&handles, &root, &below(name), true)
+            .unwrap();
+        assert_eq!(
+            located.path(),
+            parents
+                .locate(&root, &below(name), true, false)
+                .unwrap()
+                .path()
+        );
+        drop(located);
+        assert!(
+            fs::rename(&folder, root.join("a").join("c")).is_err(),
+            "the folder was renamed after {name}, between the batch's files"
+        );
+        assert!(
+            fs::rename(root.join("a"), root.join("z")).is_err(),
+            "its parent was renamed after {name}"
+        );
+    }
+    let last = parents
+        .locate_kept(&handles, &root, &below("3.csv"), true)
+        .unwrap();
+    drop(last);
+    fs::rename(&folder, root.join("a").join("c")).unwrap();
+
+    fs::create_dir_all(&folder).unwrap();
+    let none = FolderHandles::keeping_at_most(0, relatives.iter().copied());
+    drop(
+        parents
+            .locate_kept(&none, &root, &below("1.csv"), true)
+            .unwrap(),
+    );
+    fs::rename(&folder, root.join("a").join("d")).unwrap();
+}
+
+/// a windows batch holds the folder it places in from its first file there to its last: renaming
+/// the folder fails as each file but the last is placed, and works once the last is.
+#[cfg(windows)]
+#[test]
+fn a_folder_cannot_be_renamed_between_the_files_a_batch_places_in_it() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let inner = root.join("a").join("b");
+    let destinations: Vec<PathBuf> = (0..3)
+        .map(|index| inner.join(format!("{index}.csv")))
+        .collect();
+    let renamed = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let tried = Arc::clone(&renamed);
+    let (from, to) = (inner.clone(), root.join("a").join("moved"));
+    let one =
+        Threads::read(&|name| (name == "FETCHLOOM_THREADS").then(|| std::ffi::OsString::from("1")))
+            .unwrap();
+    let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None)
+        .with_threads(one)
+        .observing(move |_| {
+            let moved = fs::rename(&from, &to).is_ok();
+            if moved {
+                fs::rename(&to, &from).unwrap();
+            }
+            tried.lock().unwrap().push(moved);
+        });
+    let results = placer.place_all(
+        destinations.len(),
+        |index| Order {
+            object: object.clone(),
+            destination: destinations[index].clone(),
+            writable: false,
+            size: CONTENTS.len() as u64,
+        },
+        |_| (),
+    );
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(*renamed.lock().unwrap(), [false, false, true]);
+    for destination in &destinations {
+        assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+    }
+}
+
+/// a windows batch, holding each folder once, places what placing each file alone places, in a
+/// few folders of many files and in many deep folders of two files each, past the bound on the
+/// handles it keeps; and a folder a junction replaced before the batch is refused.
+#[cfg(windows)]
+#[test]
+fn a_batch_holding_each_folder_once_places_alike() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let few: Vec<PathBuf> = (0..200)
+        .map(|index| {
+            root.join(format!("{}", index % 7))
+                .join(format!("{index}.csv"))
+        })
+        .collect();
+    // ntfs gives a file at most 1,024 names, so the object takes fewer links than that
+    let many: Vec<PathBuf> = (0..1000)
+        .map(|index| {
+            root.join("a")
+                .join("b")
+                .join("c")
+                .join(format!("d{}", index % 500))
+                .join(format!("{index}.csv"))
+        })
+        .collect();
+    for destinations in [few, many] {
+        let mut alone = Placer::starting_at(root.clone(), Method::Hardlink, None);
+        let one_by_one: Vec<Method> = destinations
+            .iter()
+            .map(|destination| alone.place(&object, destination, false).unwrap())
+            .collect();
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+            remove_placed(destination);
+        }
+        let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
+        let results = placer.place_all(
+            destinations.len(),
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+                size: CONTENTS.len() as u64,
+            },
+            |_| (),
+        );
+        let methods: Vec<Method> = results
+            .into_iter()
+            .map(|placed| placed.unwrap().0)
+            .collect();
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+            remove_placed(destination);
+        }
+        assert_eq!(methods, one_by_one);
+    }
+
+    let elsewhere = folder.path().join("elsewhere");
+    fs::create_dir_all(&elsewhere).unwrap();
+    if crate::test_links::link_folder(&elsewhere, &root.join("linked")).is_err() {
+        return crate::test_skips::skip("junctions", "this disk makes no junctions");
+    }
+    let mut placer = Placer::starting_at(root.clone(), Method::Hardlink, None);
+    let results = placer.place_all(
+        2,
+        |index| Order {
+            object: object.clone(),
+            destination: root.join("linked").join(format!("{index}.csv")),
+            writable: false,
+            size: CONTENTS.len() as u64,
+        },
+        |_| (),
+    );
+    assert!(results.iter().all(Result::is_err));
+    assert_eq!(fs::read_dir(&elsewhere).unwrap().count(), 0);
+}
+
+/// removes a file a test placed. windows removes a read-only file where std can ask it to ignore
+/// the flag, as on ntfs; fat32 and exfat refuse, and there a placed file is a copy of its own,
+/// whose flag goes first. a hardlink shares its flag with the cache's object, so it keeps it.
+#[cfg(windows)]
+fn remove_placed(path: &Path) {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::PermissionDenied => {
+            let mut permissions = fs::metadata(path).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "fat32 and exfat remove no read-only file"
+            )]
+            permissions.set_readonly(false);
+            fs::set_permissions(path, permissions).unwrap();
+            fs::remove_file(path).unwrap();
+        }
+        removed => removed.unwrap(),
+    }
+}
+
+/// a windows batch keeps chains holding no more handles than its bound. in the order a batch
+/// places files, the first of every folder before any second, a batch of many deep folders of two
+/// files each keeps chains for as many folders as the bound allows, holds the rest for each file
+/// alone, locates every file where the plain way does, and keeps none once every folder's last
+/// file is located.
+#[cfg(windows)]
+#[test]
+fn a_batch_holding_each_folder_once_keeps_no_more_handles_than_its_bound() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    let folders: Vec<PathBuf> = (0..300)
+        .map(|index| Path::new("a").join("b").join("c").join(format!("d{index}")))
+        .collect();
+    for folder in &folders {
+        fs::create_dir_all(root.join(folder)).unwrap();
+    }
+    let parents = Parents::default();
+    let relatives: Vec<&Path> = folders
+        .iter()
+        .flat_map(|folder| [folder.as_path(), folder.as_path()])
+        .collect();
+    // ten chains of four folders each
+    let handles = FolderHandles::keeping_at_most(40, relatives.iter().copied());
+    for name in ["1.csv", "2.csv"] {
+        for folder in &folders {
+            let below = folder.join(name);
+            let located = parents.locate_kept(&handles, &root, &below, true).unwrap();
+            assert_eq!(
+                located.path(),
+                parents.locate(&root, &below, true, false).unwrap().path()
+            );
+            assert!(handles.holding().0 <= 40, "{:?}", handles.holding());
+        }
+    }
+    assert_eq!(handles.holding(), (0, 40));
+}
+
+/// a windows batch stopped after its first file lets every folder it holds go as it ends, though
+/// the rest of their files were never placed.
+#[cfg(windows)]
+#[test]
+fn a_stopped_batch_holding_each_folder_once_lets_its_folders_go() {
+    let (folder, object) = cache(true);
+    let root = folder.path().join("data");
+    let destinations: Vec<PathBuf> = (0..40)
+        .map(|index| {
+            root.join(format!("{}", index % 4))
+                .join(format!("{index}.csv"))
+        })
+        .collect();
+    let stop = Arc::new(Stop::default());
+    let mut placer =
+        Placer::starting_at(root.clone(), Method::Hardlink, None).with_stop(Arc::clone(&stop));
+    let results = placer.place_all(
+        destinations.len(),
+        |index| Order {
+            object: object.clone(),
+            destination: destinations[index].clone(),
+            writable: false,
+            size: CONTENTS.len() as u64,
+        },
+        |_| stop.ask(),
+    );
+    assert!(results[0].is_ok());
+    assert!(results[1..].iter().all(Result::is_err));
+    for index in 0..4 {
+        fs::rename(
+            root.join(index.to_string()),
+            root.join(format!("moved {index}")),
+        )
+        .unwrap();
+    }
+}
+
 /// waits until a file written in `folder` gets a later time than `time`: a coarse clock, such
 /// as fat's two seconds, moves on only once a tick passes.
 #[cfg(windows)]

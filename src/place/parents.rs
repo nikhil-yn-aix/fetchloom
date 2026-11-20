@@ -71,6 +71,27 @@ pub(super) struct Location {
     name: OsString,
 }
 
+/// the folders of a batch of files, which unix never holds for a batch: each placement opens its
+/// own folder, so there is no value of this.
+pub(super) enum FolderHandles {}
+
+impl Parents {
+    /// [`Parents::locate`] of a file of the batch `handles` counts, which unix never has.
+    #[expect(
+        clippy::unused_self,
+        reason = "unix has no batch's folders to locate through"
+    )]
+    pub(super) fn locate_kept(
+        &self,
+        handles: &FolderHandles,
+        _root: &Path,
+        _below: &Path,
+        _real_root: bool,
+    ) -> io::Result<Location> {
+        match *handles {}
+    }
+}
+
 impl Parents {
     /// where `below`, a path below `root`, goes: its folder, opened through the root without
     /// following a link, and its name. with `make`, missing folders are made.
