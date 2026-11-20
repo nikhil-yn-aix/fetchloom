@@ -41,9 +41,9 @@ const PER_THREAD: usize = 64;
 /// flushed 60 copies a quarter faster than one, and more threads cost a small run about 1 MiB each.
 const FLUSHERS: usize = 2;
 
-/// the most threads a sync's placement into btrfs takes, placing files or naming those that waited
-/// for its flush: each create, clone and rename there updates the same trees, and past a few
-/// threads placing took longer and more cpu.
+/// the most threads a placement into btrfs takes, placing files or naming those that waited for its
+/// flush: each create, clone and rename there updates the same trees, and past a few threads
+/// placing took longer and more cpu.
 const BTRFS_THREADS: usize = 3;
 
 /// hashing this many bytes repays starting a worker even for a short file list.
@@ -98,9 +98,6 @@ pub(crate) struct Placer {
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
     /// someone named for `get` may be a link to one.
     checks_root: bool,
-    /// whether placing takes the thread counts measured for sync's placement, which only sync's
-    /// placer asks for, as `get` was not measured with them.
-    sync_threads: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
@@ -360,7 +357,6 @@ impl Placer {
             root,
             opened_at: None,
             checks_root: true,
-            sync_threads: false,
             folders: HashSet::new(),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
@@ -379,14 +375,6 @@ impl Placer {
 
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
         self.threads = threads;
-        self
-    }
-
-    /// places with the thread counts measured for sync's placement, the one caller that asks: at
-    /// most [`BTRFS_THREADS`] on btrfs, and on linux a run of files that each flush on their own on
-    /// up to [`FLUSHERS`] threads.
-    pub(crate) fn with_sync_threads(mut self) -> Placer {
-        self.sync_threads = true;
         self
     }
 
@@ -541,10 +529,10 @@ impl Placer {
         let grouped = folders.finish(serial);
         let threads = grouped.threads(this.threads);
         // the filesystem is asked only for work, as an empty placement must not latch a failed probe
-        let threads = if this.sync_threads && !ready.is_empty() {
-            placing_threads(threads, this.filesystem())
-        } else {
+        let threads = if ready.is_empty() {
             threads
+        } else {
+            placing_threads(threads, this.filesystem())
         };
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
         // for everything other programs wrote there
@@ -581,7 +569,6 @@ impl Placer {
             // on linux a put that flushes on its own waits on the disk far longer than a thread
             // takes to start
             let flushing = cfg!(target_os = "linux")
-                && this.sync_threads
                 && !batch
                 && placed
                     .1

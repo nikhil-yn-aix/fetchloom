@@ -1,5 +1,27 @@
 # Placement
 
+## get with sync's thread counts, 2026-11-20
+
+round 1 gave sync two thread counts it measured: at most three threads placing into btrfs, and on linux a run of 2 to 64 files that each flush on their own placed on two threads after the first. `get` kept one thread for such a run and every worker on btrfs until it was measured on its own. the round-2 fs window measured it: `get --dir` of zip archives of 4 KiB members from a local server into a new folder with an empty cache, the cache and the folder each on xfs or btrfs (loop images on nvme) or ext4 (nvme), off against on in shuffled rounds, 30 for archives of up to 65 members and 12 for 10,000, on build 0542b5227 over main dd9fae1e3.
+
+| case: members, cache's filesystem -> folder's | a whole `get`, median ms, off -> on | wall | cpu | peak memory |
+|---|---:|---:|---:|---:|
+| 10,000, btrfs -> btrfs | 2,374 -> 2,137 | 0.905 [0.884, 0.917] | 0.816 [0.811, 0.831] | 0.802, 117.0 -> 96.6 MiB |
+| 20, btrfs -> btrfs: clones, each flushed alone | 40.1 -> 35.5 | 0.885 [0.879, 0.909] | 1.026 [1.010, 1.042] | 1.003 |
+| 20, xfs -> xfs: clones | 25.2 -> 22.7 | 0.904 [0.898, 0.920] | 1.008 [0.988, 1.018] | 0.967 |
+| 20, ext4 -> xfs: copies across filesystems | 27.3 -> 23.6 | 0.867 [0.858, 0.876] | 1.004 [0.993, 1.013] | 0.942 |
+| 64, btrfs -> btrfs | 100.8 -> 88.7 | 0.888 [0.841, 0.920] | 1.054 [1.019, 1.073] | 0.996 |
+| 64, xfs -> xfs | 64.5 -> 56.3 | 0.883 [0.846, 0.900] | 1.024 [1.007, 1.041] | 1.002 |
+| 64, ext4 -> xfs | 63.8 -> 54.2 | 0.846 [0.809, 0.888] | 1.030 [1.011, 1.039] | 0.998 |
+| 2, on each of the three | 14.3 to 17.2, unchanged | 0.995 to 1.005 | 1.001 to 1.007 | 1.000 to 1.002 |
+| 300, btrfs -> btrfs | 112.5 -> 114.5 | 1.008 [0.984, 1.035] | 0.938 [0.924, 0.956] | 0.964 |
+| 65, one batch flush, on each of the three | 42.4 to 57.9 -> 42.1 to 56.6 | 0.993 to 1.015 | 1.001 to 1.017 | 0.999 to 1.000 |
+| 20 and 64, ext4 -> ext4: hardlinks | 17.2 -> 17.2, 35.0 -> 36.0 | 1.005 [0.994, 1.011], 1.029 [1.002, 1.085] | 0.999, 1.025 | 0.963, 0.999 |
+
+the milliseconds are each arm's median over its rounds, for a whole `get`: the download from a local server, the unpack into the cache and its flush, and the placing. they are not the placement-only budget for 10,000 cached files, which times a sync placing from a warm cache.
+
+the gains are the runs that flush one by one, where two flushes wait on the disk at once, and the 10,000 members on btrfs, where fewer threads queue on its tree locks. the price is cpu on the flushed runs: medians up to 1.054, none of their intervals wholly above 1.02, accepted for 10 to 15% of the wall. a hardlink needs no flush and ext4 is not btrfs, so neither count reaches a run that links, and the ext4 runs did link: they wrote 1,088 blocks a run, as the xfs clones did, against 1,600 for copies, and switched context as often on as off (342 times), so no flushing thread started. what moved the 64-member row's median to 1.029 [1.002, 1.085] is not established; it is the only row near the 1.03 line, and it passes. kept: every placement now takes both counts.
+
 ## flushing a few files on a busy disk, 2026-11-09
 
 the readme's first `add`, 18 KiB from hugging face, took 14 s on this machine's os disk, which a training job kept busy: the batch's one `syncfs` waits for everything any program wrote to the filesystem, and one took 16.7 s. the final benchmark measured d2bc3e7, and this change was measured on its own, below. the other commits since change nothing the lab times but a check for a git repository after each sync, a few system calls.

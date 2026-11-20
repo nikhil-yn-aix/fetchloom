@@ -2562,9 +2562,8 @@ fn a_name_with_a_drive_or_a_stream_is_refused() {
     );
 }
 
-/// a sync placing into btrfs takes at most [`BTRFS_THREADS`] threads, fewer when the run asks for
-/// fewer; any other filesystem, and a placer that did not ask for sync's counts, as `get`'s does
-/// not, take as many as before, with the same files placed either way.
+/// placing into btrfs takes at most [`BTRFS_THREADS`] threads, fewer when the run asks for fewer,
+/// and any other filesystem as many as before, with the same files placed either way.
 #[test]
 fn placing_into_btrfs_takes_a_few_threads() {
     let any = Threads::default();
@@ -2583,26 +2582,17 @@ fn placing_into_btrfs_takes_a_few_threads() {
     let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     // the first file goes alone on the calling thread, before any worker starts
     let caller = std::thread::current().id();
-    for (filesystem, sync) in [
-        (Filesystem::Other, true),
-        (Filesystem::Btrfs, true),
-        (Filesystem::Btrfs, false),
-    ] {
-        let root = folder.path().join(format!("data-{filesystem:?}-{sync}"));
+    for filesystem in [Filesystem::Other, Filesystem::Btrfs] {
+        let root = folder.path().join(format!("data-{filesystem:?}"));
         let workers = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
         let seen = Arc::clone(&workers);
-        let placer =
+        let mut placer =
             Placer::starting_at(root.clone(), Method::Hardlink, None).observing(move |_| {
                 let worker = std::thread::current().id();
                 if worker != caller {
                     seen.lock().unwrap().insert(worker);
                 }
             });
-        let mut placer = if sync {
-            placer.with_sync_threads()
-        } else {
-            placer
-        };
         assert!(placer.filesystem.set(filesystem).is_ok());
         let destinations: Vec<PathBuf> = (0..1024)
             .map(|index| root.join(format!("d{}/{index}.csv", index % 4)))
@@ -2618,22 +2608,18 @@ fn placing_into_btrfs_takes_a_few_threads() {
             Metadata::len,
         );
         for result in results {
-            assert_eq!(
-                result.unwrap().1,
-                CONTENTS.len() as u64,
-                "{filesystem:?} {sync}"
-            );
+            assert_eq!(result.unwrap().1, CONTENTS.len() as u64, "{filesystem:?}");
         }
         for destination in &destinations {
             assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
         }
         let used = workers.lock().unwrap().len();
-        if filesystem == Filesystem::Btrfs && sync {
+        if filesystem == Filesystem::Btrfs {
             assert!(used <= BTRFS_THREADS, "{used}");
         } else {
             assert!(
                 processors <= BTRFS_THREADS || used > BTRFS_THREADS,
-                "{filesystem:?} {sync}: {used}"
+                "{used}"
             );
         }
     }
@@ -2692,10 +2678,9 @@ fn jobs_stop_at_the_first_failure_in_order() {
     }
 }
 
-/// on linux a sync's placement of a few copies, each flushed on its own, places them on several
-/// threads, each whole under its own name with no hidden copy left; a larger one, which waits for
-/// one flush of the filesystem, keeps its one thread, as does a placer that did not ask for sync's
-/// counts, as `get`'s does not.
+/// on linux a placement of a few copies, each flushed on its own, places them on several threads,
+/// each whole under its own name with no hidden copy left; a larger one, which waits for one flush
+/// of the filesystem, keeps its one thread.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_few_copies_flushed_alone_go_on_threads() {
@@ -2705,21 +2690,14 @@ fn a_few_copies_flushed_alone_go_on_threads() {
 
     let (folder, object) = cache(true);
     let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
-    let runs = [true, false].into_iter().flat_map(|sync| {
-        [1, 60, MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1].map(|files| (sync, files))
-    });
-    for (sync, files) in runs {
-        let root = folder.path().join(format!("data-{files}-{sync}"));
+    for files in [1, 60, MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1] {
+        let root = folder.path().join(format!("data-{files}"));
         let workers = Arc::new(Mutex::new(HashSet::new()));
         let seen = Arc::clone(&workers);
-        let placer = Placer::starting_at(root.clone(), Method::Copy, None).observing(move |_| {
-            seen.lock().unwrap().insert(std::thread::current().id());
-        });
-        let mut placer = if sync {
-            placer.with_sync_threads()
-        } else {
-            placer
-        };
+        let mut placer =
+            Placer::starting_at(root.clone(), Method::Copy, None).observing(move |_| {
+                seen.lock().unwrap().insert(std::thread::current().id());
+            });
         let destinations: Vec<PathBuf> = (0..files)
             .map(|index| root.join(format!("{index}.csv")))
             .collect();
@@ -2745,7 +2723,7 @@ fn a_few_copies_flushed_alone_go_on_threads() {
             "a hidden copy was left"
         );
         let used = workers.lock().unwrap().len();
-        let spread = sync && processors > 1 && files > 1 && files <= MOST_FLUSHED_ALONE;
-        assert_eq!(used > 1, spread, "{files} {sync}: {used}");
+        let spread = processors > 1 && files > 1 && files <= MOST_FLUSHED_ALONE;
+        assert_eq!(used > 1, spread, "{files}: {used}");
     }
 }
