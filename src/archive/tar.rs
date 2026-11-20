@@ -273,6 +273,12 @@ pub(super) fn unpack(
                 passed?;
                 guard.leave_out(path);
             }
+            Named::Unstorable => {
+                headers.in_member.set(true);
+                let passed = guard.pass(&raw, &mut entry);
+                headers.in_member.set(false);
+                passed?;
+            }
             Named::Folder => {}
         }
     }
@@ -308,6 +314,7 @@ fn hardlink(
     let earlier = guard.earlier_file(&target);
     match guard.name(raw, false)? {
         Named::System(path) => guard.leave_out(path),
+        Named::Unstorable => {}
         Named::File(path) => {
             let Some(earlier) = earlier else {
                 return Err(refused_member(
