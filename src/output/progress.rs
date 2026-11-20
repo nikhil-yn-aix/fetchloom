@@ -1,9 +1,10 @@
 //! progress while downloads and unpacking run: bars on a terminal a person watches, and plain
 //! lines now and then anywhere else.
 
+use std::collections::VecDeque;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, PoisonError, Weak};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -67,6 +68,9 @@ pub(crate) struct Bar {
     color: bool,
     unicode: bool,
     moved: Arc<Moved>,
+    /// for a bar that joins the terminal's bars only once the command has lasted a moment, as an
+    /// import's, its place among the bars waiting to join.
+    later: Option<Arc<Later>>,
 }
 
 /// when a bar last moved, so a download that stopped receiving can say so, and whether the run
@@ -199,6 +203,7 @@ impl Bar {
             color: false,
             unicode: false,
             moved: Arc::new(Moved::new(Arc::default())),
+            later: None,
         }
     }
 
@@ -219,6 +224,7 @@ impl Bar {
             color,
             unicode,
             moved,
+            later: None,
         }
     }
 
@@ -348,8 +354,132 @@ impl Bar {
 
 impl Drop for Bar {
     fn drop(&mut self) {
+        if let Some(later) = &self.later {
+            later.end();
+        }
         if let Some(bar) = &self.drawn {
             bar.finish_and_clear();
+        }
+    }
+}
+
+/// a bar drawn nowhere until it joins the terminal's bars.
+pub(super) struct Later {
+    bar: ProgressBar,
+    bars: MultiProgress,
+    /// whether the bar joined the terminal's bars or ended, after which it never joins.
+    settled: Mutex<bool>,
+}
+
+impl Later {
+    /// puts the bar among the terminal's bars, ticking, unless it joined or ended.
+    fn show(&self) {
+        let mut settled = self.settled.lock().unwrap_or_else(PoisonError::into_inner);
+        if !*settled {
+            *settled = true;
+            self.bars.add(self.bar.clone());
+            self.bar.enable_steady_tick(TICK);
+        }
+    }
+
+    fn end(&self) {
+        *self.settled.lock().unwrap_or_else(PoisonError::into_inner) = true;
+    }
+}
+
+/// how often at most the bars whose time came join the terminal's, so many bars due close
+/// together wake the thread adding them no more than 20 times a second.
+const JOINS_EVERY: Duration = Duration::from_millis(50);
+
+/// bars of work that usually ends in a moment, such as an import's copying, which join the
+/// terminal's bars only at a time they are given, so work that ends before draws no frame. a bar
+/// that comes and goes redraws every bar on the terminal, a flash a person cannot read.
+#[derive(Default)]
+pub(super) struct Joining {
+    waiting: Mutex<Waiting>,
+}
+
+/// the bars waiting to join, each with when it joins, the earliest first, and whether a thread
+/// adds them.
+#[derive(Default)]
+struct Waiting {
+    due: VecDeque<(Instant, Weak<Later>)>,
+    adding: bool,
+}
+
+impl Waiting {
+    /// the bars whose time came by `now`, taken off the list.
+    fn take_due(&mut self, now: Instant) -> Vec<Weak<Later>> {
+        let count = self.due.iter().take_while(|(at, _)| *at <= now).count();
+        self.due.drain(..count).map(|(_, later)| later).collect()
+    }
+
+    /// how long after `now` the next bar joins, at least [`JOINS_EVERY`], or none when no bar
+    /// waits.
+    fn next(&self, now: Instant) -> Option<Duration> {
+        let (at, _) = self.due.front()?;
+        Some(at.saturating_duration_since(now).max(JOINS_EVERY))
+    }
+}
+
+impl Joining {
+    /// a bar like [`Bar::add`]'s that counts unseen and joins `bars` at `due`, kept in order of
+    /// when each joins.
+    pub(super) fn bar_at(
+        self: &Arc<Self>,
+        bars: &MultiProgress,
+        (verb, message): (&'static str, String),
+        (color, unicode): (bool, bool),
+        stopping: Arc<AtomicBool>,
+        due: Instant,
+    ) -> Bar {
+        let moved = Arc::new(Moved::new(stopping));
+        let bar =
+            ProgressBar::with_draw_target(None, ProgressDrawTarget::hidden()).with_message(message);
+        bar.set_style(style(verb, color, unicode, &bar.message(), moved.clone()));
+        let later = Arc::new(Later {
+            bar: bar.clone(),
+            bars: bars.clone(),
+            settled: Mutex::new(false),
+        });
+        let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        let at = waiting.due.partition_point(|(when, _)| *when <= due);
+        waiting.due.insert(at, (due, Arc::downgrade(&later)));
+        if !waiting.adding {
+            let joining = self.clone();
+            // without a thread the bar never joins, as one too quick to see
+            waiting.adding = std::thread::Builder::new()
+                .name("bars".to_owned())
+                .spawn(move || joining.add_when_due())
+                .is_ok();
+        }
+        Bar {
+            drawn: Some(bar),
+            color,
+            unicode,
+            moved,
+            later: Some(later),
+        }
+    }
+
+    /// adds each waiting bar as its time comes, and ends once none waits.
+    fn add_when_due(&self) {
+        loop {
+            let mut waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+            let now = Instant::now();
+            let due = waiting.take_due(now);
+            let next = waiting.next(now);
+            if due.is_empty() && next.is_none() {
+                waiting.adding = false;
+                return;
+            }
+            drop(waiting);
+            for later in due.iter().filter_map(Weak::upgrade) {
+                later.show();
+            }
+            if let Some(wait) = next {
+                std::thread::sleep(wait);
+            }
         }
     }
 }
@@ -1052,6 +1182,7 @@ mod tests {
             color: false,
             unicode: false,
             moved,
+            later: None,
         };
         assert!(bar.moved.quiet() >= STALL, "{:?}", bar.moved.quiet());
         bar.answered(Duration::from_secs(4));
@@ -1911,5 +2042,128 @@ mod tests {
                 .all(|line| line.starts_with("Resolving zenodo:1 · ")),
             "{heard:?}"
         );
+    }
+
+    /// a list of bars waiting to join, the second at `start` plus `offsets`.
+    fn waiting_at(start: Instant, offsets: &[Duration]) -> (Waiting, Vec<Arc<Later>>) {
+        let bars = MultiProgress::with_draw_target(ProgressDrawTarget::hidden());
+        let mut waiting = Waiting::default();
+        let mut kept = Vec::new();
+        for offset in offsets {
+            let later = Arc::new(Later {
+                bar: ProgressBar::hidden(),
+                bars: bars.clone(),
+                settled: Mutex::new(false),
+            });
+            waiting
+                .due
+                .push_back((start + *offset, Arc::downgrade(&later)));
+            kept.push(later);
+        }
+        (waiting, kept)
+    }
+
+    /// bars join in the order they came, each once its time came, and the thread that adds them
+    /// sleeps at least [`JOINS_EVERY`] between rounds, however close their times.
+    #[test]
+    fn a_bar_joins_once_its_moment_passed() {
+        let start = Instant::now();
+        let second = Duration::from_secs(1);
+        let offsets = [second, second + Duration::from_millis(1), 2 * second];
+        let (mut waiting, kept) = waiting_at(start, &offsets);
+        assert_eq!(waiting.next(start), Some(second));
+        assert!(waiting.take_due(start + second / 2).is_empty());
+        let due = waiting.take_due(start + second);
+        assert_eq!(due.len(), 1);
+        assert!(due[0].ptr_eq(&Arc::downgrade(&kept[0])));
+        assert_eq!(waiting.next(start + second), Some(JOINS_EVERY));
+        let due = waiting.take_due(start + 3 * second);
+        assert_eq!(due.len(), 2);
+        assert!(due[1].ptr_eq(&Arc::downgrade(&kept[2])));
+        assert_eq!(waiting.next(start + 3 * second), None);
+    }
+
+    /// an output on `screen` for a command that started at `started`, whose import bars wait until
+    /// it has lasted `moment`.
+    fn importing_on(screen: &Screen, moment: Duration, started: Instant) -> super::super::Output {
+        let mut output = super::super::Output::on_screen(screen.clone());
+        output.untold = moment;
+        output.started = started;
+        output
+    }
+
+    /// the times the import bars waiting to join are due.
+    fn due_of(output: &super::super::Output) -> Vec<Instant> {
+        let waiting = output.joining.as_ref().unwrap().waiting.lock().unwrap();
+        waiting.due.iter().map(|(at, _)| *at).collect()
+    }
+
+    /// an import that copies and finishes within its command's moment draws no frame, and one
+    /// whose moment has passed draws both its bars at once.
+    #[test]
+    fn an_import_that_ends_within_its_moment_draws_no_bar() {
+        let hour = Duration::from_secs(3600);
+        let screen = Screen::default();
+        let output = importing_on(&screen, hour, Instant::now());
+        let copying = output.short_bar("Copying", "10 files".to_owned());
+        copying.start(Some(1000), 0);
+        copying.advance(1000);
+        drop(copying);
+        drop(output.short_wait("Finishing", "10 files".to_owned()));
+        assert_eq!(screen.records(), Vec::<String>::new());
+
+        let screen = Screen::default();
+        let output = importing_on(&screen, Duration::ZERO, Instant::now());
+        let copying = output.short_bar("Copying", "10 files".to_owned());
+        copying.start(Some(1000), 0);
+        assert!(screen.shows("Copying"), "{:?}", screen.records());
+        drop(copying);
+        let finishing = output.short_bar("Finishing", "10 files".to_owned());
+        finishing.start(None, 0);
+        assert!(screen.shows("Finishing"), "{:?}", screen.records());
+    }
+
+    /// the moment counts from the command's start, not from the import's or a step's: every step
+    /// that begins before it joins when the command has lasted it, at one time.
+    #[test]
+    fn the_moment_counts_from_the_command_s_start_across_steps() {
+        let hour = Duration::from_secs(3600);
+        let started = Instant::now();
+        let output = importing_on(&Screen::default(), hour, started);
+        let copying = output.short_bar("Copying", "10 files".to_owned());
+        drop(copying);
+        let finishing = output.short_bar("Finishing", "10 files".to_owned());
+        assert_eq!(due_of(&output), [started + hour, started + hour]);
+        drop(finishing);
+    }
+
+    /// an import's moment delays the import's bars alone: a download's bar made while the import's
+    /// waits draws at once.
+    #[test]
+    fn an_import_s_moment_leaves_other_bars_as_they_were() {
+        let hour = Duration::from_secs(3600);
+        let screen = Screen::default();
+        let output = importing_on(&screen, hour, Instant::now());
+        let copying = output.short_bar("Copying", "10 files".to_owned());
+        copying.start(Some(1000), 0);
+        let bar = output.bar("Downloading", "mid.bin".to_owned());
+        bar.start(Some(1000), 0);
+        assert!(screen.shows("mid.bin"), "{:?}", screen.records());
+        assert!(!screen.text().contains("Copying"), "{:?}", screen.records());
+        drop((copying, bar));
+    }
+
+    /// a walk before copying begins does not push the first bar back: it is due a moment from the
+    /// command's start, not the copying's, so a person sees progress about a moment after pressing
+    /// enter, whatever came before the copying.
+    #[test]
+    fn a_long_walk_before_copying_still_shows_the_first_bar_a_moment_from_the_start() {
+        let hour = Duration::from_secs(3600);
+        // a walk short enough to subtract from any machine's clock, which windows counts from boot
+        let started = Instant::now().checked_sub(Duration::from_secs(9)).unwrap();
+        let output = importing_on(&Screen::default(), hour, started);
+        let copying = output.short_bar("Copying", "10 files".to_owned());
+        assert_eq!(due_of(&output), [started + hour]);
+        drop(copying);
     }
 }

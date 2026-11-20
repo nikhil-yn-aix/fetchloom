@@ -308,7 +308,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 |---|---|---|---|
 | `src/output.rs` | everything fetchloom prints: the answer on stdout; the story, prompts and errors on stderr; the JSON document and the buffers it is encoded into | `Output` | `Level`, `Document`, `Problem`, `Pieces`, `step`, `done`, `warn`, `answer`, `report`, `document`, `verb_line` |
 | `src/output/style.rs` | what the terminal can show, decided once at start: color, unicode, links, and `FETCHLOOM_COLORS` | `Style`, `Palette` | `ColorChoice`, `detect`, `stdout_color` |
-| `src/output/progress.rs` | progress while work runs: byte bars, waits, the steps before a command's work and item counts, as bars on a terminal a person watches and plain lines now and then anywhere else | `Bar`, `Ticker` | `Wait`, `Setup`, `start`, `advance`, `sized` |
+| `src/output/progress.rs` | progress while work runs: byte bars, waits, the steps before a command's work and item counts, as bars on a terminal a person watches and plain lines now and then anywhere else; an import's bars, which join only once the command has lasted a second | `Bar`, `Ticker` | `Wait`, `Setup`, `Joining`, `start`, `advance`, `sized` |
 | `src/output/picker.rs` | the arrow-key dataset choice and its cancellation, and the numbered choice of accessible output | `choose` | `numbered`, `selection_key`, `row` |
 | `src/output/fit.rs` | lines wrapped to the terminal, and help examples continued as a shell reads them | `fit` | `example`, `MARK` |
 | `src/output/raw.rs` | a question's hold on its terminal: raw from before the prompt until the answer, so no typed key is echoed, and put back on every way out | `question` | `release` |

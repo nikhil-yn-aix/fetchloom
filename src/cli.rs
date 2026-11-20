@@ -911,7 +911,8 @@ pub(crate) fn run() -> ExitCode {
     let output = Output::new(style, level, global.json, logs.on_stderr())
         .without_hints(crate::machine::is_on(&var, "FETCHLOOM_NO_HINTS"))
         .with_progress(global.progress)
-        .fitted(crate::output::story_columns());
+        .fitted(crate::output::story_columns())
+        .started_at(started);
     let mut context = Context::new(output);
     if let Some(refused) = &logs.refused {
         context.output.warn(Warning::TraceUnwritable, refused);

@@ -1416,7 +1416,7 @@ fn into_cache(
         .collect();
     unchanged(&copies)?;
     // every file is copied, and the disk still has to keep them before they are in the cache
-    let finishing = context.output.wait(
+    let finishing = context.output.short_wait(
         "Finishing",
         units::count(found.len() as u64, "file", "files"),
     );
@@ -1504,7 +1504,7 @@ fn sealed(
         )
     })?;
     let what = units::count(found.len() as u64, "file", "files");
-    let bar = context.output.bar("Copying", what.clone());
+    let bar = context.output.short_bar("Copying", what.clone());
     bar.start(Some(walked.bytes()), 0);
     let ticker = context
         .output
@@ -2111,6 +2111,33 @@ mod tests {
                 pin.path
             );
         }
+    }
+
+    /// an import that ends within its command's moment, a second at a terminal, draws no bar, so
+    /// adding a small folder shows no progress that flashes and goes.
+    #[test]
+    fn a_quick_import_draws_no_bar() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("flowers");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("iris.csv"), b"iris\n").unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let screen = crate::output::screen::Screen::default();
+        let mut context = Context::new(Output::on_screen_after(
+            screen.clone(),
+            std::time::Duration::from_secs(3600),
+        ));
+        context.offline = crate::net::Offline::Flag;
+        let walked = walk(
+            &root,
+            "./flowers",
+            &entry(&[], &[]),
+            crate::net::MOST_FILES,
+            &context.stop,
+        )
+        .unwrap();
+        into_cache(&context, &cache, &walked, &|_| Ok(())).unwrap();
+        assert_eq!(screen.records(), Vec::<String>::new());
     }
 
     /// on windows, a folder of an import swapped for a junction once it was walked, as another

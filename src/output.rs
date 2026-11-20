@@ -14,7 +14,7 @@ use std::fmt::Write as _;
 use std::io::{IsTerminal, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anstyle::Style as Paint;
 use indicatif::{MultiProgress, ProgressDrawTarget};
@@ -104,6 +104,11 @@ pub(crate) struct Output {
     /// the words withheld from the commands rows on stdout name, so every row of the run gives
     /// one name one placeholder, said once.
     withheld: Mutex<crate::suggested::Withheld>,
+    /// when the command started: an import's bars wait until it has lasted [`Output::untold`].
+    started: Instant,
+    /// an import's bars waiting for that moment, each to join the terminal's bars at its time,
+    /// where bars draw.
+    joining: Option<Arc<progress::Joining>>,
 }
 
 /// the output while a first ctrl-c is decided and told, from [`Output::alone`]: every other line
@@ -358,6 +363,7 @@ impl Output {
         let bars =
             (style.interactive && !style.accessible && !json && !logs && level >= Level::Normal)
                 .then(|| MultiProgress::with_draw_target(progress::terminal()));
+        let joining = bars.as_ref().map(|_| Arc::default());
         let output = Output {
             style,
             level,
@@ -384,6 +390,8 @@ impl Output {
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
             columns: None,
+            started: Instant::now(),
+            joining,
         };
         if !unread.is_empty() {
             output.warn_with(
@@ -570,7 +578,20 @@ impl Output {
         output.bars = Some(MultiProgress::with_draw_target(
             ProgressDrawTarget::term_like(Box::new(screen)),
         ));
+        output.joining = Some(Arc::default());
         output.untold = Duration::ZERO;
+        output
+    }
+
+    /// for tests elsewhere: [`Output::on_screen`], whose lasting work and import bars wait `moment`
+    /// before they show.
+    #[cfg(test)]
+    pub(crate) fn on_screen_after(
+        screen: impl indicatif::TermLike + 'static,
+        moment: Duration,
+    ) -> Output {
+        let mut output = Output::on_screen(screen);
+        output.untold = moment;
         output
     }
 
@@ -626,6 +647,12 @@ impl Output {
     /// script that reads the one document still shows a person how a long run goes.
     pub(crate) fn with_progress(mut self, on: bool) -> Self {
         self.progress = on;
+        self
+    }
+
+    /// counts an import's moment from `started`, when the command started.
+    pub(crate) fn started_at(mut self, started: Instant) -> Self {
+        self.started = started;
         self
     }
 
@@ -868,12 +895,48 @@ impl Output {
             (self.style.color, self.style.unicode),
             self.stopping.clone(),
         );
+        self.remember(bar)
+    }
+
+    /// keeps `bar` among those a first ctrl-c redraws.
+    fn remember(&self, bar: Bar) -> Bar {
         if let Some(weak) = bar.weak() {
             let mut drawn = self.drawn.lock().unwrap_or_else(PoisonError::into_inner);
             drawn.retain(|bar| bar.upgrade().is_some());
             drawn.push(weak);
         }
         bar
+    }
+
+    /// a bar for a step of work that usually ends in a moment, as an import's copying: it joins
+    /// the terminal's bars once the command has lasted [`Output::untold`] since it started,
+    /// whatever came before the step, and at once when that has passed, so work that ends within
+    /// the moment draws no frame. hidden unless a person is watching the terminal.
+    pub(crate) fn short_bar(&self, verb: &'static str, message: String) -> Bar {
+        let (Some(bars), Some(joining)) = (&self.bars, &self.joining) else {
+            return self.bar(verb, message);
+        };
+        let due = self.started + self.untold;
+        if due <= Instant::now() {
+            return self.bar(verb, message);
+        }
+        let bar = joining.bar_at(
+            bars,
+            (verb, message),
+            (self.style.color, self.style.unicode),
+            self.stopping.clone(),
+            due,
+        );
+        self.remember(bar)
+    }
+
+    /// [`Output::wait`], its bar a [`Output::short_bar`]; its plain lines where no bar shows are the
+    /// same.
+    pub(crate) fn short_wait(&self, verb: &'static str, what: String) -> Wait {
+        Wait {
+            _bar: self.short_bar(verb, what.clone()),
+            _ticker: self.ticker(verb, what, [None]),
+        }
     }
 
     /// a step before a command's own work, as `verb` and `what`, such as `Locking the project`: a
