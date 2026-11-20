@@ -3588,6 +3588,46 @@ fn a_rolled_back_add_takes_the_files_it_placed_with_it() -> Result {
     Ok(())
 }
 
+/// an add rolled back before any of its files landed still takes back the .gitignore it wrote in
+/// the dataset's folder first, so the folder is as the add found it.
+#[cfg(unix)]
+#[test]
+fn a_rolled_back_add_that_placed_nothing_takes_its_marker_back() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    if !folders_refuse_files(&sandbox)? {
+        return skipped("permissions", "this disk keeps no folder from new files");
+    }
+    // two top folders, so neither is cut as the one all the archive's files share
+    let bytes = zip_of(&[("sub/b.csv", b"other"), ("two/c.csv", b"more")])?;
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    let dataset = sandbox.work().join("data").join("rolled");
+    let refusing = [dataset.join("sub"), dataset.join("two")];
+    for folder in &refusing {
+        fs::create_dir_all(folder)?;
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o555))?;
+    }
+
+    let added = sandbox.run(&["add", &server.url, "--as", "rolled"]);
+    for folder in &refusing {
+        fs::set_permissions(folder, fs::Permissions::from_mode(0o755))?;
+    }
+    let added = added?;
+
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(50), "{stderr}");
+    assert!(
+        stderr.contains("restored data.toml and data.lock"),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.toml").exists(), "{stderr}");
+    assert!(!dataset.join(".gitignore").exists(), "{stderr}");
+    Ok(())
+}
+
 /// sync removed the earlier file itself, so once a failed replacement can go ahead, the next sync
 /// places the pin without saying someone deleted or moved the file.
 #[cfg(unix)]
