@@ -15,7 +15,7 @@ use crate::error::{Error, Kind};
 /// prints the script, or for the scripts' own call, `--names`, the dataset names [`names`] finds.
 pub(super) fn print(context: &Context, asked: &args::Completions, started: Instant) -> ExitCode {
     if let Some(current) = &asked.names {
-        return names_told(current, &asked.words);
+        return names_told(current, &asked.words, asked.shell == Shell::Bash);
     }
     let shell = asked.shell;
     let outcome = if context.output.json() {
@@ -35,12 +35,17 @@ pub(super) fn print(context: &Context, asked: &args::Completions, started: Insta
 }
 
 /// exits 1 where no dataset's name goes, so the script falls back on its own completer.
-fn names_told(current: &str, before: &[String]) -> ExitCode {
+/// `narrowed` leaves out the names that cannot start with `current`, as bash's script keeps only
+/// those: at 100,000 datasets, its own filter over every name took most of a tab's time.
+fn names_told(current: &str, before: &[String], narrowed: bool) -> ExitCode {
     let Some(names) = names(current, before) else {
         return ExitCode::FAILURE;
     };
     let mut lines = String::new();
-    for name in &names {
+    for name in names
+        .iter()
+        .filter(|name| !narrowed || may_start(name, current))
+    {
         lines.push_str(name);
         lines.push('\n');
     }
@@ -48,6 +53,17 @@ fn names_told(current: &str, before: &[String]) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(_) => ExitCode::FAILURE,
     }
+}
+
+/// whether `name` may be one bash's script keeps after `current` was typed, `[[ $name ==
+/// "$current"* ]]`: a start the same in ascii letters of either case, which `nocasematch` may
+/// take, and every name when `current` is not ascii, which a locale may fold in its own way.
+fn may_start(name: &str, current: &str) -> bool {
+    !current.is_ascii()
+        || name
+            .as_bytes()
+            .get(..current.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(current.as_bytes()))
 }
 
 /// the dataset names of the project `-C` names, else the current folder's, when `current`, after
@@ -556,6 +572,27 @@ fn write(script: &[u8]) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a name may start with the typed word in ascii letters of either case, and every name may
+    /// when the word is not ascii, so bash's own filter, `nocasematch` or not, keeps the same.
+    #[test]
+    fn a_name_may_start_with_a_word_of_either_case_or_beyond_ascii() {
+        for (name, current, may) in [
+            ("iris", "", true),
+            ("iris", "ir", true),
+            ("iris", "IR", true),
+            ("iris", "Iris", true),
+            ("iris", "iris", true),
+            ("iris", "irises", false),
+            ("iris", "co", false),
+            ("iris-2", "iris-", true),
+            ("iris/Iris.csv", "iris/i", true),
+            ("iris", "\u{e9}", true),
+            ("iris", "ir\u{212a}", true),
+        ] {
+            assert_eq!(may_start(name, current), may, "{name}, {current}");
+        }
+    }
 
     #[test]
     fn names_come_from_headers_or_else_from_the_whole_file() {

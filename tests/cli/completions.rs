@@ -314,6 +314,141 @@ fn bash_completes_the_dataset_names_data_toml_has() -> Result {
     Ok(())
 }
 
+/// a folder of `sandbox` holding a stand-in for `program` that, asked for bash's names, answers as
+/// fetchloom answers zsh's script, with every name, and passes anything else on.
+#[cfg(unix)]
+fn giving_every_name(sandbox: &Sandbox, program: &std::path::Path) -> Result<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let whole = sandbox.folder("whole")?;
+    let stand_in = whole.join("fetchloom");
+    std::fs::write(
+        &stand_in,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = completions ] && [ \"$2\" = bash ]; then\n  shift 2\n  exec '{0}' completions zsh \"$@\"\nfi\nexec '{0}' \"$@\"\n",
+            program.display()
+        ),
+    )?;
+    std::fs::set_permissions(&stand_in, std::fs::Permissions::from_mode(0o755))?;
+    Ok(whole)
+}
+
+/// this test run's search path with `first` searched before it.
+#[cfg(unix)]
+fn searched_first(first: &std::path::Path) -> Result<std::ffi::OsString> {
+    let rest = std::env::var_os("PATH").unwrap_or_default();
+    Ok(std::env::join_paths(
+        std::iter::once(first.to_path_buf()).chain(std::env::split_paths(&rest)),
+    )?)
+}
+
+/// bash offers the same names when fetchloom gives it only those that may start with the typed
+/// word as when it gives every name, which a stand-in program asks as zsh's script does, with
+/// `nocasematch` off and on, for a dataset's name, a file in its folder, an empty word and one
+/// beyond ascii. skipped where bash is not installed.
+#[cfg(unix)]
+#[test]
+fn bash_offers_the_same_names_from_only_those_that_may_start_with_the_word() -> Result {
+    use std::fmt::Write as _;
+
+    if std::process::Command::new("bash")
+        .args(["-c", ":"])
+        .output()
+        .is_err()
+    {
+        return crate::support::skipped("bash", "no bash, so no bash completion to load");
+    }
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let mut toml = String::new();
+    for name in ["iris", "irises", "iris-2", "cows", "i"] {
+        writeln!(
+            toml,
+            "[datasets.{name}]\nref = \"https://example.org/{name}.csv\"\n"
+        )?;
+    }
+    std::fs::write(work.join("data.toml"), toml)?;
+    let iris = work.join("data").join("iris");
+    std::fs::create_dir_all(iris.join("Extra"))?;
+    for file in ["Iris.csv", "iris.txt", "IRX.csv", "irm.csv"] {
+        std::fs::write(iris.join(file), "x")?;
+    }
+    let script = sandbox.folder("scripts")?.join("fetchloom.bash");
+    std::fs::write(&script, sandbox.run(&["completions", "bash"])?.stdout)?;
+    let program = crate::support::executable();
+    let folder = program.parent().ok_or("the program has no folder")?;
+    let narrowed = searched_first(folder)?;
+    let every = searched_first(&giving_every_name(&sandbox, program)?)?;
+    let offered = |words: &str, nocase: bool, path: &std::ffi::OsStr| -> Result<Vec<String>> {
+        let shopt = if nocase { "shopt -s nocasematch" } else { ":" };
+        let complete = format!(
+            r#"{shopt} && . "$1" && COMP_WORDS=({words}) && COMP_CWORD=$((${{#COMP_WORDS[@]}} - 1)) &&
+            _fetchloom fetchloom "${{COMP_WORDS[COMP_CWORD]}}" "${{COMP_WORDS[COMP_CWORD - 1]}}" &&
+            printf 'offered %s\n' "${{COMPREPLY[@]}}""#
+        );
+        let output = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(complete)
+            .arg("bash")
+            .arg(&script)
+            .current_dir(&work)
+            .env("PATH", path)
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        Ok(text(&output.stdout)?
+            .lines()
+            .filter_map(|line| line.strip_prefix("offered "))
+            .filter(|offer| !offer.is_empty())
+            .map(str::to_owned)
+            .collect())
+    };
+    let through = format!("fetchloom -C {} path IR", work.display());
+    for words in [
+        "fetchloom path ir",
+        "fetchloom path IR",
+        "fetchloom path iris",
+        "fetchloom path ''",
+        "fetchloom path i",
+        "fetchloom path \u{e9}",
+        "fetchloom path iris/",
+        "fetchloom path iris/i",
+        "fetchloom path iris/I",
+        "fetchloom path iris/ex",
+        "fetchloom remove co",
+        through.as_str(),
+    ] {
+        for nocase in [false, true] {
+            assert_eq!(
+                offered(words, nocase, &narrowed)?,
+                offered(words, nocase, &every)?,
+                "{words}, nocasematch {nocase}"
+            );
+        }
+    }
+    assert_eq!(
+        offered("fetchloom path ir", false, &narrowed)?,
+        ["iris", "iris-2", "irises"]
+    );
+    assert_eq!(
+        offered("fetchloom path IR", false, &narrowed)?,
+        Vec::<String>::new()
+    );
+    assert_eq!(
+        offered("fetchloom path IR", true, &narrowed)?,
+        ["iris", "iris-2", "irises"]
+    );
+    assert_eq!(
+        offered("fetchloom path iris/I", true, &narrowed)?,
+        [
+            "iris/IRX.csv",
+            "iris/Iris.csv",
+            "iris/iris.txt",
+            "iris/irm.csv"
+        ]
+    );
+    Ok(())
+}
+
 /// a data.toml that is no file, such as a fifo, is never opened, so a tab never waits on it.
 #[cfg(unix)]
 #[test]
