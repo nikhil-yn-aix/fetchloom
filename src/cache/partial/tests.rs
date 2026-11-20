@@ -857,6 +857,57 @@ fn writeback_waits_for_the_first_bytes_then_starts_every_few() {
     assert_eq!(split.wrote(1040, 1), [(30, 61), (1040, 1041)]);
 }
 
+/// a download starts the disk writing after 8 MiB and each 8 MiB after.
+#[test]
+fn a_download_starts_the_disk_after_each_eight_mib() {
+    const MIB: u64 = 1 << 20;
+    let now = Duration::ZERO;
+    let none = Vec::new;
+    let mut writeback = Writeback::download();
+    assert_eq!(writeback.wrote_after(0, 8 * MIB - 1, now), none());
+    assert_eq!(writeback.wrote_after(8 * MIB - 1, 1, now), [(0, 8 * MIB)]);
+    assert_eq!(writeback.wrote_after(8 * MIB, 8 * MIB - 1, now), none());
+    assert_eq!(
+        writeback.wrote_after(16 * MIB - 1, 1, now),
+        [(8 * MIB, 16 * MIB)]
+    );
+}
+
+/// bytes that came slower than 8 MiB in 10 s are left to the kernel, which writes pages that old
+/// back by itself, so the advice would only drop them from memory; a faster step after them is
+/// started alone.
+#[test]
+fn a_download_leaves_slow_bytes_to_the_kernel() {
+    const MIB: u64 = 1 << 20;
+    let seconds = Duration::from_secs;
+    let none = Vec::new;
+    let mut writeback = Writeback::download();
+    assert_eq!(writeback.wrote_after(0, 8 * MIB - 1, seconds(0)), none());
+    assert_eq!(
+        writeback.wrote_after(8 * MIB - 1, 1, seconds(10)),
+        [(0, 8 * MIB)],
+        "8 MiB in 10 s"
+    );
+    assert_eq!(
+        writeback.wrote_after(8 * MIB, 8 * MIB - 1, seconds(11)),
+        none()
+    );
+    assert_eq!(
+        writeback.wrote_after(16 * MIB - 1, 1, seconds(21) + Duration::from_millis(1)),
+        none(),
+        "8 MiB in just over 10 s"
+    );
+    assert_eq!(
+        writeback.wrote_after(16 * MIB, 8 * MIB - 1, seconds(22)),
+        none()
+    );
+    assert_eq!(
+        writeback.wrote_after(24 * MIB - 1, MIB + 1, seconds(33)),
+        [(16 * MIB, 25 * MIB)],
+        "9 MiB in 11 s, and not the slow 8 MiB before them"
+    );
+}
+
 /// a download that starts the disk writing as it goes keeps the same bytes, through one stream
 /// and when another stream wrote its second half first.
 #[test]

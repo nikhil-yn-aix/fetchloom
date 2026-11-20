@@ -26,11 +26,14 @@ use hashing::HashPipe;
 
 /// how often a download records its progress, so a killed run loses about this much of it.
 pub(crate) const SAVE_EVERY: Duration = Duration::from_secs(1);
-/// how much a download writes before it starts writing to the disk while it arrives, so a small
-/// one leaves that to the system.
-const WRITEBACK_AFTER: u64 = 64 << 20;
-/// how much more it writes between those starts.
-const WRITEBACK_EVERY: u64 = 32 << 20;
+/// how much a download writes before it asks the disk to start writing it while it arrives, and how
+/// much more between those asks, so a small one leaves that to the system and one that arrives
+/// quickly has at most this much not yet asked for when the flush before it is published starts.
+const WRITEBACK_STEP: u64 = 8 << 20;
+/// the longest [`WRITEBACK_STEP`] bytes may take to arrive and still have the disk start on them.
+/// pages older than the kernel's flush age (30 s by default) are written back without advice, and
+/// the advice would drop those already written from memory.
+const WRITEBACK_SLOWEST: Duration = Duration::from_secs(10);
 const BUFFER: usize = 1024 * 1024;
 /// the largest download hashed without a thread of its own.
 const SMALL: u64 = 1024 * 1024;
@@ -511,8 +514,7 @@ impl Partial {
             begun,
             runs: Vec::new(),
             read_back: 0,
-            writeback: cfg!(target_os = "linux")
-                .then(|| Writeback::new(WRITEBACK_AFTER, WRITEBACK_EVERY)),
+            writeback: cfg!(target_os = "linux").then(Writeback::download),
             saved: Instant::now(),
             named: recorded.is_some(),
             folder: Arc::clone(&self.folder),
@@ -1010,32 +1012,57 @@ fn folder_of(path: &Path) -> &Path {
 struct Writeback {
     after: u64,
     every: u64,
+    /// when the download began, for one that leaves bytes which came slowly to the kernel
+    /// ([`worth_starting`]).
+    began: Option<Instant>,
     /// all the bytes written.
     written: u64,
     /// the ranges written since the disk last started, one per stream, and their bytes.
     waiting: Vec<(u64, u64)>,
     waiting_bytes: u64,
+    /// how far into the download the first of the waiting bytes came.
+    since: Option<Duration>,
 }
 
 impl Writeback {
+    /// a download's: the disk starts on each [`WRITEBACK_STEP`] it writes, unless those bytes came
+    /// too slowly to be worth it.
+    fn download() -> Writeback {
+        Writeback {
+            began: Some(Instant::now()),
+            ..Writeback::new(WRITEBACK_STEP, WRITEBACK_STEP)
+        }
+    }
+
     fn new(after: u64, every: u64) -> Writeback {
         Writeback {
             after,
             every,
+            began: None,
             written: 0,
             waiting: Vec::new(),
             waiting_bytes: 0,
+            since: None,
         }
     }
 
     /// notes `len` bytes written at `at`, and says which ranges the disk should start writing
-    /// now: every one written since it last started, once it is time.
+    /// now, as [`Writeback::wrote_after`] does.
     fn wrote(&mut self, at: u64, len: u64) -> Vec<(u64, u64)> {
+        let now = self.began.map_or(Duration::ZERO, |began| began.elapsed());
+        self.wrote_after(at, len, now)
+    }
+
+    /// notes `len` bytes written at `at`, `now` into the download, and says which ranges the disk
+    /// should start writing now: every one written since it last started, once it is time, but
+    /// none when a download that leaves slow bytes to the kernel took too long over them.
+    fn wrote_after(&mut self, at: u64, len: u64, now: Duration) -> Vec<(u64, u64)> {
         if len == 0 {
             return Vec::new();
         }
         self.written += len;
         self.waiting_bytes += len;
+        let since = *self.since.get_or_insert(now);
         match self.waiting.iter_mut().find(|range| range.1 == at) {
             Some(range) => range.1 = at + len,
             None => self.waiting.push((at, at + len)),
@@ -1043,9 +1070,21 @@ impl Writeback {
         if self.written < self.after || self.waiting_bytes < self.every {
             return Vec::new();
         }
-        self.waiting_bytes = 0;
-        std::mem::take(&mut self.waiting)
+        let bytes = std::mem::take(&mut self.waiting_bytes);
+        self.since = None;
+        let waiting = std::mem::take(&mut self.waiting);
+        if self.began.is_some() && !worth_starting(bytes, now.saturating_sub(since)) {
+            return Vec::new();
+        }
+        waiting
     }
+}
+
+/// whether the disk should start writing `bytes` that took `elapsed` to arrive: not when they
+/// came slower than [`WRITEBACK_STEP`] in [`WRITEBACK_SLOWEST`].
+fn worth_starting(bytes: u64, elapsed: Duration) -> bool {
+    u128::from(bytes) * WRITEBACK_SLOWEST.as_nanos()
+        >= u128::from(WRITEBACK_STEP) * elapsed.as_nanos()
 }
 
 /// starts the disk writing `file` from `start` up to `end`, without waiting: `fadvise` with
