@@ -482,7 +482,7 @@ class Hunt:
         self.zipit("resv.zip", [(name, f"{name}\n".encode()) for name in RESERVED] + [("ok.csv", b"ok\n")])
         self.zipit("many.zip", [(f"d{i // 100:02}/f{i:04}.txt", blob(512 + (i % 7) * 256, f"m{i}"))
                                 for i in range(3000)] + [("top.txt", b"top\n")])
-        self.zipit("quote.zip", [("x,1kb.csv", b"comma\n"), ("y.csv", b"plain\n")])
+        self.zipit("quote.zip", [("x,1kb.csv", b"comma\n"), ("z,2.csv", b"comma too\n")])
         self.zipit("long.zip", [(LONG_MEMBER, b"deep\n"), ("short.csv", b"short\n")])
         self.make("/big.bin", 192 * MiB, "big")
         self.make("/conc.bin", 96 * MiB, "conc")

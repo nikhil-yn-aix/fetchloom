@@ -102,12 +102,18 @@ class Site:
             return self.sent.get(path, 0)
 
     def wait_pace(self, path: str, length: int) -> None:
+        """holds a chunk until its turn at the file's rate. a sleep that overshoots, as on a
+        runner that coalesces timers, is made up by sending the next chunks at once, so the
+        average rate holds; more than a second behind starts the schedule afresh."""
         with self.lock:
             rate = self.rate.get(path)
             if not rate:
                 return
             now = time.monotonic()
-            due = max(now, self.free_at.get(path, now)) + length / rate
+            start = self.free_at.get(path)
+            if start is None or start < now - 1.0:
+                start = now
+            due = start + length / rate
             self.free_at[path] = due
         delay = due - time.monotonic()
         if delay > 0:

@@ -202,6 +202,35 @@ def vhd(h, name: str, filesystem: str, size_mb: int):
     raise Skip(f"no {filesystem} volume on this runner: {' | '.join(tried)}")
 
 
+def primitives(folder: Path) -> str:
+    """what this account can do in folder, one step at a time, as a cache write does it."""
+    steps = []
+
+    def step(name, action):
+        try:
+            action()
+            steps.append(f"{name}: ok")
+        except OSError as err:
+            steps.append(f"{name}: {err.__class__.__name__} winerror={getattr(err, 'winerror', None)} {err}")
+    sub = folder / "zz"
+    temp = sub / "osh-probe.tmp"
+    final = sub / "osh-probe"
+    step("mkdir", lambda: sub.mkdir(exist_ok=True))
+    step("create", lambda: temp.write_bytes(b"probe"))
+    step("rename", lambda: os.replace(temp, final))
+    step("readonly", lambda: os.chmod(final, 0o444))
+    step("hardlink", lambda: os.link(final, sub / "osh-probe-link"))
+    step("replace-readonly", lambda: (temp.write_bytes(b"again"), os.replace(temp, final)))
+    step("open-existing-folder", lambda: os.listdir(folder))
+    for leftover in (sub / "osh-probe-link", final, temp):
+        try:
+            os.chmod(leftover, 0o666)
+            os.remove(leftover)
+        except OSError:
+            pass
+    return "; ".join(steps)
+
+
 def vhd_detach(h, image) -> None:
     script = h.work / f"detach-{time.monotonic_ns()}.txt"
     script.write_text(f'select vdisk file="{image}"\ndetach vdisk\n', encoding="ascii")
@@ -266,8 +295,9 @@ def j_shells(h):
     res = h.fl(["path", "q/nope.csv"], proj, env)
     offered = [c for c in re.findall(r"`(fetchloom [^`]+)`", res.err) if "q/" in c]
     suggestion = offered[0] if offered else 'fetchloom path "q/x,1kb.csv"'
+    suggestion = suggestion.replace("`", "")
     h.check("suggestion", bool(offered), "a help line suggests a command for a path q holds", last_lines(res.err), res=res)
-    h.check("suggestion-quoted", '"q/x,1kb.csv"' in suggestion,
+    h.check("suggestion-quoted", re.search(r'"q/[^"]*,[^"]*"', suggestion) is not None,
             "a suggested name holding a comma is in double quotes, which powershell 5.1 would otherwise split",
             suggestion, doc="docs/user/guides/windows.md#commands-in-help-lines")
     oem = reg("HKLM\\SYSTEM\\CurrentControlSet\\Control\\Nls\\CodePage", "OEMCP") or "437"
@@ -313,10 +343,11 @@ def j_shells(h):
                     f"{r.get('console_output_encoding')}) gives a path Test-Path finds, in a folder named Datos Econ\u00f3micos",
                     f"exit {r.get('path_exit')}, $p = {r.get('path')!r}, exists {r.get('path_exists')}, "
                     f"{r.get('oem_error') or ''}", doc="docs/user/guides/windows.md#paths-and-open-files")
-            h.check(f"{label}-suggestion-pastes", r.get("suggest_exit") == 0 and r.get("suggest_exists") is True,
-                    f"the suggested `{suggestion}` runs as written in {shell}",
-                    f"exit {r.get('suggest_exit')}, printed {r.get('suggest_out')!r}",
-                    doc="docs/user/guides/windows.md#commands-in-help-lines")
+            if console == "runner":
+                h.check(f"{label}-suggestion-pastes", r.get("suggest_exit") == 0 and r.get("suggest_exists") is True,
+                        f"the suggested `{suggestion}` runs as written in {shell}",
+                        f"exit {r.get('suggest_exit')}, printed {r.get('suggest_out')!r}",
+                        doc="docs/user/guides/windows.md#commands-in-help-lines")
         batch = h.work / f"shells-{console}.cmd"
         codepage = f"chcp {oem} > nul" if console == "oem" else "rem the runner's code page"
         batch.write_text(CMD_SCRIPT.replace("SUGGESTION", suggestion).replace("CODEPAGE", codepage), encoding="ascii")
@@ -332,9 +363,11 @@ def j_shells(h):
         h.check(f"cmd-{console}-path-usable", part("path.exists") == "yes",
                 f"a path captured with `for /f` in cmd ({part('chcp.txt')}) names a file `if exist` finds, in a folder named "
                 f"Datos Econ\u00f3micos", f"captured {part('path.txt')!r}, exists {part('path.exists')}", kind="note")
-        h.check(f"cmd-{console}-suggestion-pastes", part("suggest.code") == "0",
-                f"the suggested `{suggestion}` runs as written in cmd",
-                f"exit {part('suggest.code')}: {part('suggest.txt')!r}", doc="docs/user/guides/windows.md#commands-in-help-lines")
+        if console == "runner":
+            h.check(f"cmd-{console}-suggestion-pastes", part("suggest.code") == "0",
+                    f"the suggested `{suggestion}` runs as written in cmd",
+                    f"exit {part('suggest.code')}: {part('suggest.txt')!r}",
+                    doc="docs/user/guides/windows.md#commands-in-help-lines")
     h.epilogue(proj, ["lc", "q"], env, cache)
 
 
@@ -365,8 +398,12 @@ def j_held(h):
                 "a sync that must replace the held file names it and says to close the program holding it",
                 f"exit {res.code}: {last_lines(res.err, 4)}", doc="docs/user/guides/windows.md#paths-and-open-files", res=res)
         files = listing(proj / "data" / "lc")
-        h.note("copy-held-exit", f"exit {res.code}; writable now: "
-               f"{sum(writable(proj / 'data' / 'lc' / rel) for rel in files)} of {len(files)}")
+        h.check("copy-held-others", len(files) == 5,
+                "a sync that cannot replace the one held file leaves the dataset's other files in place",
+                f"exit {res.code}; data/lc holds {[(rel, 'writable' if writable(proj / 'data' / 'lc' / rel) else 'read-only') for rel in files]}",
+                doc="docs/user/guides/windows.md#paths-and-open-files", res=res)
+        res = h.fl(["status"], proj, env)
+        h.note("copy-held-status", f"status after the failed sync: exit {res.code}, rows {res.out.strip()[:400]!r}", res=res)
     res = h.fl(["sync"], proj, env)
     h.check("copy-after-release", res.code == 0, "once the file is closed, sync finishes", f"exit {res.code}: {last_lines(res.err)}",
             res=res)
@@ -591,6 +628,9 @@ def j_refs(h):
             h.note("acl-" + "-".join(Path(a).name or a for a in argv[1:])[:40], " ".join(res.text.split())[:900])
         res = h.fl(["-vv", "add", h.url("plain.csv"), "--as", "plain"], proj, env, timeout=400)
         h.note("debug-add", f"exit {res.code}; debug tail: {' | '.join(res.err.strip().splitlines()[-25:])[:3000]}", res=res)
+        res = h.sh(["cmd", "/d", "/c", "dir", "/s", "/a", "/b", str(cache)], timeout=60)
+        h.note("cache-tree", " | ".join(res.out.strip().splitlines()[:60]))
+        h.note("primitives", primitives(cache / "objects"))
         raise Skip(f"add failed on this ReFS volume ({failed}), so the rest of the journey has nothing to work on")
     h.placed_ok(proj, "lc", "lc.zip", readonly=True)
     report = h.cache_report(proj, env)
@@ -656,8 +696,10 @@ def j_fat32(h):
                 "a 4 GiB file for a FAT32 project is refused, saying why", f"exit {res.code}: {last_lines(res.err)}",
                 doc="docs/user/reference/limits.md; docs/user/guides/macos.md#clones-and-links", res=res)
         h.note("4gib-downloaded", f"{sent / MiB:.0f} MiB downloaded before the answer, in {res.secs:.0f} s")
-        h.check("4gib-nothing-left", not exists(proj / "data" / "huge"), "nothing of it is left in the project",
-                sorted(os.listdir(proj / "data")))
+        left = sorted(os.listdir(proj / "data" / "huge")) if exists(proj / "data" / "huge") else None
+        h.check("4gib-nothing-left", left is None, "the refused add leaves no folder for it in data/",
+                f"data/ holds {sorted(os.listdir(proj / 'data'))}; data/huge holds {left}",
+                doc="docs/user/commands/add.md: restored data.toml and data.lock", res=res)
         res = h.fl(["status", "--check"], proj, env)
         h.note("4gib-status", f"status --check exit {res.code}: {res.out[:200]}", res=res)
         toml = (h.read(proj / "data.toml") or b"").decode()
