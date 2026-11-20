@@ -1,5 +1,24 @@
 # Archives and hashing
 
+## an archive's writers on btrfs, 2026-11-20
+
+an archive's members are written to the cache's staging folder on up to eight threads and published into its fan folders, a link and an unlink each, on as many. on btrfs every one of those calls queues on the subvolume's tree lock: 10,000 publications took 390 ms on one thread and 409 to 439 on two to eight, so more threads only add cpu. the round-2 fs window measured three threads there against eight: `get --dir` of zip archives from a local server with an empty cache, the cache on btrfs or not (loop images on nvme, ext4 on nvme), off against on in shuffled rounds, on build 0542b5227 over main dd9fae1e3. cpu was the target, the wall must not slow.
+
+| case: archive, cache's filesystem -> folder's | a whole `get`, median ms, off -> on | cpu | wall | peak memory |
+|---|---:|---:|---:|---:|
+| 10,000 x 4 KiB, btrfs -> btrfs | 2,374 -> 2,140 | 0.843 [0.834, 0.853] | 0.907 [0.886, 0.918] | 1.020 [0.957, 1.063], 117.0 -> 119.6 MiB |
+| 10,000 x 4 KiB, btrfs -> ext4 | 1,665 -> 1,441 | 0.783 [0.776, 0.786] | 0.869 [0.853, 0.877] | 1.067 [0.992, 1.104], 115.1 -> 122.4 MiB |
+| 300 x 4 KiB, btrfs -> btrfs | 112.5 -> 107.8 | 0.840 [0.830, 0.862] | 0.949 [0.915, 0.971] | 0.960, 47.6 -> 45.6 MiB |
+| 256 x 1 MiB tar, btrfs -> btrfs: writers that also hash | 1,559 -> 1,462 | 0.972 [0.962, 0.984] | 0.982 [0.968, 0.997] | 0.958 |
+| 4 x 64 MiB tar, btrfs -> btrfs | 1,787 -> 1,791 | 0.993 [0.989, 1.008] | 1.004 [0.986, 1.025] | 1.094 [0.906, 1.137], 62.9 -> 64.5 MiB |
+| 10,000 x 4 KiB, btrfs -> btrfs, `FETCHLOOM_THREADS=2`, below the cap | 2,290 -> 2,312 | 1.011 [1.002, 1.020] | 1.005 [0.988, 1.021] | 1.038 |
+| 10,000 x 4 KiB, ext4 -> btrfs: the cap does not act | 1,798 -> 1,832 | 1.009 [0.990, 1.013] | 1.013 [1.001, 1.025] | 0.985 |
+| 2 and 20 x 4 KiB, cache on xfs or ext4: one more `statfs` | 15.1 to 25.2 -> 15.1 to 25.1 | 0.993 to 1.008 | 0.996 to 1.003 | 0.946 to 1.001 |
+
+the milliseconds are each arm's median over its rounds, for a whole `get`: the download from a local server, the unpack into the cache and its flush, and the placing.
+
+every must-not-slow case passed and no resource was wholly above 1.02 against off; the peak memory of the 10,000 members into ext4 rose 7 MiB, 1.067 [0.992, 1.104], within that line. kept.
+
 ## resources levels against default, 2026-11-13
 
 what each [level](../../../user/guides/speed-and-memory.md) trades, on the eight workloads of the perf audit's level pass, four of them on musl too. lean sets 2 requests at once, 2 to one host, a 128 MiB buffer budget and 2 local workers; max sets 32 and 16 requests and keeps default's workers and memory. every arm ran the same binary with only `FETCHLOOM_RESOURCES` changed. a ratio is level over default, the median of paired rounds with its 95% bootstrap interval.

@@ -419,6 +419,14 @@ impl Batch {
         const XFS_SUPER_MAGIC: i128 = 0x5846_5342;
         rustix::fs::fstatfs(&self.file).is_ok_and(|stat| i128::from(stat.f_type) == XFS_SUPER_MAGIC)
     }
+
+    /// whether the cache is on btrfs, where every create, link and unlink in it queues on the
+    /// subvolume's tree lock.
+    pub(crate) fn is_btrfs(&self) -> bool {
+        rustix::fs::fstatfs(&self.file).is_ok_and(|stat| {
+            crate::space::Filesystem::of_stat(&stat) == crate::space::Filesystem::Btrfs
+        })
+    }
 }
 
 /// new objects sealed with a plain fsync since the batch began, made durable together.

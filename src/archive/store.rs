@@ -31,6 +31,14 @@ const LARGE: u64 = 4 << 20;
 /// creating files stops getting faster past a few threads: a 4 core laptop peaked at 4 to 8.
 const MOST_WRITERS: usize = 8;
 
+/// the most threads that write and publish an archive's members in a cache on btrfs, where every
+/// create, link and unlink queues on the subvolume's tree lock. writing and flushing 10,000 new
+/// members of 4 KiB took 563 ms on one thread, 496 on two, 487 on three and 497 to 524 on four to
+/// eight, while publishing them took 390 ms on one and 409 to 439 on two to eight: three writes
+/// fastest, and publishes little slower than one.
+#[cfg(target_os = "linux")]
+const BTRFS_STORE_THREADS: usize = 3;
+
 /// the smallest member whose write-back starts as it is sealed: the disk has a member's worth to
 /// write, and a call for each small member would cost more than it saves.
 const EARLY_FROM: u64 = 1 << 20;
@@ -42,6 +50,14 @@ const ADVICE_QUEUE: usize = 8;
 thread_local! {
     /// how many members this thread offered [`Advice`], for a test that seals on its own thread.
     static OFFERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(all(test, target_os = "linux"))]
+thread_local! {
+    /// how many writers and publishers the last archive stored from this thread started.
+    static STARTED: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+    /// whether a test says the cache is on btrfs, where the disk under it is not.
+    static ON_BTRFS: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// hands each sealed member of [`EARLY_FROM`] bytes or more to one thread that starts its
@@ -185,6 +201,12 @@ fn store_with(
     let flush_each = batch.is_none();
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let flush_each = true;
+    #[cfg(target_os = "linux")]
+    let threads = if on_btrfs(batch.as_ref()) {
+        threads.min(BTRFS_STORE_THREADS)
+    } else {
+        threads
+    };
     let few = Few::new();
     let keeps = (cfg!(target_os = "linux") && !flush_each).then_some(&few);
     // a member flushed on its own as it is sealed has nothing to start early, and a capped run
@@ -231,6 +253,8 @@ fn store_with(
         let workers: Vec<_> = (0..threads)
             .map(|_| crate::threads::scoped(scope, &write))
             .collect();
+        #[cfg(all(test, target_os = "linux"))]
+        STARTED.set((workers.len(), 0));
         let threaded = workers.iter().any(crate::threads::Scoped::is_threaded);
         #[cfg(target_os = "linux")]
         let flusher = (ahead && threaded)
@@ -346,6 +370,8 @@ fn publish_all(
             let workers: Vec<_> = (0..threads.min(count))
                 .map(|_| crate::threads::scoped(scope, &publish))
                 .collect();
+            #[cfg(all(test, target_os = "linux"))]
+            STARTED.set((STARTED.get().0, workers.len()));
             for worker in workers {
                 worker.join();
             }
@@ -463,6 +489,16 @@ impl Few {
 
 fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// whether `batch`, the cache's flush, is on btrfs, or a test says so.
+#[cfg(target_os = "linux")]
+fn on_btrfs(batch: Option<&Batch>) -> bool {
+    #[cfg(test)]
+    if let Some(pretended) = ON_BTRFS.get() {
+        return pretended;
+    }
+    batch.is_some_and(Batch::is_btrfs)
 }
 
 /// starts [`flush_ahead`] beside the writers when the cache is on xfs.
@@ -626,6 +662,82 @@ mod tests {
             for (member, (path, bytes)) in stored.iter().zip(&members) {
                 assert_eq!(&member.path, path);
                 assert_eq!(member.sha256, crate::digest::sha256(bytes), "{path}");
+                scratch.assert_stored(member, bytes);
+            }
+        }
+    }
+
+    /// a reader that fails, as a damaged archive's member does.
+    #[cfg(target_os = "linux")]
+    struct Unreadable;
+
+    #[cfg(target_os = "linux")]
+    impl Read for Unreadable {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::other("the member cannot be read"))
+        }
+    }
+
+    /// an archive stored in a cache on btrfs starts at most three writers and three publishers,
+    /// fewer under a smaller cap; on another filesystem as many as before. every member is stored
+    /// whole either way, and a member that fails stores none.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_few_writers_store_into_btrfs() {
+        let members: Vec<(String, Vec<u8>)> = (0..40)
+            .map(|at| {
+                let bytes = format!("member {at}\n").repeat(at + 1).into_bytes();
+                (format!("{at:02}.csv"), bytes)
+            })
+            .collect();
+        let keep = |writers: &Writers<'_>, failing: bool| {
+            let limits = Limits::default();
+            let meter = Meter::default();
+            meter.count(members.iter().map(|(_, bytes)| bytes.len()).sum());
+            let never = |_: u64| false;
+            let mut guard = Guard::new(&limits, &never, &meter);
+            let mut buffer = vec![0; 64 << 10];
+            for (at, (path, bytes)) in members.iter().enumerate() {
+                let size = bytes.len() as u64;
+                // one member's bytes cannot be read, so storing the archive fails
+                let mut unreadable = io::Cursor::new(bytes).chain(Unreadable);
+                let from: &mut dyn Read = if failing && at == 20 {
+                    &mut unreadable
+                } else {
+                    &mut &bytes[..]
+                };
+                writers.keep(
+                    &mut guard,
+                    path.clone(),
+                    size + u64::from(failing && at == 20),
+                    from,
+                    &mut buffer,
+                )?;
+            }
+            Ok(())
+        };
+        for (threads, btrfs, started) in [(8, true, 3), (8, false, 8), (2, true, 2), (1, true, 1)] {
+            let scratch = Scratch::new();
+            ON_BTRFS.set(Some(btrfs));
+            let stored = store_with(&scratch.cache, threads, false, false, |writers| {
+                keep(writers, false)
+            });
+            let writers_and_publishers = STARTED.get();
+            let failed = store_with(&scratch.cache, threads, false, false, |writers| {
+                keep(writers, true)
+            });
+            let failed_writers = STARTED.get().0;
+            ON_BTRFS.set(None);
+            let case = format!("{threads} {btrfs}");
+            let (mut stored, _) = stored.unwrap();
+            assert_eq!(writers_and_publishers, (started, started), "{case}");
+            assert_eq!(failed_writers, started, "{case}");
+            assert!(failed.is_err(), "{case}");
+            stored.sort_by(|a, b| a.path.cmp(&b.path));
+            assert_eq!(stored.len(), members.len(), "{case}");
+            for (member, (path, bytes)) in stored.iter().zip(&members) {
+                assert_eq!(&member.path, path);
+                assert_eq!(member.sha256, crate::digest::sha256(bytes), "{case} {path}");
                 scratch.assert_stored(member, bytes);
             }
         }
