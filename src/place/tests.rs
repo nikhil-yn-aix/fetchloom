@@ -2373,3 +2373,52 @@ fn placing_into_btrfs_takes_a_few_threads() {
         }
     }
 }
+
+/// jobs run until one fails stop as jobs run in turn do: every job before the first failure in
+/// their order runs, and it is the failure the results hold first. one worker starts no job past
+/// it; with more, those begun past it are the only extra work.
+#[test]
+fn jobs_stop_at_the_first_failure_in_order() {
+    use std::sync::Mutex;
+
+    let items: Vec<usize> = (0..64).collect();
+    for workers in [1, 2, 8] {
+        for failing in [vec![0], vec![5], vec![5, 9], vec![9, 5], vec![63], vec![]] {
+            let ran = Mutex::new(Vec::new());
+            let job = |&item: &usize| {
+                ran.lock().unwrap().push(item);
+                if failing.contains(&item) {
+                    Err(item)
+                } else {
+                    Ok(item)
+                }
+            };
+            let cap = Threads::default().at_most(workers);
+            // so many bytes that the hashing runner takes every worker the cap allows
+            let results = run_hashes_until_failure(&items, 1 << 30, cap, job);
+            let first = failing.iter().min().copied();
+            let told = results.iter().find_map(|result| match result {
+                Some(Err(item)) => Some(*item),
+                Some(Ok(_)) | None => None,
+            });
+            assert_eq!(told, first, "{workers} {failing:?}");
+            let mut ran = ran.into_inner().unwrap();
+            ran.sort_unstable();
+            let last = first.unwrap_or(items.len() - 1);
+            assert!(
+                (0..=last).all(|item| ran.contains(&item)),
+                "{workers} {failing:?}"
+            );
+            if workers == 1 {
+                assert_eq!(ran, (0..=last).collect::<Vec<_>>(), "{failing:?}");
+            }
+            for (item, result) in results.iter().enumerate() {
+                assert_eq!(
+                    result.is_some(),
+                    ran.contains(&item),
+                    "{workers} {failing:?}"
+                );
+            }
+        }
+    }
+}

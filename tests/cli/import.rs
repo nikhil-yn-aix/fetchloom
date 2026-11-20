@@ -983,6 +983,47 @@ fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
     Ok(())
 }
 
+/// an import of more than 64 files, which waits for one flush, takes as many workers as their
+/// bytes repay, as its trace shows, and of two files it cannot read tells the first in the files'
+/// order and pins nothing.
+#[cfg(unix)]
+#[test]
+fn a_large_import_tells_its_first_unreadable_file() -> Result {
+    use std::os::unix::fs::PermissionsExt as _;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("rows")?;
+    // 80 files of 512 KiB are 40 MiB, enough bytes for several workers where their count asks one
+    for index in 0..80 {
+        let mut row = format!("{index}\n").into_bytes();
+        row.resize(512 << 10, b'x');
+        fs::write(folder.join(format!("r{index:02}.csv")), row)?;
+    }
+    let locked = ["r05.csv", "r13.csv"];
+    for name in locked {
+        fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o000))?;
+    }
+    let trace = sandbox.work().join("trace.json");
+    let output = sandbox
+        .command(&["add", "../rows"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    for name in locked {
+        fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o644))?;
+    }
+    let stderr = text(&output.stderr)?;
+    assert_ne!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("r05.csv") && !stderr.contains("r13.csv"),
+        "{stderr}"
+    );
+    assert!(!sandbox.work().join("data.lock").exists(), "{stderr}");
+    assert!(fs::read_to_string(&trace)?.contains("\"name\":\"import_by_bytes\""));
+    Ok(())
+}
+
 /// an add that fails once it wrote data.lock and its file list, here as placing finds the data
 /// folder read-only, takes the list back with data.toml and data.lock: the folder is as it was.
 #[cfg(unix)]

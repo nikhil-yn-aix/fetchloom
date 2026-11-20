@@ -1511,19 +1511,31 @@ fn sealed(
         .ticker("Copying", what, found.iter().map(|file| Some(file.size)));
     let failed = AtomicBool::new(false);
     let stop = &context.stop;
-    let imported = place::run_all(found, context.threads, |file| {
-        if failed.load(Ordering::Relaxed) {
-            return None;
-        }
+    let import = |file: &Found| {
         let imported =
             open(file).and_then(|source| cache.import_file(source, &staging, flush_each, stop));
         bar.advance(file.size);
         ticker.advance(file.size);
-        if imported.is_err() {
-            failed.store(true, Ordering::Relaxed);
-        }
-        Some(imported)
-    });
+        imported
+    };
+    // files that wait for one flush take as many workers as their bytes repay, as hashing does
+    // elsewhere; none past a failure starts and every one before it finishes, so the first
+    // failure in the files' order is the one told, as when they run in turn
+    let imported = if flush_each {
+        place::run_all(found, context.threads, |file| {
+            if failed.load(Ordering::Relaxed) {
+                return None;
+            }
+            let imported = import(file);
+            if imported.is_err() {
+                failed.store(true, Ordering::Relaxed);
+            }
+            Some(imported)
+        })
+    } else {
+        let _span = tracing::debug_span!("import_by_bytes", files = found.len()).entered();
+        place::run_hashes_until_failure(found, walked.bytes(), context.threads, import)
+    };
     drop((bar, ticker));
     let mut sealed = Vec::with_capacity(found.len());
     let mut cloned = true;

@@ -1358,6 +1358,43 @@ pub(crate) fn run_hashes<T: Sync, R: Send>(
     )
 }
 
+/// runs `job` on every item as [`run_hashes`] does, `bytes` in all, until one fails: no item past
+/// the first failure in the items' order starts, and every item before it finishes, so that
+/// failure is among the results, as when the items run in turn, with at most a few begun past it.
+pub(crate) fn run_hashes_until_failure<T: Sync, R: Send, E: Send>(
+    items: &[T],
+    bytes: u64,
+    cap: Threads,
+    job: impl Fn(&T) -> Result<R, E> + Sync,
+) -> Vec<Option<Result<R, E>>> {
+    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    run_until_failure(
+        items,
+        hash_workers(items.len(), bytes, processors, cap),
+        job,
+    )
+}
+
+/// runs `job` on every item on `threads` workers until one fails: the items are taken in order, no
+/// item past the first failure in their order starts, and every item before it finishes.
+fn run_until_failure<T: Sync, R: Send, E: Send>(
+    items: &[T],
+    threads: usize,
+    job: impl Fn(&T) -> Result<R, E> + Sync,
+) -> Vec<Option<Result<R, E>>> {
+    let failed = AtomicUsize::new(usize::MAX);
+    run_work_indexed(items, threads, None, |index, item| {
+        if index > failed.load(Ordering::Relaxed) {
+            return None;
+        }
+        let done = job(item);
+        if done.is_err() {
+            failed.fetch_min(index, Ordering::Relaxed);
+        }
+        Some(done)
+    })
+}
+
 /// small ceilings keep their existing hash-buffer count; larger groups can spend spare CPUs.
 fn hash_workers(items: usize, bytes: u64, processors: usize, cap: Threads) -> usize {
     let by_count = items / PER_THREAD;
@@ -1377,6 +1414,16 @@ fn run_work<T: Sync, R: Send>(
     ahead: Option<&ReadAhead<'_, T>>,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
+    run_work_indexed(items, threads, ahead, |_, item| job(item))
+}
+
+/// [`run_work`] for a job that is told each item's index too.
+fn run_work_indexed<T: Sync, R: Send>(
+    items: &[T],
+    threads: usize,
+    ahead: Option<&ReadAhead<'_, T>>,
+    job: impl Fn(usize, &T) -> R + Sync,
+) -> Vec<R> {
     let take = |index: usize| {
         if let Some(ahead) = ahead {
             ahead.took(index);
@@ -1385,7 +1432,7 @@ fn run_work<T: Sync, R: Send>(
     };
     if threads < 2 {
         return (0..items.len())
-            .map_while(|index| take(index).map(&job))
+            .map_while(|index| take(index).map(|item| job(index, item)))
             .collect();
     }
     let next = AtomicUsize::new(0);
@@ -1400,7 +1447,7 @@ fn run_work<T: Sync, R: Send>(
                         let Some(item) = take(index) else {
                             return done;
                         };
-                        done.push((index, job(item)));
+                        done.push((index, job(index, item)));
                     }
                 })
             })
