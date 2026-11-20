@@ -1,0 +1,67 @@
+name: os-hunt
+
+# the stage-5 os hunt, scratch only: every journey in .oshunt/ on each windows and macos runner
+# image, against the commit this branch left origin/main at, or OSH_PRODUCT when it is set
+on:
+  push:
+    branches: ['scratch-os-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-hunt-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: 4
+  # a comma list of journeys narrows a rerun, as `resume,held`; empty runs them all
+  OSH_ONLY: ''
+  # the os-fix tip with o6, under its harness checks for the fixed docs
+  OSH_PRODUCT: d6e82edd397c705dbff1c92415150ce772260725
+
+jobs:
+  hunt:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-2022, py: python}
+          - {os: windows-2025, py: python}
+          - {os: windows-11-arm, py: python}
+          - {os: macos-15, py: python3}
+          - {os: macos-15-intel, py: python3}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: the commit under test
+        run: ${{ matrix.py }} .oshunt/hunt.py product --into "$RUNNER_TEMP/product"
+      - name: toolchain
+        working-directory: ${{ runner.temp }}/product
+        run: rustup toolchain install && rustc -vV && ${{ matrix.py }} --version
+      - name: build
+        working-directory: ${{ runner.temp }}/product
+        run: cargo build --release --locked
+      - name: journeys
+        timeout-minutes: 110
+        run: ${{ matrix.py }} .oshunt/hunt.py run --product "$RUNNER_TEMP/product" --image ${{ matrix.os }} --out "$RUNNER_TEMP/osh-out" --only "$OSH_ONLY"
+      - name: install from git, as a new user does
+        if: ${{ !cancelled() }}
+        timeout-minutes: 60
+        run: ${{ matrix.py }} .oshunt/hunt.py gitinstall --product "$RUNNER_TEMP/product" --out "$RUNNER_TEMP/osh-out"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: os-hunt-${{ matrix.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/osh-out/
+          if-no-files-found: warn
+          retention-days: 30
