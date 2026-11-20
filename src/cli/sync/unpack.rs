@@ -147,12 +147,13 @@ pub(in crate::cli) async fn unpack_all(
         return Ok(results);
     }
     // each archive keeps a core decompressing and a few threads writing files
-    let at_once = std::thread::available_parallelism()
-        .map_or(1, NonZero::get)
-        .div_ceil(4)
-        .min(4);
+    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let at_once = processors.div_ceil(4).min(4);
     let (at_once, writers) = context.threads.archives(at_once, archives.len());
-    let limits = context.settings.archive_limits();
+    let mut limits = context.settings.archive_limits();
+    // an xz stream of several blocks decodes on the archive's share of the threads
+    let share = writers.map_or_else(|| processors.div_ceil(at_once), |writers| writers + 1);
+    limits.xz_threads = u32::try_from(share).unwrap_or(u32::MAX);
     let failed = Arc::new(AtomicBool::new(false));
     // a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then would
     let stops_for_tests = crate::machine::pretended("FETCHLOOM_TEST_STOP_UNPACKING").is_some();

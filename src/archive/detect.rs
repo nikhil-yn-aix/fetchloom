@@ -84,7 +84,7 @@ pub(super) fn single(input: &Input, memory: u64) -> Result<Single, Error> {
         return Ok(Single::Other);
     };
     file.rewind().map_err(unread)?;
-    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
+    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory, None) else {
         return Ok(Single::Stream(format));
     };
     let mut first = [0; BLOCK];
@@ -139,7 +139,7 @@ fn signed(head: &[u8]) -> Option<Detected> {
 /// whether the stream decompresses to a tar header. one that fails is no archive, unless xz or
 /// zstd asks for too much memory: unpacking then refuses it and says why, never leaving it packed.
 fn holds_tar(format: Format, file: Joined, memory: u64) -> bool {
-    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory) else {
+    let Ok(mut decoded) = tar::decompressed(format, BufReader::new(file), memory, None) else {
         return false;
     };
     let mut block = [0; BLOCK];

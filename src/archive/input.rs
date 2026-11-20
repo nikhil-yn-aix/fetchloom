@@ -92,6 +92,14 @@ impl Part {
 }
 
 impl Input {
+    /// the one file of an archive that is not split, opened as it was judged; none for parts.
+    pub(super) fn whole_file(&self) -> Option<io::Result<File>> {
+        match self {
+            Input::File(part) => Some(part.open()),
+            Input::Joined(_) => None,
+        }
+    }
+
     /// the plain file at `path` as it is now, never followed as a link.
     #[cfg(test)]
     pub(crate) fn file(path: &Path) -> io::Result<Input> {

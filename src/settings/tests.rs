@@ -544,6 +544,7 @@ fn archives_unpack_within_their_settings_and_a_share_of_the_memory() {
             bytes: 64 << 40,
             ratio: 5_000,
             memory: 4 << 30,
+            xz_threads: 1,
         }
     );
     // a small budget never takes decoders below what fetchloom always allowed

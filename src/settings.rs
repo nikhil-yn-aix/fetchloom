@@ -666,6 +666,7 @@ impl Settings {
             bytes: self.archive_size.value,
             ratio: self.archive_ratio.value,
             memory: (self.steady_memory / 4).max(defaults.memory),
+            xz_threads: defaults.xz_threads,
         }
     }
 

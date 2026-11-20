@@ -212,6 +212,20 @@ pub(super) fn compress(format: Format, bytes: &[u8]) -> Vec<u8> {
     }
 }
 
+/// `bytes` in one xz stream of blocks of `block` bytes each, as `xz -T` writes them.
+pub(super) fn xz_in_blocks(bytes: &[u8], block: u64) -> Vec<u8> {
+    let stream = liblzma::stream::MtStreamBuilder::new()
+        .threads(2)
+        .block_size(block)
+        .preset(1)
+        .check(liblzma::stream::Check::Crc64)
+        .encoder()
+        .unwrap();
+    let mut encoder = liblzma::write::XzEncoder::new_stream(Vec::new(), stream);
+    encoder.write_all(bytes).unwrap();
+    encoder.finish().unwrap()
+}
+
 /// `xz`, an xz stream holding one LZMA2 block, with that block's dictionary property set to
 /// `property`, which says how much memory decoding needs, and its header checksum to match.
 pub(super) fn xz_asking_for(xz: &[u8], property: u8) -> Vec<u8> {

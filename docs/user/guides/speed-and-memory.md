@@ -27,6 +27,8 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 
 `max` leaves memory and local workers at the default. checking placed files spreads a few large files over the local workers, as it does many small ones, but a ceiling of one or two workers keeps each file on one, so lean adds no hashing buffers. at `default` and `max`, a project whose state file holds 16 MiB or more, some 65,000 files, has it read on a thread of its own while its data folder is listed, which made a settled sync of 100,000 files take 0.79 of its time and cost 1,000,000 files 6 to 7% more peak memory; lean reads it first, as every level does a smaller one.
 
+an `.xz` file written in several blocks, as `xz -T` writes one, and xz itself by default since 5.6, unpacks on several local workers: its archive's share of them, at most one a block, and no more than its decoder memory holds. lean's ceiling of two decodes one on two.
+
 a setting you set by name, with its variable or its key in the settings file, wins over any level. `FETCHLOOM_RESOURCES=max FETCHLOOM_HOST_JOBS=8 fetchloom sync` runs 32 requests at once, but at most 8 to one host. lean caps local workers only when `FETCHLOOM_THREADS` is unset, and under that cap a download hashes a required MD5 on the same worker as its SHA-256, so it queues no extra bytes.
 
 a level changes speed and memory only. it never changes which files are pinned or how they are checked, and it leaves every other setting as it is: `most_files`, which stays sized from the default budget so that lean lists every dataset `default` lists, the archive limits, `retries`, `timeout`, `ask_above`, `rate`, `split`, the mirrors and the buckets.

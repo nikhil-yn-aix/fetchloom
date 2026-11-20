@@ -250,6 +250,9 @@ pub(crate) struct Limits {
     pub(crate) ratio: u64,
     /// the memory one archive's decompressor may take.
     pub(crate) memory: u64,
+    /// the threads an xz stream of several blocks may decode on; with one, every xz stream
+    /// decodes on one.
+    pub(crate) xz_threads: u32,
 }
 
 impl Default for Limits {
@@ -259,6 +262,7 @@ impl Default for Limits {
             bytes: 16 << 40,
             ratio: 1_000,
             memory: tar::XZ_MEMORY,
+            xz_threads: 1,
         }
     }
 }

@@ -43,6 +43,7 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 | async runtime | up to four workers, reduced by the thread cap |
 | archive readers | up to `min(4, ceil(logical CPUs / 4))`; an explicit cap counts only readers with an archive still pending before sharing the budget with their writers |
 | archive writers | up to eight per archive, no more than logical CPUs; zero writer budget stores on the reader |
+| xz decoding of one stream in several blocks | the archive's share: its writers and its reader under a cap, otherwise logical CPUs over the archive readers; at most one a block, and as many as the decoder memory holds three of the largest block for |
 | placement, object lookup and the survey's hashing of racy or doubted files | up to eight workers, no more than logical CPUs, with at most one per 64 items |
 | `--verify` reading placed files | the larger of one worker per 64 files and one per 4 MiB, within the same bounds, as [verification workers](placing.md#verification-workers) says |
 | cache verification | logical CPU count, reduced by the cap |

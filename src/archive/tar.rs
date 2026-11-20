@@ -1,18 +1,18 @@
 //! tar archives, plain or compressed, read in one pass from start to end.
 
 use std::cell::Cell;
-use std::io::{self, BufRead, Read};
+use std::io::{self, BufRead, Read, Seek, SeekFrom};
 
 use ::tar::{Archive, Entry, EntryType};
 use bzip2::bufread::BzDecoder;
 use flate2::bufread::GzDecoder;
 use liblzma::bufread::XzDecoder;
-use liblzma::stream::{CONCATENATED, Stream};
+use liblzma::stream::{CONCATENATED, MtStreamBuilder, Stream};
 
 use super::guard::{Guard, Meter};
 use super::input::Input;
 use super::names::Named;
-use super::{Format, Keep, Unpacking, damaged, refused, refused_member};
+use super::{Format, Keep, Limits, Unpacking, damaged, refused, refused_member};
 use crate::error::Error;
 use crate::units;
 
@@ -30,19 +30,36 @@ fn zstd_window_log(memory: u64) -> u32 {
     (memory / 2).max(1).ilog2().clamp(27, 31)
 }
 
+/// the most of an xz file's end read for its index: 16 bytes or so a block, so a million blocks.
+const XZ_INDEX_MOST: u64 = 16 << 20;
+
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
-/// to end, as pigz, bgzip and pbzip2 write them.
+/// to end, as pigz, bgzip and pbzip2 write them. with `xz_threads`, an xz stream that
+/// [`xz_threads`] found alone in its file decodes on that many threads.
 pub(super) fn decompressed<'r>(
     format: Format,
     compressed: impl BufRead + 'r,
     memory: u64,
+    xz_threads: Option<u32>,
 ) -> io::Result<Box<dyn Read + 'r>> {
     Ok(match format {
         Format::TarGz => Box::new(Streams::<GzDecoder<_>>::new(compressed)),
-        Format::TarXz => Box::new(XzDecoder::new_stream(
-            compressed,
-            Stream::new_auto_decoder(memory.max(XZ_MEMORY), CONCATENATED)?,
-        )),
+        Format::TarXz => {
+            let limit = memory.max(XZ_MEMORY);
+            let stream = match xz_threads {
+                // one stream alone, so the decoder needs no CONCATENATED, which it cannot take
+                Some(threads) => {
+                    tracing::debug!(threads, "the xz stream decodes on several threads");
+                    MtStreamBuilder::new()
+                        .threads(threads)
+                        .memlimit_threading(limit)
+                        .memlimit_stop(limit)
+                        .decoder()?
+                }
+                None => Stream::new_auto_decoder(limit, CONCATENATED)?,
+            };
+            Box::new(XzDecoder::new_stream(compressed, stream))
+        }
         Format::TarZst => {
             let mut decoder = zstd::stream::read::Decoder::with_buffer(compressed)?;
             decoder.window_log_max(zstd_window_log(memory))?;
@@ -51,6 +68,87 @@ pub(super) fn decompressed<'r>(
         Format::TarBz2 => Box::new(Streams::<BzDecoder<_>>::new(compressed)),
         Format::Tar | Format::Zip | Format::SevenZ => Box::new(compressed),
     })
+}
+
+/// the threads the xz stream in `input` decodes on: none, so one decoder takes it, unless `limits`
+/// grants more than one and the input is one whole file that is exactly one xz stream whose index
+/// lists more than one block. each thread holds about three of its largest blocks, so
+/// `limits.memory` caps how many run, as the blocks do.
+pub(super) fn xz_threads(input: &Input, format: Format, limits: &Limits) -> Option<u32> {
+    if format != Format::TarXz || limits.xz_threads < 2 {
+        return None;
+    }
+    let mut file = input.whole_file()?.ok()?;
+    let (blocks, largest) = xz_blocks(&mut file).ok()??;
+    let fit = limits.memory / largest.saturating_mul(3).max(1);
+    let threads = u64::from(limits.xz_threads).min(fit).min(blocks);
+    (threads >= 2).then(|| u32::try_from(threads).unwrap_or(u32::MAX))
+}
+
+/// the blocks of the xz stream that `file` holds whole, with the largest one's decoded size, as
+/// the index at its end lists them; none when the file is not exactly one xz stream, as streams
+/// joined end to end, one with padding after it or a legacy .lzma file are not. the decoder still
+/// checks the index, so a damaged one only picks the way it decodes.
+fn xz_blocks(file: &mut (impl Read + Seek)) -> io::Result<Option<(u64, u64)>> {
+    const MAGIC: [u8; 6] = [0xfd, b'7', b'z', b'X', b'Z', 0];
+    let size = file.seek(SeekFrom::End(0))?;
+    // a stream header and footer of 12 bytes each, around an index of 8 at least
+    if size < 32 {
+        return Ok(None);
+    }
+    let mut header = [0; 6];
+    file.seek(SeekFrom::Start(0))?;
+    file.read_exact(&mut header)?;
+    let mut footer = [0; 12];
+    file.seek(SeekFrom::Start(size - 12))?;
+    file.read_exact(&mut footer)?;
+    if header != MAGIC || footer[10..] != *b"YZ" {
+        return Ok(None);
+    }
+    let backward = (u64::from(u32::from_le_bytes([
+        footer[4], footer[5], footer[6], footer[7],
+    ])) + 1)
+        * 4;
+    if backward > XZ_INDEX_MOST || backward + 24 > size {
+        return Ok(None);
+    }
+    let mut index = vec![0; usize::try_from(backward).unwrap_or(0)];
+    file.seek(SeekFrom::Start(size - 12 - backward))?;
+    file.read_exact(&mut index)?;
+    let mut at = 1;
+    let count = match index.first() {
+        Some(0) => varint(&index, &mut at),
+        _ => None,
+    };
+    let Some(count) = count else {
+        return Ok(None);
+    };
+    let (mut blocks, mut largest) = (0_u64, 0_u64);
+    for _ in 0..count {
+        let (Some(unpadded), Some(decoded)) = (varint(&index, &mut at), varint(&index, &mut at))
+        else {
+            return Ok(None);
+        };
+        blocks = blocks.saturating_add(unpadded.div_ceil(4).saturating_mul(4));
+        largest = largest.max(decoded);
+    }
+    let stream = blocks.saturating_add(backward).saturating_add(24);
+    Ok((stream == size).then_some((count, largest)))
+}
+
+/// the xz multibyte integer at `at` in `bytes`, of up to nine bytes of seven bits each, low first,
+/// moving `at` past it.
+fn varint(bytes: &[u8], at: &mut usize) -> Option<u64> {
+    let mut value = 0_u64;
+    for shift in (0..63).step_by(7) {
+        let byte = *bytes.get(*at)?;
+        *at += 1;
+        value |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Some(value);
+        }
+    }
+    None
 }
 
 /// whether `err` is an xz stream refused for asking more than [`XZ_MEMORY`] to be decompressed.
@@ -116,7 +214,8 @@ pub(super) fn unpack(
         meter: guard.meter(),
     };
     let memory = guard.limits().memory;
-    let decoded = decompressed(format, counted, memory)
+    let threads = xz_threads(input, format, guard.limits());
+    let decoded = decompressed(format, counted, memory, threads)
         .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
     let headers = Headers::default();
     let mut tar = Archive::new(Capped {
@@ -421,10 +520,11 @@ fn zeros_to_end(compressed: &mut impl BufRead, name: &str) -> io::Result<()> {
 mod tests {
     use ::tar::{Builder, EntryType, Header};
 
-    use super::super::Format;
     use super::super::samples::{
-        Scratch, compress, pax, raw_entry, tar_of, xz_asking_for, zstd_asking_for,
+        Scratch, compress, pax, raw_entry, tar_of, xz_asking_for, xz_in_blocks, zstd_asking_for,
     };
+    use super::super::{Format, Input, Limits};
+    use super::{XZ_MEMORY, decompressed, xz_blocks, xz_threads};
     use crate::digest;
     use crate::error::Kind;
 
@@ -782,6 +882,127 @@ mod tests {
         );
         let within = xz_asking_for(&compress(Format::TarXz, &tar_of(FILES)), 18);
         assert_eq!(paths(&Scratch::new(), Format::TarXz, &within).len(), 3);
+    }
+
+    /// a tar of some 300 KiB, and that tar in one xz stream of 64 KiB blocks, as `xz -T` writes.
+    fn tar_in_blocks() -> (Vec<u8>, Vec<u8>) {
+        let big: Vec<u8> = (0..300_000_u32).map(|at| (at * 7 % 251) as u8).collect();
+        let tar = tar_of(&[("data/big.bin", &big), ("data/train.csv", b"x,y\n1,2\n")]);
+        let blocked = xz_in_blocks(&tar, 64 << 10);
+        (tar, blocked)
+    }
+
+    /// only an xz stream alone in its file whose index lists several blocks decodes on threads,
+    /// as many as the run grants, the stream has blocks and the memory holds three of its largest
+    /// blocks for; streams joined end to end, one padded after, one of one block, a legacy .lzma
+    /// file and a split archive keep the one decoder.
+    #[test]
+    fn only_one_xz_stream_of_several_blocks_alone_in_its_file_decodes_on_threads() {
+        let scratch = Scratch::new();
+        let (tar, blocked) = tar_in_blocks();
+        let (blocks, largest) = xz_blocks(&mut std::io::Cursor::new(&blocked))
+            .unwrap()
+            .unwrap();
+        assert!(blocks >= 4, "{blocks}");
+        assert_eq!(largest, 64 << 10);
+        let granted = |xz_threads, memory| Limits {
+            memory,
+            xz_threads,
+            ..Limits::default()
+        };
+        let threads = |name: &str, bytes: &[u8], limits: &Limits| {
+            let input = Input::file(&scratch.file(name, bytes)).unwrap();
+            xz_threads(&input, Format::TarXz, limits)
+        };
+        let plenty = granted(4, XZ_MEMORY);
+        assert_eq!(threads("plenty", &blocked, &plenty), Some(4));
+        assert_eq!(threads("default", &blocked, &Limits::default()), None);
+        let all = u32::try_from(blocks).unwrap();
+        assert_eq!(threads("all", &blocked, &granted(64, XZ_MEMORY)), Some(all));
+        assert_eq!(
+            threads("two", &blocked, &granted(4, 6 * (64 << 10))),
+            Some(2)
+        );
+        assert_eq!(threads("one", &blocked, &granted(4, 5 * (64 << 10))), None);
+        let one_block = compress(Format::TarXz, &tar);
+        let joined = [blocked.as_slice(), &blocked].concat();
+        let padded = [blocked.as_slice(), &[0; 4]].concat();
+        let lzma = {
+            let options = liblzma::stream::LzmaOptions::new_preset(1).unwrap();
+            let stream = liblzma::stream::Stream::new_lzma_encoder(&options).unwrap();
+            let mut encoder = liblzma::write::XzEncoder::new_stream(Vec::new(), stream);
+            std::io::Write::write_all(&mut encoder, &tar).unwrap();
+            encoder.finish().unwrap()
+        };
+        for (name, bytes) in [
+            ("one block", &one_block),
+            ("joined", &joined),
+            ("padded", &padded),
+            ("lzma", &lzma),
+        ] {
+            assert_eq!(threads(name, bytes, &plenty), None, "{name}");
+        }
+        let input = Input::file(&scratch.file("gz", &blocked)).unwrap();
+        assert_eq!(xz_threads(&input, Format::TarGz, &plenty), None);
+        let parts = scratch.parts(&blocked, &[blocked.len() / 2]);
+        assert_eq!(xz_threads(&parts, Format::TarXz, &plenty), None);
+    }
+
+    /// a tar in an xz stream of several blocks decodes to the same bytes on threads as on one
+    /// decoder and unpacks to the same files; a tar in two xz streams joined end to end, the last
+    /// of several blocks, keeps the one decoder, which reads past the first.
+    #[test]
+    fn a_tar_in_xz_blocks_unpacks_alike_on_threads() {
+        let (tar, blocked) = tar_in_blocks();
+        let mut decoded = Vec::new();
+        decompressed(Format::TarXz, blocked.as_slice(), XZ_MEMORY, Some(4))
+            .unwrap()
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, tar);
+        let half = tar.len() / 2;
+        let joined = [
+            compress(Format::TarXz, &tar[..half]),
+            xz_in_blocks(&tar[half..], 64 << 10),
+        ]
+        .concat();
+        let threaded = Limits {
+            xz_threads: 4,
+            ..Limits::default()
+        };
+        for (name, packed) in [("blocked", &blocked), ("joined", &joined)] {
+            let alone = Scratch::new().unpack(Format::TarXz, packed).unwrap();
+            let scratch = Scratch::new();
+            let on_threads = scratch
+                .unpack_with(Format::TarXz, packed, &threaded, &|_| false)
+                .unwrap();
+            assert_eq!(on_threads.members, alone.members, "{name}");
+            assert_eq!(on_threads.tree, alone.tree, "{name}");
+            assert_eq!(on_threads.members.len(), 2, "{name}");
+        }
+    }
+
+    /// an xz stream of several blocks whose first block asks for too much memory is refused on
+    /// threads as it is on one decoder, leaving nothing in the cache.
+    #[test]
+    fn xz_blocks_asking_for_too_much_memory_are_refused_on_threads() {
+        let (_, blocked) = tar_in_blocks();
+        // a 512 MiB dictionary, twice what an xz stream may ask for
+        let asking = xz_asking_for(&blocked, 34);
+        let threaded = Limits {
+            xz_threads: 4,
+            ..Limits::default()
+        };
+        let scratch = Scratch::new();
+        let err = scratch
+            .unpack_with(Format::TarXz, &asking, &threaded, &|_| false)
+            .unwrap_err();
+        scratch.assert_empty();
+        assert_eq!(err.kind, Kind::SourceInvalid);
+        assert_eq!(
+            err.message,
+            "the archive's xz stream needs more than 256.0 MiB of memory to unpack"
+        );
     }
 
     #[test]

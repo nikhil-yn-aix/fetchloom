@@ -3548,3 +3548,53 @@ fn a_name_change_that_never_returns_ends_the_run_with_what_to_do() -> Result {
     );
     Ok(())
 }
+
+/// a tar in one xz stream of several blocks decodes on the archive's share of the threads, as
+/// `-vv` tells, and unpacks to the same files on the one thread a cap of one leaves it.
+#[test]
+fn a_get_unpacks_xz_blocks_on_its_share_of_the_threads() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big: Vec<u8> = (0..300_000_u32).map(|at| (at * 7 % 251) as u8).collect();
+    let tar = crate::support::tar_of(&[("big.bin", &big), ("notes.txt", b"notes\n")])?;
+    let stream = liblzma::stream::MtStreamBuilder::new()
+        .threads(2)
+        .block_size(64 << 10)
+        .preset(1)
+        .encoder()?;
+    let mut encoder = liblzma::write::XzEncoder::new_stream(Vec::new(), stream);
+    std::io::Write::write_all(&mut encoder, &tar)?;
+    let packed = encoder.finish()?;
+    let server = Server::start(
+        "/set.tar.xz",
+        vec![file(&packed, "\"s1\""), file(&packed, "\"s1\"")],
+    )?;
+    let mut expected = vec![
+        crate::support::sha256_hex(&big),
+        crate::support::sha256_hex(b"notes\n"),
+    ];
+    expected.sort();
+    for (cap, told) in [("3", Some("threads=3")), ("1", None)] {
+        let got = sandbox
+            .command(&["-vv", "--json", "get", &server.url, "--dir", cap])
+            .env("FETCHLOOM_THREADS", cap)
+            .env("FETCHLOOM_CACHE", sandbox.folder(&format!("cache {cap}"))?)
+            .output()?;
+        let document = json(&got)?;
+        assert_eq!(got.status.code(), Some(0), "{document}");
+        let mut hashes: Vec<String> = document["result"]["files"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|file| file["sha256"].as_str().map(str::to_owned))
+            .collect();
+        hashes.sort();
+        assert_eq!(hashes, expected, "{document}");
+        let stderr = text(&got.stderr)?;
+        let threads = stderr
+            .lines()
+            .find_map(|line| line.split_once("the xz stream decodes on several threads"))
+            .map(|(_, fields)| fields.trim());
+        assert_eq!(threads, told, "{stderr}");
+    }
+    Ok(())
+}
