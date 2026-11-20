@@ -4,7 +4,7 @@ use std::fs;
 
 use crate::support::{
     Result, Routes, Sandbox, Server, add_ok, delete, edit, file, json, reply, sha256_hex, text,
-    zip_of,
+    ways_left_out, zip_of,
 };
 #[cfg(unix)]
 use crate::support::{Running, wait_until};
@@ -5194,5 +5194,230 @@ fn a_cache_named_through_a_linked_folder_is_the_same_cache() -> Result {
         &["sync"],
         &placed,
     )?;
+    Ok(())
+}
+
+/// a change a test makes to the project in a folder.
+type Change = fn(&std::path::Path) -> Result;
+
+/// the one part of data.lock's file list in the project at `work`.
+fn list_part(work: &std::path::Path) -> Result<std::path::PathBuf> {
+    let parts: Vec<std::path::PathBuf> = fs::read_dir(work.join("data.lock.d"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<_>>()?;
+    assert_eq!(parts.len(), 1, "{parts:?}");
+    Ok(parts[0].clone())
+}
+
+/// a settled project's sync, which tries the settled shortcut with data.lock's text before it
+/// parses data.lock, finds every change, and ends as a sync that parsed data.lock first ends: its
+/// exit code, what it tells and the files it leaves, for nothing changed, a placed file replaced
+/// by the person's own or deleted, data.lock edited, its file list gone or changed, and fewer files
+/// allowed than the list holds.
+#[test]
+fn a_settled_sync_finds_every_change_before_reading_data_lock() -> Result {
+    const SEPALS: &[u8] = b"length,width\n5.1,3.5\n";
+    const RED: &[u8] = b"length\n1.4\n";
+    const BLUE: &[u8] = b"length\n1.9\n";
+    const NOTHING: &str =
+        "         Ok all pinned files are in place by size and time, nothing to do\n";
+    let cases: [(&str, Change, &str, Option<i32>, &str); 7] = [
+        ("nothing", |_| Ok(()), "", Some(0), NOTHING),
+        (
+            "an edit",
+            |work| {
+                let sepals = work.join("data/flowers/sepals.csv");
+                delete(&sepals)?;
+                Ok(fs::write(sepals, b"mine\n")?)
+            },
+            "",
+            Some(0),
+            "warning: data/flowers/sepals.csv has changed, so it stays\n  help: keep your version as a file or dataset of your own, or set copy = true for flowers in data.toml to edit its files in place; `fetchloom sync --force` discards your edit\n     Synced 1 dataset into data, 1 file left unchanged; see the warnings above\n",
+        ),
+        (
+            "a deletion",
+            |work| delete(&work.join("data/flowers/petals/red.csv")),
+            "",
+            Some(0),
+            "     Placed data/flowers · 1 file\nwarning: put back data/flowers/petals/red.csv, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/flowers/petals/red.csv`\n     Synced 1 dataset into data\n",
+        ),
+        (
+            "data.lock",
+            |work| {
+                let lock = fs::read_to_string(work.join("data.lock"))?;
+                let edited = lock.replacen("locked = \"20", "locked = \"19", 1);
+                Ok(fs::write(work.join("data.lock"), edited)?)
+            },
+            "",
+            Some(0),
+            NOTHING,
+        ),
+        (
+            "a list gone",
+            |work| delete(&list_part(work)?),
+            "",
+            Some(0),
+            "warning: data.lock names data.lock.d/flowers.69f00dbc65e5.tsv.zst, the file list of flowers, which is not there, so flowers waits for it\n  help: where flowers was pinned, run `git add data.lock.d` and commit, then pull that commit here. a part deleted here comes back with `git checkout -- data.lock.d`\n         Ok all pinned files but flowers's are in place by size and time, nothing to do\n",
+        ),
+        (
+            "a list changed",
+            |work| {
+                let part = list_part(work)?;
+                delete(&part)?;
+                let text = "path\tsize\tsha256\tmd5\turl\tunpacks_to\n";
+                Ok(fs::write(part, zstd::encode_all(text.as_bytes(), 3)?)?)
+            },
+            "",
+            Some(50),
+            "error: the file list of flowers in data.lock.d is not the one data.lock records\n  help: restore data.lock and data.lock.d from git, or delete data.lock and run `fetchloom lock`, which resolves every dataset again and may pin newer data\n",
+        ),
+        (
+            "fewer files allowed",
+            |_| Ok(()),
+            "2",
+            Some(50),
+            "error: data.lock lists 3 files in flowers, more than the 2 this run lists for one dataset\n  help: raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory\n",
+        ),
+    ];
+    for (case, change, most, code, told) in cases {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("flowers")?;
+        fs::create_dir_all(folder.join("petals"))?;
+        fs::write(folder.join("sepals.csv"), SEPALS)?;
+        fs::write(folder.join("petals/red.csv"), RED)?;
+        fs::write(folder.join("petals/blue.csv"), BLUE)?;
+        let added = sandbox
+            .command(&["add", "../flowers"])
+            .env("FETCHLOOM_TEST_INLINE", "1")
+            .output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        let settled = sandbox.run(&["sync"])?;
+        assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+        let work = sandbox.work();
+        change(&work)?;
+        let mut command = sandbox.command(&["sync"]);
+        if !most.is_empty() {
+            command.env("FETCHLOOM_MOST_FILES", most);
+        }
+        let output = command.output()?;
+        let said =
+            ways_left_out(&text(&output.stderr)?).replace(&work.display().to_string(), "<work>");
+        assert_eq!(output.status.code(), code, "{case}: {said}");
+        assert_eq!(said, told, "{case}");
+        let placed: Vec<Vec<u8>> = ["sepals.csv", "petals/red.csv", "petals/blue.csv"]
+            .iter()
+            .map(|file| fs::read(work.join("data/flowers").join(file)).unwrap_or_default())
+            .collect();
+        let sepals: &[u8] = if case == "an edit" { b"mine\n" } else { SEPALS };
+        assert_eq!(placed, [sepals, RED, BLUE], "{case}");
+    }
+    Ok(())
+}
+
+/// a settled project's sync with nothing changed builds none of its pins, so it answers in a
+/// container whose memory would not hold them, as a status there would not; once a file changed,
+/// the sync reads its pins and the container refuses it before it reads them, as before: files
+/// listed in data.lock itself and in data.lock.d.
+#[test]
+fn a_settled_sync_answers_in_a_container_too_small_for_its_pins() -> Result {
+    for inline in ["", "1"] {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("parts")?;
+        for name in ["a.csv", "b.csv", "c.csv"] {
+            fs::write(folder.join(name), name)?;
+        }
+        let mut add = sandbox.command(&["add", "../parts"]);
+        if !inline.is_empty() {
+            add.env("FETCHLOOM_TEST_INLINE", inline);
+        }
+        let added = add.output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        let settled = sandbox.run(&["sync"])?;
+        assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+        let work = sandbox.work();
+        assert_eq!(work.join("data.lock.d").exists(), !inline.is_empty());
+        let small = |args: &[&str]| {
+            sandbox
+                .command(args)
+                .env("FETCHLOOM_TEST_ROOM", (1_u64 << 20).to_string())
+                .output()
+        };
+        let answered = small(&["sync"])?;
+        let told = text(&answered.stderr)?;
+        assert_eq!(answered.status.code(), Some(0), "{inline}: {told}");
+        assert!(told.contains("nothing to do"), "{inline}: {told}");
+        delete(&work.join("data/parts/b.csv"))?;
+        let refused = small(&["--json", "sync"])?;
+        let document = json(&refused)?;
+        assert_eq!(refused.status.code(), Some(50), "{inline}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "local.io", "{inline}: {document}");
+        let message = error["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("3 files") && message.contains("1.0 MiB this container leaves"),
+            "{inline}: {message}"
+        );
+        assert!(!work.join("data/parts/b.csv").exists(), "{inline}");
+    }
+    Ok(())
+}
+
+/// `file` in the project at `work` rewritten by `edit`, and the state's record of the last
+/// complete sync made to match it, as a newer fetchloom that synced the project leaves them.
+fn rewritten_as_synced(
+    work: &std::path::Path,
+    file: &str,
+    edit: impl Fn(&str) -> String,
+) -> Result {
+    let path = work.join(file);
+    let before = fs::read_to_string(&path)?;
+    let after = edit(&before);
+    assert_ne!(after, before, "{file}");
+    fs::write(&path, &after)?;
+    let state = work.join(".fetchloom").join("state");
+    let recorded = fs::read_to_string(&state)?;
+    let (was, is) = (sha256_hex(before.as_bytes()), sha256_hex(after.as_bytes()));
+    assert_eq!(recorded.matches(&was).count(), 1, "{recorded}");
+    Ok(fs::write(&state, recorded.replace(&was, &is))?)
+}
+
+/// a project a newer fetchloom left settled, its data.lock in a newer format or its data.toml
+/// asking for a newer fetchloom, is refused though the settled shortcut is tried before data.lock
+/// is parsed: files listed in data.lock itself or in data.lock.d.
+#[test]
+fn a_newer_fetchloom_s_settled_project_is_refused() -> Result {
+    let running = env!("CARGO_PKG_VERSION");
+    let newer_lock = "error: data.lock is in format 2, which a newer fetchloom wrote, and this one reads format 1\n";
+    let newer_toml =
+        format!("error: this project needs fetchloom >=999.0, and this one is {running}\n");
+    let cases = [
+        ("data.lock", "", newer_lock.to_owned()),
+        ("data.lock", "1", newer_lock.to_owned()),
+        ("data.toml", "", newer_toml),
+    ];
+    for (file, inline, refusal) in cases {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("flowers")?;
+        fs::write(folder.join("sepals.csv"), b"length,width\n5.1,3.5\n")?;
+        fs::write(folder.join("petals.csv"), b"length\n1.4\n")?;
+        let mut add = sandbox.command(&["add", "../flowers"]);
+        if !inline.is_empty() {
+            add.env("FETCHLOOM_TEST_INLINE", inline);
+        }
+        let added = add.output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        let settled = sandbox.run(&["sync"])?;
+        assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
+        let work = sandbox.work();
+        assert_eq!(work.join("data.lock.d").exists(), !inline.is_empty());
+        rewritten_as_synced(&work, file, |text| match file {
+            "data.lock" => text.replacen("version = 1\n", "version = 2\n", 1),
+            _ => format!("required_version = \">=999.0\"\n{text}"),
+        })?;
+        let output = sandbox.run(&["sync"])?;
+        let told = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(50), "{file} {inline}: {told}");
+        assert!(told.starts_with(&refusal), "{file} {inline}: {told}");
+    }
     Ok(())
 }

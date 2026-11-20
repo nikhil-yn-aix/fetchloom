@@ -308,6 +308,35 @@ fn missing_part(entry: &Parsed, root: &Path) -> Option<String> {
         .cloned()
 }
 
+/// whether data.lock's `text` opens with the version line [`Lock::render`] writes for the format
+/// this fetchloom reads, either line ending. a newer fetchloom's lock gives another format there.
+pub(crate) fn opens_this_format(text: &str) -> bool {
+    let first = text.split_once('\n').map_or(text, |(first, _)| first);
+    first.strip_suffix('\r').unwrap_or(first) == format!("version = {VERSION}")
+}
+
+/// whether every file list data.lock's `text` names is whole in the project at `root`, as
+/// [`lists::whole`] tells without building a row, so a settled sync knows its lists unchanged
+/// without reading them into memory: true for a lock of inline files alone, false when the text
+/// does not read or [`lists::FOLDER`] is no real folder.
+pub(crate) fn lists_whole(text: &str, root: &Path) -> bool {
+    // an escape in a quoted key, as `"files\u005fin"`, names a list too
+    if !text.contains("files_in") && !text.contains('\\') {
+        return true;
+    }
+    let Ok(parsed) = parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX)) else {
+        return false;
+    };
+    let mut listed = parsed
+        .iter()
+        .filter_map(|entry| Some((entry.name(), entry.listed()?)))
+        .peekable();
+    if listed.peek().is_some() && lists::folder(root).is_err() {
+        return false;
+    }
+    listed.all(|(name, listed)| lists::whole(root, name, listed))
+}
+
 /// the datasets whose list data.lock's `text` names as fetchloom writes it and the project at
 /// `root` lacks a part of, as [`Lock::read_waiting`] keeps them. none if it does not read; a
 /// list's lines are not read.
@@ -3070,5 +3099,19 @@ mod tests {
     #[test]
     fn control_characters_are_escaped() {
         assert_eq!(quoted("a\u{1}b\u{7f}"), "\"a\\u0001b\\u007F\"");
+    }
+
+    /// a quoted key with an escape, `"files\u005fin"`, names a list as `files_in` does, so its list
+    /// is checked before data.lock's lists are said to be whole: here its parts are not there.
+    #[test]
+    fn an_escaped_files_in_key_names_a_list_too() {
+        let root = tempfile::tempdir().unwrap();
+        let text = sample_sorted()
+            .render_with(1)
+            .replace("files_in = [", "\"files\\u005fin\" = [");
+        assert!(!text.contains("files_in") && text.contains("\"files\\u005fin\""));
+        let parsed = parse_within(&text, &|_| false, u64::MAX).unwrap();
+        assert!(parsed.iter().any(|entry| entry.listed().is_some()));
+        assert!(!lists_whole(&text, root.path()));
     }
 }

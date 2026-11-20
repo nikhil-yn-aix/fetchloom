@@ -509,6 +509,25 @@ pub(crate) fn ok(output: &Output) -> Result {
     Ok(())
 }
 
+/// what a run told, each `Placed` line without the way the files were placed, which follows the
+/// disk: linked to the cache, cloned from it or copied.
+pub(crate) fn ways_left_out(told: &str) -> String {
+    let mut left = String::new();
+    for line in told.lines() {
+        let way = if line.trim_start().starts_with("Placed ") {
+            [" linked", " cloned", " copied"]
+                .iter()
+                .filter_map(|way| line.find(way))
+                .min()
+        } else {
+            None
+        };
+        left.push_str(&line[..way.unwrap_or(line.len())]);
+        left.push('\n');
+    }
+    left
+}
+
 /// the SHA-256 of `bytes` in hex, as data.lock and export write it.
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     use sha2::{Digest as _, Sha256};

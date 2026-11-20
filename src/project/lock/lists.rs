@@ -275,6 +275,68 @@ pub(crate) fn holds(path: &Path, text: &str) -> bool {
         .is_ok_and(|_| read == text.as_bytes())
 }
 
+/// how many times its size on disk a part's text may run to for [`whole`] to hash it, beside
+/// [`WHOLE_SLACK`]: a real list compresses a few times at most, as each row's SHA-256 is 64 hex
+/// digits that do not compress, so only a part made to decompress far past its size runs past it.
+const WHOLE_RATIO: u64 = 64;
+
+/// the bytes of text a part may hold past [`WHOLE_RATIO`] times its size, for a small part.
+const WHOLE_SLACK: u64 = 1 << 20;
+
+/// whether the parts `listed` names below the project at `root` hold the list data.lock records
+/// for `name`, decompressed and hashed without building a row: named as fetchloom writes them,
+/// within the files a run lists, each a plain file whose first line names the columns this
+/// fetchloom reads and whose text runs to no more than [`WHOLE_RATIO`] times its size on disk
+/// and [`WHOLE_SLACK`], so a part planted to decompress far past its size costs no more than
+/// that. any doubt says no, and [`read`] then says what is wrong, a row at a time.
+pub(crate) fn whole(root: &Path, name: &str, listed: &Listed) -> bool {
+    let within = usize::try_from(listed.count).is_ok_and(|count| count <= super::most_files());
+    if !named_as_written(name, listed) || !within {
+        return false;
+    }
+    let mut hasher = Hasher::default();
+    for part in &listed.parts {
+        let path = root.join(part.replace('/', std::path::MAIN_SEPARATOR_STR));
+        let Ok(file) = crate::volume::read_unfollowed(&path) else {
+            return false;
+        };
+        let Ok(size) = file.metadata().map(|found| found.len()) else {
+            return false;
+        };
+        let Ok(mut decoder) = zstd::stream::read::Decoder::new(file) else {
+            return false;
+        };
+        if decoder.window_log_max(WINDOW_LOG).is_err() {
+            return false;
+        }
+        let most = size.saturating_mul(WHOLE_RATIO).saturating_add(WHOLE_SLACK);
+        // a byte past the most tells a part that runs past it from one that holds that much
+        let mut reader = BufReader::new(decoder.take(most.saturating_add(1)));
+        let mut header = Vec::new();
+        let read = (&mut reader).take(LONGEST).read_until(b'\n', &mut header);
+        if read.is_err() || header != HEADER.as_bytes() {
+            return false;
+        }
+        hasher.update(&header);
+        let mut held = header.len() as u64;
+        let mut block = vec![0; 64 << 10];
+        loop {
+            match reader.read(&mut block) {
+                Ok(0) => break,
+                Ok(read) => {
+                    held += read as u64;
+                    hasher.update(&block[..read]);
+                }
+                Err(_) => return false,
+            }
+        }
+        if held > most {
+            return false;
+        }
+    }
+    hasher.finish().0 == listed.sha256
+}
+
 /// [`FOLDER`] below the project at `root`, there or not yet, refused when it is a link or a
 /// file: a cloned project's link would take reading, writing and removing lists outside it.
 pub(crate) fn folder(root: &Path) -> Result<PathBuf, Error> {
@@ -587,6 +649,40 @@ mod tests {
         }
         assert!(!is_part("notes.txt"));
         assert!(!is_part("big.tsv.zst"));
+    }
+
+    /// a list whose parts hash to its record but decompress far past their size is not taken
+    /// as whole, though it is one, so a part planted to decompress for ever stops a settled sync
+    /// soon: the long way, which reads a row at a time, then reads it. a list of every day's
+    /// rows, as compressed, is.
+    #[test]
+    fn a_list_that_decompresses_far_past_its_size_is_not_taken_as_whole() {
+        let root = tempfile::tempdir().unwrap();
+        let link = format!("https://example.org/{}", "a".repeat(3_000));
+        let repeated: Vec<LockedFile> = (0..2 * PART)
+            .map(|index| LockedFile {
+                path: format!("f/{index:07}.bin"),
+                size: 1,
+                sha256: digest::sha256(b"one"),
+                md5: None,
+                url: link.clone(),
+                unpacks_to: None,
+            })
+            .collect();
+        let listed = write(root.path(), "repeated", &repeated);
+        // each part's text runs past 64 times its size on disk and a MiB more, which whole keeps to
+        for (part, text) in listed.parts.iter().zip(texts(&repeated)) {
+            let compressed = fs::metadata(root.path().join(part)).unwrap().len();
+            let text = text.len() as u64;
+            assert!(text > compressed * 64 + (1 << 20), "{text} {compressed}");
+        }
+        assert!(!whole(root.path(), "repeated", &listed));
+        assert_eq!(
+            read(Parts::Folder(root.path()), "repeated", &listed).unwrap(),
+            repeated
+        );
+        let listed = write(root.path(), "plain", &files(2 * PART));
+        assert!(whole(root.path(), "plain", &listed));
     }
 
     /// lists a data.lock.d that is a link holds are never read, wherever it points, nor are

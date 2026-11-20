@@ -354,15 +354,22 @@ async fn sync_plain(
     text: &str,
     (plain, read): (&Manifest, digest::Sha256),
 ) -> Result<(Report, Closing), Error> {
-    let lock = project.lock_and_text()?;
-    let seen = Seen {
-        manifest: read,
-        lock: lock
-            .as_ref()
-            .map(|(_, text)| digest::sha256(text.as_bytes())),
+    let first = settled_text(project, read)?;
+    let tried = first.is_some();
+    let (mut old, mut seen, mut waiting) = if let Some(seen) = first {
+        (None, seen, Vec::new())
+    } else {
+        let lock = project.lock_and_text()?;
+        let seen = Seen {
+            manifest: read,
+            lock: lock
+                .as_ref()
+                .map(|(_, text)| digest::sha256(text.as_bytes())),
+        };
+        let old = lock.map(|(lock, _)| lock);
+        let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
+        (old, seen, waiting)
     };
-    let old = lock.map(|(lock, _)| lock);
-    let waiting = old.as_ref().map(waiting_in).unwrap_or_default();
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
     let mut survey = surveyed(&work, &Folders::of(plain), false)?;
     let dropped = survey.state.dropped.clone();
@@ -371,6 +378,15 @@ async fn sync_plain(
     let (whole, outcome) = if let Some(outcome) = settle(&work, plain, &mut survey, &seen)? {
         (None, outcome)
     } else {
+        // the shortcut was tried before data.lock was parsed, which the long way needs
+        if tried {
+            let lock = project.lock_and_text()?;
+            seen.lock = lock
+                .as_ref()
+                .map(|(_, text)| digest::sha256(text.as_bytes()));
+            old = lock.map(|(lock, _)| lock);
+            waiting = old.as_ref().map(waiting_in).unwrap_or_default();
+        }
         let whole = Project::parse_manifest(text)?;
         let whole = super::drop::placed_owned(whole, &Scope::All, &dropped);
         let run = Run {
@@ -410,6 +426,31 @@ async fn sync_plain(
         ..Report::default()
     };
     Ok((report, closing))
+}
+
+/// what a settled sync reads data.lock as, `read` being data.toml's SHA-256, when data.lock's text
+/// is the one the state's last complete sync read, in this fetchloom's format, and every list it
+/// names is whole: its SHA-256, without parsing it. none when the shortcut cannot answer from the
+/// text alone, and data.lock is then parsed first, as it always was, so a newer fetchloom's lock
+/// is refused even where that newer fetchloom left the project settled.
+fn settled_text(project: &Project, read: digest::Sha256) -> Result<Option<Seen>, Error> {
+    let Some(synced) = project.synced().filter(|synced| synced.complete) else {
+        return Ok(None);
+    };
+    let Some(text) = project.lock_text()? else {
+        return Ok(None);
+    };
+    let lock = digest::sha256(text.as_bytes());
+    if synced.lock != lock
+        || !lock::opens_this_format(&text)
+        || !lock::lists_whole(&text, &project.root)
+    {
+        return Ok(None);
+    }
+    Ok(Some(Seen {
+        manifest: read,
+        lock: Some(lock),
+    }))
 }
 
 /// the datasets `names` asks `command` for, every one when it names none.

@@ -450,7 +450,7 @@ impl Project {
     /// on a fifo, and refused before a byte is read when it is no plain file, or larger than
     /// [`LOCK_MOST`] or the room a container leaves: gc reads every registered project's, so a
     /// planted one must not hang or fill another person's run.
-    fn lock_text(&self) -> Result<Option<String>, Error> {
+    pub(crate) fn lock_text(&self) -> Result<Option<String>, Error> {
         let path = self.root.join(lock::FILE);
         let file = match open_waitless(&path) {
             Ok(file) => file,
