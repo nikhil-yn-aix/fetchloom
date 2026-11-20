@@ -3,10 +3,35 @@
 use std::ffi::OsString;
 use std::io;
 use std::num::NonZeroUsize;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::thread::{self, ScopedJoinHandle};
 
 use crate::error::{Error, Kind};
+
+/// the processor count as the run read it once, after [`remember_processors`]; none where the
+/// system could not say.
+static PROCESSORS: OnceLock<Option<NonZeroUsize>> = OnceLock::new();
+
+/// reads the processor count once for the rest of the run: on linux each ask reads
+/// /proc/self/cgroup and a cpu.max file for each cgroup level, and an archive asked three times.
+pub(crate) fn remember_processors() {
+    let _ = PROCESSORS.set(thread::available_parallelism().ok());
+}
+
+/// [`thread::available_parallelism`], or the count the run remembered.
+///
+/// # Errors
+///
+/// when the system cannot say how many threads run at once.
+pub(crate) fn available_parallelism() -> io::Result<NonZeroUsize> {
+    match PROCESSORS.get() {
+        Some(Some(processors)) => Ok(*processors),
+        Some(None) => Err(io::Error::other(
+            "the system did not say how many threads it runs",
+        )),
+        None => thread::available_parallelism(),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub(crate) struct Threads(Option<NonZeroUsize>);

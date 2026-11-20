@@ -7,6 +7,7 @@ mod parents;
 mod parents;
 mod schedule;
 mod synced;
+pub(crate) use synced::remember as remember_synced;
 
 use parents::{Location, Parents, Staged};
 
@@ -297,7 +298,7 @@ impl Placer {
         let root = std::path::absolute(root).unwrap_or_else(|_| root.to_path_buf());
         let opened_at = opened_at(&root);
         let real = opened_at.as_deref().unwrap_or(&root);
-        let synced = synced::client(real, &|name| std::env::var_os(name), &synced::mounts);
+        let synced = synced::client_of(real);
         if let Some(client) = synced {
             tracing::debug!(root = %real.display(), client, "inside a synced folder, so no hardlinks");
         }
@@ -1308,7 +1309,7 @@ pub(crate) fn run_coarse<T: Sync, R: Send>(
     per: usize,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
-    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let threads = crate::threads::available_parallelism().map_or(1, NonZero::get);
     run_work(
         items,
         cap.limit(threads.min(THREADS).min(items.len() / per.max(1))),
@@ -1326,7 +1327,7 @@ pub(crate) fn run_hashes<T: Sync, R: Send>(
     ahead: Option<&ReadAhead<'_, T>>,
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
-    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     run_work(
         items,
         hash_workers(items.len(), bytes, processors, cap),
@@ -1498,7 +1499,7 @@ fn in_order<R>(count: usize, results: impl IntoIterator<Item = (usize, R)>) -> V
 
 /// how many threads share `items` items of work.
 fn workers(items: usize, cap: Threads) -> usize {
-    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let threads = crate::threads::available_parallelism().map_or(1, NonZero::get);
     cap.limit(threads.min(THREADS).min(items / PER_THREAD))
 }
 

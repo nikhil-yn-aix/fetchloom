@@ -294,7 +294,7 @@ most files here add methods to `Cache`. [cache](cache.md) gives the layout and w
 | `src/place/parents.rs` | on unix, directory handles that keep later path swaps out of placement | `Parents` |  |
 | `src/place/parents_windows.rs` | the windows twin: folder handles that deny deletion while placement uses their paths | `Parents` |  |
 | `src/place/schedule.rs` | a cap on concurrent changes to one folder's entries, apart from the worker ceiling | `Folders` |  |
-| `src/place/synced.rs` | folders onedrive, dropbox, icloud drive or google drive keep in sync, where files are copied rather than linked | `client` |  |
+| `src/place/synced.rs` | folders onedrive, dropbox, icloud drive or google drive keep in sync, where files are copied rather than linked, each folder's client found once a command | `client`, `client_of` | `remember` |
 | `src/volume.rs` | what a volume allows: hardlinks, which FAT32 and exFAT lack, and the safe removal of read-only files, which they refuse on windows | `Volume` | `replace`, `remove`, `remove_hardlink`, `can_hardlink`, `is_plain`, `create_hidden` |
 | `src/volume/stall.rs` | the watch on links and renames that windows never finishes, as when ReFS deadlocks, which ends the run with what is stuck | `naming` | `when_stalled` |
 
@@ -328,7 +328,7 @@ every layer shares these small types and limits; [primitives](primitives.md) giv
 | `src/settings/resources.rs` | `resources` levels: what lean, default and max give the knobs they derive from the machine, and what a run spends once every knob is set, which `-v` says | `Level`, `Spending` | `Limits`, `limits`, `spending` |
 | `src/machine.rs` | what the machine allows: processors, available memory (on linux inside cgroup limits and whether a cgroup holds it, on windows and macos as sysinfo counts it), open files, the processors online, and programs on PATH; the settings and state folders | `Machine` | `read`, `processors_online`, `state_folder` |
 | `src/space.rs` | free space on the disk holding a folder, statvfs on unix and the volume list on windows, checked before a download starts; what that disk is formatted as, and the 4 GiB less one byte FAT32 holds in one file | `free` | `short`, `Filesystem`, `cache_holds`, `same_disk` |
-| `src/threads.rs` | the optional ceiling on local worker groups, and the scoped worker helper | `Threads`, `scoped` | `read`, `limit`, `archives` |
+| `src/threads.rs` | the optional ceiling on local worker groups, the scoped worker helper, and the logical CPU count read once a command | `Threads`, `scoped`, `available_parallelism` | `read`, `limit`, `archives`, `remember_processors` |
 | `src/shown.rs` | which query names hold secrets, and links as messages and logs show them, every query value masked unless its name is known to be harmless | `Shown`, `mask_query` | `secret`, `depends_on_path` |
 | `src/xml.rs` | a small XML reader for the answers of S3, azure and arXiv, without attributes, that refuses document type declarations | `parse` | `Element`, `unescape` |
 | `src/account.rs` | an account at one source, or a login for one host: the plain data a refusal's `Need` names, whose keys `auth` finds, checks and names; the shape of each source's key, which its access descriptor names, and of an installation's key, saved as its host's | `Account` | `KeyShape`, `Account::key`, `PER_HOST_KEYS`, `per_host_key` |

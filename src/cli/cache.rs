@@ -704,7 +704,7 @@ pub(super) fn verify(context: &Context) -> Result<Checked, Error> {
     let ticker = context
         .output
         .ticker("Checking", what.to_owned(), [Some(total)]);
-    let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let threads = crate::threads::available_parallelism().map_or(1, std::num::NonZero::get);
     let checked = cache.verify_scanned(
         scan,
         context.threads.limit(threads),

@@ -147,7 +147,7 @@ pub(in crate::cli) async fn unpack_all(
         return Ok(results);
     }
     // each archive keeps a core decompressing and a few threads writing files
-    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     let at_once = processors.div_ceil(4).min(4);
     let (at_once, writers) = context.threads.archives(at_once, archives.len());
     let mut limits = context.settings.archive_limits();

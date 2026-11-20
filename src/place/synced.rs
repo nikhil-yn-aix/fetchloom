@@ -1,9 +1,55 @@
 //! folders that onedrive, dropbox, icloud drive or google drive keep in sync. those clients
 //! break hardlinks or upload each link as a whole file, so files placed there are copied.
 
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Mutex, OnceLock, PoisonError};
+
+/// each folder's sync client as this run first found it, once [`remember`] was called.
+static CLIENTS: OnceLock<Clients> = OnceLock::new();
+
+type Clients = Mutex<HashMap<PathBuf, Option<&'static str>>>;
+
+/// finds each folder's sync client once for the rest of the run: an archive's staging alone
+/// asked about the cache's folder four or five times, each reading the mount table and resolving
+/// the folder and the clients' folders again.
+pub(crate) fn remember() {
+    let _ = CLIENTS.set(Mutex::default());
+}
+
+/// [`client`] of `folder` with this process's variables and mount table, found once a run for
+/// each folder once [`remember`] was called.
+pub(super) fn client_of(folder: &Path) -> Option<&'static str> {
+    let find = || client(folder, &|name| std::env::var_os(name), &mounts);
+    match CLIENTS.get() {
+        Some(clients) => remembered(clients, folder, find),
+        None => find(),
+    }
+}
+
+/// the client `clients` holds for `folder`, found with `find` the first time it is asked.
+fn remembered(
+    clients: &Clients,
+    folder: &Path,
+    find: impl FnOnce() -> Option<&'static str>,
+) -> Option<&'static str> {
+    let held = clients
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(folder)
+        .copied();
+    if let Some(client) = held {
+        return client;
+    }
+    let client = find();
+    clients
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(folder.to_path_buf(), client);
+    client
+}
 
 /// the sync client that owns `folder`, if any. `folder` must be absolute. `mounts` reads the
 /// table of mounted filesystems, in the form of linux's /proc/self/mounts.
@@ -211,6 +257,27 @@ mod tests {
                 .find(|(key, _)| key == name)
                 .map(|(_, value)| value.clone())
         }
+    }
+
+    /// a folder's client is found once and answered as found, another folder's apart.
+    #[test]
+    fn a_remembered_folder_is_found_once() {
+        let clients = Clients::default();
+        let finds = std::cell::Cell::new(0);
+        let found = |client| {
+            finds.set(finds.get() + 1);
+            client
+        };
+        let synced = Path::new("/home/someone/Dropbox/project/data");
+        let plain = Path::new("/home/someone/project/data");
+        for _ in 0..3 {
+            assert_eq!(
+                remembered(&clients, synced, || found(Some("dropbox"))),
+                Some("dropbox")
+            );
+            assert_eq!(remembered(&clients, plain, || found(None)), None);
+        }
+        assert_eq!(finds.get(), 2);
     }
 
     #[test]

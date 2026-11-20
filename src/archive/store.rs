@@ -110,7 +110,7 @@ pub(super) fn store_all(
     keyed: bool,
     read: impl FnOnce(&Writers<'_>) -> Result<(), Error>,
 ) -> Result<(Vec<Member>, Vec<Sha256>), Error> {
-    let threads = thread::available_parallelism()
+    let threads = crate::threads::available_parallelism()
         .map_or(1, NonZeroUsize::get)
         .min(MOST_WRITERS);
     let threads = cap.map_or(threads, |cap| threads.min(cap));

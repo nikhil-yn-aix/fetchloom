@@ -1017,6 +1017,8 @@ fn read_mirrors(
 }
 
 fn execute(context: Context, command: Option<args::Command>, started: Instant) -> ExitCode {
+    crate::threads::remember_processors();
+    crate::place::remember_synced();
     let name = command.as_ref().map(args::Command::name);
     let context = Arc::new(context);
     let runtime = match command_runtime(&context) {
@@ -1442,7 +1444,7 @@ fn ask(output: &Output, yes: bool, what: &str, size: &str, above: u64) -> Result
 
 /// the runtime for a command, with ctrl-c and SIGTERM handled before any work starts.
 fn command_runtime(context: &Arc<Context>) -> Result<tokio::runtime::Runtime, Error> {
-    let workers = std::thread::available_parallelism().map_or(2, |n| n.get().min(4));
+    let workers = crate::threads::available_parallelism().map_or(2, |n| n.get().min(4));
     let runtime = crate::threads::start_runtime(|| {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(context.threads.limit(workers))
