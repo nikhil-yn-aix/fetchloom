@@ -58,6 +58,17 @@ do not make a managed hardlink writable to edit it. set `copy = true` on the dat
 
 fetchloom writes its progress and results to stderr. windows powershell 5.1 shows stderr as red `NativeCommandError` text when you redirect it with `2>&1`, even when the command worked. the text is harmless; the exit code still tells you whether the command worked. powershell 7, or running without `2>&1`, shows the lines as they are.
 
+## paths with accents in scripts
+
+fetchloom writes its output as utf-8, as cargo, uv and other rust programs do. powershell reads what a program prints with `[Console]::OutputEncoding`, which follows the console's code page, 437 on a new english windows, so `$p = fetchloom path iris` in a folder named `Datos Económicos` gives `Datos Econ├│micos`, and `Test-Path $p` finds nothing. windows powershell 5.1 and powershell 7 both read it so. set utf-8 for the session, or in your `$PROFILE`, before you capture a path:
+
+```powershell
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+$p = fetchloom path iris
+```
+
+in cmd, run `chcp 65001` before a `for /f` that captures one. `--json` needs neither: its document is ASCII, with every other character written as a `\u` escape, so `(fetchloom --json path iris | ConvertFrom-Json).result.path` is right under any code page.
+
 ## commands in help lines
 
 a command fetchloom suggests puts each name in double quotes, which powershell and cmd both read as written. that covers a name holding a comma, which windows powershell 5.1 reads bare as a list and passes on changed, as `x,1kb` becomes `x,1024`, and one starting with a single `-` and holding a dot, which powershell splits at the dot. a `\` that ends a name is doubled inside the quotes, since a program reads `\"` as a quote. a name holding what cmd acts on even inside quotes, `& | < > ^ % !`, or what powershell's quotes cannot keep, `$`, a backtick or a double quote, is never put in a command, so pasting one runs nothing hidden in a name: the command shows a placeholder such as `"<file>"` or `"<folder>"`, in double quotes, so no shell reads it as a redirection from a file of that name, and a line of its own gives the name it stands for, to type quoted as your shell needs. one name keeps one placeholder across an error's or a warning's message, details and help, in `--json` too, where that line is one of the details, and across the rows a command such as `status` prints. `--json` gives such a help no `fix`.
