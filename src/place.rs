@@ -37,6 +37,11 @@ const THREADS: usize = 8;
 /// the fewest items worth a thread of their own, since starting one costs more than a few calls.
 const PER_THREAD: usize = 64;
 
+/// the most threads a sync's placement into btrfs takes, placing files or naming those that waited
+/// for its flush: each create, clone and rename there updates the same trees, and past a few
+/// threads placing took longer and more cpu.
+const BTRFS_THREADS: usize = 3;
+
 /// hashing this many bytes repays starting a worker even for a short file list.
 const HASH_BYTES: u64 = 4 << 20;
 
@@ -89,6 +94,9 @@ pub(crate) struct Placer {
     /// whether the root itself must be a real folder, as a project's data folder must. a folder
     /// someone named for `get` may be a link to one.
     checks_root: bool,
+    /// whether placing takes the thread counts measured for sync's placement, which only sync's
+    /// placer asks for, as `get` was not measured with them.
+    sync_threads: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
     synced: Option<&'static str>,
@@ -340,6 +348,7 @@ impl Placer {
             root,
             opened_at: None,
             checks_root: true,
+            sync_threads: false,
             folders: HashSet::new(),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
@@ -358,6 +367,13 @@ impl Placer {
 
     pub(crate) fn with_threads(mut self, threads: Threads) -> Placer {
         self.threads = threads;
+        self
+    }
+
+    /// places with the thread counts measured for sync's placement, the one caller that asks: at
+    /// most [`BTRFS_THREADS`] on btrfs.
+    pub(crate) fn with_sync_threads(mut self) -> Placer {
+        self.sync_threads = true;
         self
     }
 
@@ -463,6 +479,12 @@ impl Placer {
         let serial = !ready.is_empty() && this.filesystem().serializes();
         let grouped = folders.finish(serial);
         let threads = grouped.threads(this.threads);
+        // the filesystem is asked only for work, as an empty placement must not latch a failed probe
+        let threads = if this.sync_threads && !ready.is_empty() {
+            placing_threads(threads, this.filesystem())
+        } else {
+            threads
+        };
         // on linux a few copies flush one by one, since one flush of the filesystem also waits
         // for everything other programs wrote there
         let batch = (cfg!(not(target_os = "linux")) || count > crate::volume::MOST_FLUSHED_ALONE)
@@ -1495,6 +1517,16 @@ fn in_order<R>(count: usize, results: impl IntoIterator<Item = (usize, R)>) -> V
         }
     }
     slots.into_iter().flatten().collect()
+}
+
+/// the most threads placing into `filesystem` takes, within `threads`: at most [`BTRFS_THREADS`]
+/// on btrfs.
+fn placing_threads(threads: Threads, filesystem: Filesystem) -> Threads {
+    if filesystem == Filesystem::Btrfs {
+        threads.at_most(BTRFS_THREADS)
+    } else {
+        threads
+    }
 }
 
 /// how many threads share `items` items of work.

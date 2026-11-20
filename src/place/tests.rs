@@ -2296,3 +2296,80 @@ fn a_name_with_a_drive_or_a_stream_is_refused() {
             .is_ok()
     );
 }
+
+/// a sync placing into btrfs takes at most [`BTRFS_THREADS`] threads, fewer when the run asks for
+/// fewer; any other filesystem, and a placer that did not ask for sync's counts, as `get`'s does
+/// not, take as many as before, with the same files placed either way.
+#[test]
+fn placing_into_btrfs_takes_a_few_threads() {
+    let any = Threads::default();
+    assert_eq!(
+        placing_threads(any, Filesystem::Btrfs).limit(8),
+        BTRFS_THREADS
+    );
+    assert_eq!(placing_threads(any, Filesystem::Other).limit(8), 8);
+    for asked in [1, 2] {
+        let capped = Threads::default().at_most(asked);
+        assert_eq!(placing_threads(capped, Filesystem::Btrfs).limit(8), asked);
+    }
+    assert_eq!(placing_threads(any, Filesystem::Btrfs).limit(2), 2);
+
+    let (folder, object) = cache(true);
+    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    // the first file goes alone on the calling thread, before any worker starts
+    let caller = std::thread::current().id();
+    for (filesystem, sync) in [
+        (Filesystem::Other, true),
+        (Filesystem::Btrfs, true),
+        (Filesystem::Btrfs, false),
+    ] {
+        let root = folder.path().join(format!("data-{filesystem:?}-{sync}"));
+        let workers = Arc::new(std::sync::Mutex::new(std::collections::HashSet::new()));
+        let seen = Arc::clone(&workers);
+        let placer =
+            Placer::starting_at(root.clone(), Method::Hardlink, None).observing(move |_| {
+                let worker = std::thread::current().id();
+                if worker != caller {
+                    seen.lock().unwrap().insert(worker);
+                }
+            });
+        let mut placer = if sync {
+            placer.with_sync_threads()
+        } else {
+            placer
+        };
+        assert!(placer.filesystem.set(filesystem).is_ok());
+        let destinations: Vec<PathBuf> = (0..1024)
+            .map(|index| root.join(format!("d{}/{index}.csv", index % 4)))
+            .collect();
+        let results = placer.place_all(
+            destinations.len(),
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+                size: CONTENTS.len() as u64,
+            },
+            Metadata::len,
+        );
+        for result in results {
+            assert_eq!(
+                result.unwrap().1,
+                CONTENTS.len() as u64,
+                "{filesystem:?} {sync}"
+            );
+        }
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        }
+        let used = workers.lock().unwrap().len();
+        if filesystem == Filesystem::Btrfs && sync {
+            assert!(used <= BTRFS_THREADS, "{used}");
+        } else {
+            assert!(
+                processors <= BTRFS_THREADS || used > BTRFS_THREADS,
+                "{filesystem:?} {sync}: {used}"
+            );
+        }
+    }
+}

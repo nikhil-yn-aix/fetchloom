@@ -10,8 +10,8 @@ use crate::error::{Error, Kind};
 pub(crate) const FAT_LARGEST: u64 = (1 << 32) - 1;
 
 /// what a disk is formatted as, as far as fetchloom's work changes with it: FAT and exFAT make
-/// no links and change one folder at a time, FAT holds no file past [`FAT_LARGEST`], and HFS+
-/// keeps creation times to the whole second.
+/// no links and change one folder at a time, FAT holds no file past [`FAT_LARGEST`], HFS+ keeps
+/// creation times to the whole second, and btrfs places files faster on a few threads.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Filesystem {
     /// FAT32, or FAT12 and FAT16 on smaller disks.
@@ -19,6 +19,7 @@ pub(crate) enum Filesystem {
     Exfat,
     /// HFS+, or the HFS before it.
     Hfs,
+    Btrfs,
     Other,
 }
 
@@ -33,6 +34,8 @@ impl Filesystem {
             Filesystem::Fat
         } else if is(&["hfs", "hfsplus"]) {
             Filesystem::Hfs
+        } else if is(&["btrfs"]) {
+            Filesystem::Btrfs
         } else {
             Filesystem::Other
         }
@@ -45,6 +48,7 @@ impl Filesystem {
             0x4d44 => Filesystem::Fat,
             0x2011_bab0 => Filesystem::Exfat,
             0x482b | 0x4244 => Filesystem::Hfs,
+            0x9123_683e => Filesystem::Btrfs,
             _ => Filesystem::Other,
         }
     }
@@ -274,7 +278,10 @@ mod tests {
         assert_eq!(Filesystem::from_magic(0x2011_bab0), Filesystem::Exfat);
         assert_eq!(Filesystem::from_magic(0x482b), Filesystem::Hfs);
         assert_eq!(Filesystem::from_magic(0x4244), Filesystem::Hfs);
+        assert_eq!(Filesystem::from_magic(0x9123_683e), Filesystem::Btrfs);
+        assert_eq!(Filesystem::named("btrfs"), Filesystem::Btrfs);
         assert!(!Filesystem::Hfs.serializes() && Filesystem::Exfat.serializes());
+        assert!(!Filesystem::Btrfs.serializes() && Filesystem::Btrfs.holds(FAT_LARGEST + 1));
         for magic in [-1, 0, 0xef53, 0x5846_5342] {
             assert_eq!(Filesystem::from_magic(magic), Filesystem::Other);
         }
