@@ -29,6 +29,10 @@ error: windows has not finished giving D:\docs-sample\.fetchloom\.gitignore its 
 
 restart windows, then run the command again. the files fetchloom finished before the lock-up stay in the cache, so the next run does not download them again. until the restart the window may stay open, and other programs that use the drive may wait too. fetchloom's [tests on a new ReFS volume](../../dev/engineering/ci.md#filesystem-runs) met this about once in 160 runs, each within a minute of the volume's format.
 
+## ReFS on windows server 2022
+
+windows server 2022's ReFS, version 3.7, refuses the flag that lets a program delete a read-only file in one step, which later versions accept. fetchloom clears a file's read-only mark first where it can, so adding and placing work there. it can't for a file with a second name: the mark belongs to the file, not the name, and a file placed as a link to the cache shares it with the cache's copy. so `copy = true`, `remove` and `cache gc` can stop there with `permission was denied`. keep the cache and the project on NTFS there, or use the ReFS of windows 11 or windows server 2025.
+
 ## short name
 
 the installer also makes `fl.exe` beside `fetchloom.exe`, made again on every install so it never runs an old version. `fl sync` runs `fetchloom sync` in cmd and other shells. powershell runs an alias before any program, and there `fl` is the alias of `Format-List`, so type `fl.exe sync`, or give `fl` to fetchloom in your powershell profile:
