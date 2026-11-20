@@ -1,0 +1,26 @@
+name: os-probe
+
+# scratch only: o2's delete calls on a ReFS volume beside ntfs, on windows-2022
+# (plan/qa/os-hunt/fixes.md). ctypes only, nothing is built.
+on:
+  push:
+    branches: ['scratch-os-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  probe:
+    name: windows-2022
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: o2 probe
+        run: python .oshunt/probe_o2.py
