@@ -251,10 +251,21 @@ impl fmt::Debug for BlobId {
 }
 
 /// hashes computed while bytes stream past: always SHA-256, and MD5 when one will be checked.
-#[derive(Clone, Default)]
+/// SHA-256 goes through ring, which finds the processor's SHA instructions on every system;
+/// sha2 finds them through cpufeatures, which cannot see them on arm64 windows.
+#[derive(Clone)]
 pub(crate) struct Hasher {
-    sha256: sha2::Sha256,
+    sha256: ring::digest::Context,
     md5: Option<md5::Md5>,
+}
+
+impl Default for Hasher {
+    fn default() -> Hasher {
+        Hasher {
+            sha256: ring::digest::Context::new(&ring::digest::SHA256),
+            md5: None,
+        }
+    }
 }
 
 impl Hasher {
@@ -276,21 +287,27 @@ impl Hasher {
     }
 
     pub(crate) fn update(&mut self, bytes: &[u8]) {
-        sha2::Digest::update(&mut self.sha256, bytes);
+        self.sha256.update(bytes);
         if let Some(md5) = &mut self.md5 {
             md5.update(bytes);
         }
     }
 
     pub(crate) fn finish(self) -> (Sha256, Option<Md5>) {
-        let sha256 = Sha256(sha2::Digest::finalize(self.sha256).into());
+        let sha256 = finished(self.sha256);
         (sha256, self.md5.map(|md5| Md5(md5.finalize().into())))
     }
 
     /// the SHA-256 of the bytes so far. the hasher goes on taking more.
     pub(crate) fn sha256_so_far(&self) -> Sha256 {
-        Sha256(sha2::Digest::finalize(self.sha256.clone()).into())
+        finished(self.sha256.clone())
     }
+}
+
+fn finished(context: ring::digest::Context) -> Sha256 {
+    let mut digest = [0; 32];
+    digest.copy_from_slice(context.finish().as_ref());
+    Sha256(digest)
 }
 
 pub(crate) fn sha256(bytes: &[u8]) -> Sha256 {
@@ -463,6 +480,59 @@ mod tests {
             None,
             "md5 costs nothing unless asked for"
         );
+    }
+
+    /// the published digests, and sha2's digest of bytes fed in pieces that straddle SHA-256's
+    /// 64-byte blocks, and the digest so far partway through.
+    #[test]
+    fn hashes_to_the_published_sha256_and_sha2s() {
+        let million: Vec<u8> = vec![b'a'; 1_000_000];
+        let published: [(&[u8], &str); 4] = [
+            (
+                b"",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            ),
+            (
+                b"abc",
+                "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            ),
+            (
+                b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+                "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1",
+            ),
+            (
+                &million,
+                "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+            ),
+        ];
+        for (bytes, digest) in published {
+            let mut hasher = Hasher::default();
+            hasher.update(bytes);
+            assert_eq!(hasher.finish().0.hex(), digest);
+        }
+        let bytes: Vec<u8> = (0..=250).cycle().take((1 << 20) + 3).collect();
+        for size in [55, 56, 63, 64, 65, 127, 128, 129, bytes.len()] {
+            let mut hasher = Hasher::default();
+            let mut fed = 0;
+            for piece in [1, 6, 57, 63, 64, 65, 4096].into_iter().cycle() {
+                let end = (fed + piece).min(size);
+                hasher.update(&bytes[fed..end]);
+                fed = end;
+                if fed == size {
+                    break;
+                }
+            }
+            let sha2: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&bytes[..size]).into();
+            assert_eq!(hasher.finish().0.bytes(), &sha2, "{size}");
+        }
+        let mut hasher = Hasher::default();
+        hasher.update(b"ab");
+        assert_eq!(
+            hasher.sha256_so_far().hex(),
+            "fb8e20fc2e4c3f248c60c39bd652f3c1347298bb977b8b4d5903b85055620603"
+        );
+        hasher.update(b"c");
+        assert_eq!(hasher.finish().0.hex(), published[1].1);
     }
 
     #[test]
