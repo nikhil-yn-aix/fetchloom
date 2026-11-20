@@ -459,3 +459,142 @@ fn live_dryad() {
     assert!(listing.files.iter().all(|file| file.md5.is_some()));
     assert_eq!(asked(&work), 2);
 }
+
+/// dryad's answers for doi:10.5061/dryad.j1fd7 whose version 26724 lists its files on pages of
+/// `counts[i]` files each, every page stating `totals[i]` files in all, each answer taking a
+/// second of a paused clock.
+fn paged(counts: &[usize], totals: &[usize]) -> Recorded {
+    let template: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("dryad/files.json")).unwrap();
+    let entry = template["_embedded"]["stash:files"][0].clone();
+    let mut recorded = Recorded::default()
+        .fixture(DATASET, "dryad/dataset.json")
+        .holding(std::time::Duration::from_secs(1));
+    let mut id = 100_000;
+    for (index, (count, total)) in counts.iter().zip(totals).enumerate() {
+        let mut page = template.clone();
+        page["total"] = (*total).into();
+        page["count"] = (*count).into();
+        let files: Vec<serde_json::Value> = (0..*count)
+            .map(|_| {
+                id += 1;
+                let mut file = entry.clone();
+                file["path"] = format!("data/f{id}.csv").into();
+                file["_links"]["stash:download"]["href"] =
+                    format!("/api/v2/files/{id}/download").into();
+                file
+            })
+            .collect();
+        page["_embedded"]["stash:files"] = files.into();
+        let url = format!(
+            "https://datadryad.org/api/v2/versions/26724/files?page={}&per_page=100",
+            index + 1
+        );
+        recorded = recorded.on(&url, 200, serde_json::to_vec(&page).unwrap());
+    }
+    recorded.otherwise(404)
+}
+
+/// the listing or error of `recorded`'s dataset, the seconds of a paused clock it took, and the
+/// requests it asked.
+fn paged_resolve(recorded: &Recorded) -> (Result<Listing, Error>, u64, usize) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let start = tokio::time::Instant::now();
+        let listed = dataset("10.5061/dryad.j1fd7").resolve(recorded).await;
+        (listed, start.elapsed().as_secs(), recorded.asked().len())
+    })
+}
+
+/// a version of 1,000 files on ten pages is the same listing whether its pages go one at a time
+/// or four at once once the first says how many there are, in five rounds of requests rather
+/// than eleven, with no request more.
+#[test]
+fn pages_dryad_counts_go_together_in_fewer_rounds() {
+    let (counts, totals) = ([100; 10], [1_000; 10]);
+    let (alone, alone_rounds, alone_asked) = paged_resolve(&paged(&counts, &totals));
+    let (together, together_rounds, together_asked) =
+        paged_resolve(&paged(&counts, &totals).pages(4));
+    let (alone, together) = (alone.unwrap(), together.unwrap());
+    assert_eq!(alone.files.len(), 1_000);
+    assert_eq!(format!("{alone:?}"), format!("{together:?}"));
+    assert_eq!((alone_asked, together_asked), (11, 11));
+    assert_eq!((alone_rounds, together_rounds), (11, 5));
+}
+
+/// a case of pages: what it shows, the files on each page, the count each page states, and the
+/// most files the run lists, when it lists fewer than the default.
+type Case = (&'static str, Vec<usize>, Vec<usize>, Option<usize>);
+
+/// pages asked together end as pages one at a time do when the count changes on the way, a page
+/// comes back short or empty, a page is missing, or the count passes the most files a run lists,
+/// asking at most the three pages beside the one the walk one at a time stops at.
+#[test]
+fn pages_asked_together_end_as_pages_one_at_a_time_do() {
+    let full = [100; 10];
+    let cases: [Case; 6] = [
+        (
+            "the count falls",
+            full.to_vec(),
+            [1_000, 1_000, 250, 250, 250, 250, 250, 250, 250, 250].to_vec(),
+            None,
+        ),
+        (
+            "the count grows",
+            [100; 11].to_vec(),
+            [
+                1_000, 1_100, 1_100, 1_100, 1_100, 1_100, 1_100, 1_100, 1_100, 1_100, 1_100,
+            ]
+            .to_vec(),
+            None,
+        ),
+        (
+            "an empty page before the count",
+            [100, 100, 100, 0, 100, 100].to_vec(),
+            [1_000; 6].to_vec(),
+            None,
+        ),
+        (
+            "a short page before the count",
+            [100, 100, 40].to_vec(),
+            [1_000; 3].to_vec(),
+            None,
+        ),
+        (
+            "a missing page",
+            [100; 5].to_vec(),
+            [1_000; 5].to_vec(),
+            None,
+        ),
+        (
+            "past the most files",
+            full.to_vec(),
+            [1_000; 10].to_vec(),
+            Some(500),
+        ),
+    ];
+    for (case, counts, totals, most) in cases {
+        let made = || {
+            let recorded = paged(&counts, &totals);
+            match most {
+                Some(most) => recorded.most(most),
+                None => recorded,
+            }
+        };
+        let (alone, _, alone_asked) = paged_resolve(&made());
+        let (together, _, together_asked) = paged_resolve(&made().pages(4));
+        let told = |listed: &Result<Listing, Error>| match listed {
+            Ok(listing) => format!("{listing:?}"),
+            Err(error) => format!("{:?} {}", error.kind, error.message),
+        };
+        assert_eq!(told(&alone), told(&together), "{case}");
+        assert!(
+            together_asked <= alone_asked + 3,
+            "{case}: one at a time asked {alone_asked}, together {together_asked}"
+        );
+    }
+}

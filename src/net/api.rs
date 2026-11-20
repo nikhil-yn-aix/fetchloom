@@ -99,6 +99,14 @@ pub(crate) trait Api: Sync {
         1
     }
 
+    /// how many numbered pages of a listing that counts its entries may be asked of `url`'s
+    /// host at once: as many as the network lets the host take requests at once, and one where
+    /// it says nothing.
+    fn pages_window(&self, url: &Url) -> usize {
+        let _ = url;
+        1
+    }
+
     /// tells the network that drive refused item `id` without a token, and asks whether drive's
     /// api may be asked about it with one. a network that sends no google credentials says no.
     fn drive_refused<'a>(
@@ -216,6 +224,11 @@ impl Api for Net {
     }
 
     fn walk_window(&self, url: &Url) -> usize {
+        let most = (self.rules.most_at_once)(&self.paced(url));
+        most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
+    }
+
+    fn pages_window(&self, url: &Url) -> usize {
         let most = (self.rules.most_at_once)(&self.paced(url));
         most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
     }

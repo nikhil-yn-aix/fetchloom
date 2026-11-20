@@ -2084,6 +2084,15 @@ mod tests {
         assert_eq!(quiet(true).net().walk_window(&tree), net::HOST_JOBS);
     }
 
+    /// a command's network lets a listing ask a host for as many of its numbered pages at once
+    /// as the host takes requests.
+    #[test]
+    fn a_listing_asks_as_many_numbered_pages_at_once_as_its_host_takes() {
+        use crate::net::Api as _;
+        let files = url::Url::parse("https://datadryad.org/api/v2/versions/1/files").unwrap();
+        assert_eq!(quiet(true).net().pages_window(&files), net::HOST_JOBS);
+    }
+
     /// keys are looked for when a request first needs one, so a settled sync reads no key files.
     #[test]
     fn a_network_that_sends_nothing_looks_for_no_keys() {

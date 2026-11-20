@@ -117,6 +117,62 @@ fn dryad_stating(kind: &str, files: &[(&str, &[u8], &str)]) -> Result<Routes> {
     Routes::start(routes)
 }
 
+/// dryad's numbered pages past the first are asked together once the first counts them, as many
+/// at once as its host takes: pages 2 and 3 are answered only once both were asked, which a
+/// listing asking for a page at a time would wait on for ever, hence the short deadline.
+#[test]
+fn dryads_numbered_pages_are_asked_together() -> Result {
+    let sandbox = Sandbox::new()?;
+    let total = 250;
+    let entry = |index: usize| {
+        let id = 101 + index;
+        serde_json::json!({
+            "_links": {
+                "self": {"href": format!("/api/v2/files/{id}")},
+                "stash:download": {"href": format!("/api/v2/files/{id}/download")},
+            },
+            "path": format!("part-{index:03}.csv"),
+            "size": ROWS.len(),
+            "status": "created",
+            "digest": md5_hex(ROWS),
+            "digestType": "md5",
+        })
+    };
+    let pages: Vec<String> = (1..=3)
+        .map(|page| format!("{DRYAD}/versions/26724/files?page={page}&per_page=100"))
+        .collect();
+    let mut served = vec![(
+        format!("{DRYAD}/datasets/doi:10.5061%2Fdryad.j1fd7"),
+        answer(&fixture("dryad/dataset.json")?)?,
+    )];
+    for (at, page) in pages.iter().enumerate() {
+        let listed: Vec<_> = (at * 100..(at * 100 + 100).min(total)).map(entry).collect();
+        let answered = serde_json::json!({
+            "count": listed.len(),
+            "total": total,
+            "_embedded": {"stash:files": listed},
+        });
+        served.push((page.clone(), answer(&answered)?));
+    }
+    let routes = Routes::start(served)?;
+    routes.together(&pages[1..]);
+    let link = "https://datadryad.org/dataset/doi:10.5061/dryad.j1fd7";
+    let output = command(
+        &sandbox,
+        &routes,
+        &["add", link, "--as", "parts", "--dry-run"],
+    )
+    .deadline(std::time::Duration::from_secs(30))
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let targets = routes.targets();
+    for page in &pages {
+        let asked = targets.iter().filter(|target| *target == page).count();
+        assert_eq!(asked, 1, "{page}: {targets:#?}");
+    }
+    Ok(())
+}
+
 /// a pasted page is pinned at dryad's newest version, with the MD5 dryad states for each file.
 #[test]
 fn a_dryad_dataset_is_pinned_at_its_version_and_synced_from_the_lock() -> Result {

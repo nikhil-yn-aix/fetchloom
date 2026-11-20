@@ -171,6 +171,10 @@ impl Dataset {
     async fn files(&self, api: &impl Api, id: u64) -> Result<Vec<Remote>, Error> {
         let mut url = Url::parse(&format!("{API}/versions/{id}/files"))
             .map_err(|_| invalid(self, "the files URL is invalid"))?;
+        let window = api.pages_window(&url);
+        let mut ahead = super::ahead::Ahead::new(window);
+        // the pages asked so far, the next to ask, and the most the last answer's count implies
+        let (mut asked, mut implied) = (0, 1);
         let mut files = Vec::new();
         let (mut seen, mut total) = (0, 0);
         let mut pages = super::Pages::most(api.most_files());
@@ -179,8 +183,26 @@ impl Dataset {
                 .next(page, seen)
                 .map_err(|reason| invalid(self, &reason))?;
             url.set_query(Some(&format!("page={page}&per_page={PAGE}")));
-            let response = api.get(&url).await?;
+            let response = if window > 1 {
+                // pages past the first go together, up to the page dryad's count reaches, never
+                // past the most files, and each is read in its turn
+                while asked < page.max(implied) && ahead.has_room() {
+                    asked += 1;
+                    let mut next = url.clone();
+                    next.set_query(Some(&format!("page={asked}&per_page={PAGE}")));
+                    ahead.ask(asked, async move { api.get(&next).await });
+                }
+                match ahead.next().await {
+                    Some((number, answer)) if number == page => answer?,
+                    _ => api.get(&url).await?,
+                }
+            } else {
+                api.get(&url).await?
+            };
             let answer: Page<Files> = super::json(self, &response)?;
+            if window > 1 && answer.total <= api.most_files() {
+                implied = answer.total.div_ceil(PAGE).max(page);
+            }
             if answer.total > api.most_files() {
                 return Err(super::too_many(
                     self,

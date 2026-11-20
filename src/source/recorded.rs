@@ -30,6 +30,8 @@ pub(crate) struct Recorded {
     most_asked: Option<usize>,
     /// how many folders a walk may ask for at once, one when unset.
     window: Option<usize>,
+    /// how many numbered pages a listing may ask for at once, one when unset.
+    pages: Option<usize>,
     /// how long each answer takes on tokio's clock, by link, and for any other link.
     holds: HashMap<String, std::time::Duration>,
     hold: Option<std::time::Duration>,
@@ -51,6 +53,7 @@ impl Clone for Recorded {
             echo: self.echo,
             most_asked: self.most_asked,
             window: self.window,
+            pages: self.pages,
             holds: self.holds.clone(),
             hold: self.hold,
         }
@@ -209,6 +212,12 @@ impl Recorded {
         self
     }
 
+    /// lets a listing ask for `pages` of its numbered pages at once.
+    pub(crate) fn pages(mut self, pages: usize) -> Recorded {
+        self.pages = Some(pages);
+        self
+    }
+
     /// answers every link `hold` after it is asked, on tokio's clock, which a paused test runtime
     /// moves on at once, so a test counts the requests that waited on each other.
     pub(crate) fn holding(mut self, hold: std::time::Duration) -> Recorded {
@@ -275,6 +284,10 @@ impl Api for Recorded {
 
     fn walk_window(&self, _url: &Url) -> usize {
         self.window.unwrap_or(1)
+    }
+
+    fn pages_window(&self, _url: &Url) -> usize {
+        self.pages.unwrap_or(1)
     }
 
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {

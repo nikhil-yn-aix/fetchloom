@@ -1902,35 +1902,7 @@ fn told(outcome: &Outcome) -> String {
 fn a_walk_asking_folders_together_ends_as_one_asking_one_at_a_time() {
     let mut found = Found::of("folders together");
     for subject in subjects() {
-        let mut networks = vec![("as recorded".to_owned(), subject.hostile())];
-        let count = subject.count();
-        if count > 1 {
-            networks.push((
-                format!("most {}", count - 1),
-                subject.hostile().most(count - 1),
-            ));
-        }
-        for link in subject.recorded.links() {
-            let error = too_large(&link);
-            networks.push((
-                format!("{link} {}", error.message),
-                subject.hostile().fail(&link, error),
-            ));
-            let body = subject.recorded.body(&link).to_vec();
-            for status in STATUSES {
-                networks.push((
-                    format!("{link} answered {status}"),
-                    subject.hostile().answer(&link, status, body.clone()),
-                ));
-            }
-            for change in wrong_answers(&body).into_iter().chain(wrong_values(&body)) {
-                networks.push((
-                    format!("{link} {}", change.what),
-                    subject.hostile().answer(&link, 200, change.body),
-                ));
-            }
-        }
-        for (change, recorded) in networks {
+        for (change, recorded) in networks(&subject) {
             let alone = told(&subject.resolve(&recorded));
             let together = told(&subject.resolve(&recorded.clone().window(4)));
             if alone != together {
@@ -2049,4 +2021,59 @@ fn a_walk_asking_folders_together_tells_the_first_folders_error_first() {
             error.message
         );
     }
+}
+
+/// the networks a subject's listing is held to: as recorded, past the most files, each link
+/// failing as the network fails it, answering each status, or answering wrong.
+fn networks(subject: &Subject) -> Vec<(String, Recorded)> {
+    let mut networks = vec![("as recorded".to_owned(), subject.hostile())];
+    let count = subject.count();
+    if count > 1 {
+        networks.push((
+            format!("most {}", count - 1),
+            subject.hostile().most(count - 1),
+        ));
+    }
+    for link in subject.recorded.links() {
+        let error = too_large(&link);
+        networks.push((
+            format!("{link} {}", error.message),
+            subject.hostile().fail(&link, error),
+        ));
+        let body = subject.recorded.body(&link).to_vec();
+        for status in STATUSES {
+            networks.push((
+                format!("{link} answered {status}"),
+                subject.hostile().answer(&link, status, body.clone()),
+            ));
+        }
+        for change in wrong_answers(&body).into_iter().chain(wrong_values(&body)) {
+            networks.push((
+                format!("{link} {}", change.what),
+                subject.hostile().answer(&link, 200, change.body),
+            ));
+        }
+    }
+    networks
+}
+
+/// a listing asking its numbered pages together once the first counts them ends as one asking a
+/// page at a time on every network a property makes.
+#[test]
+fn a_listing_asking_pages_together_ends_as_before() {
+    let mut found = Found::of("pages together");
+    for subject in subjects() {
+        for (change, recorded) in networks(&subject) {
+            let alone = told(&subject.resolve(&recorded));
+            let together = told(&subject.resolve(&recorded.clone().pages(4)));
+            if alone != together {
+                found.add(
+                    &subject,
+                    &change,
+                    &format!("a page at a time: {alone}\ntogether: {together}"),
+                );
+            }
+        }
+    }
+    found.none();
 }
