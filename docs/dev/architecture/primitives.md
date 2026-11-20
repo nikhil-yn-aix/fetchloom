@@ -45,11 +45,12 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 | archive writers | up to eight per archive, no more than logical CPUs; zero writer budget stores on the reader |
 | xz decoding of one stream in several blocks | the archive's share: its writers and its reader under a cap, otherwise logical CPUs over the archive readers; at most one a block, and as many as the decoder memory holds three of the largest block for |
 | placement, object lookup and the survey's hashing of racy or doubted files | up to eight workers, no more than logical CPUs, with at most one per 64 items |
+| the survey's walk on linux | none until it has listed 1,000 files or has 32 folders waiting, then one helper for each 2,000 files listed and each 64 folders waiting, two at first and four at most, no more than logical CPUs, reduced by the cap; none when fewer than two are allowed |
 | `--verify` reading placed files | the larger of one worker per 64 files and one per 4 MiB, within the same bounds, as [verification workers](placing.md#verification-workers) says |
 | cache verification | logical CPU count, reduced by the cap |
 | large fallback copies outside linux | uncapped copies overlap reads and writes with three reusable 1 MiB buffers; a cap avoids a reader thread per placement worker |
 
-local placement, cache verification and archive workers use one fallible scoped-thread helper. refused work stays owned until the caller joins it; started workers finish normally and results preserve input order. archive readers store inline when no writer starts, and close their queue before joining fallback consumers. job panics still propagate.
+local placement, the survey's walk, cache verification and archive workers use one fallible scoped-thread helper. refused work stays owned until the caller joins it; started workers finish normally and results preserve input order. archive readers store inline when no writer starts, and close their queue before joining fallback consumers. job panics still propagate.
 
 before constructing the async runtime, the CLI starts and joins one fallible probe thread. an immediate refusal returns `local.io` (exit 50), including in JSON, without invoking the runtime builder. release builds abort on panics and retain the bug-report hook. the probe does not reserve capacity: a later refusal during tokio worker creation can still panic.
 

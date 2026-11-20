@@ -1450,11 +1450,35 @@ fn scan(
     threads: Threads,
     stop: &Stop,
 ) -> Result<Scanned, Error> {
+    #[cfg(target_os = "linux")]
+    let walk = at::walk;
+    #[cfg(not(target_os = "linux"))]
+    let walk = walk_by_paths;
+    scan_with(root, folders, within, threads, stop, walk)
+}
+
+/// a walk of the folders [`scan`] starts from, each by its path on disk and in the project,
+/// gathering into the scan and keeping the entries that are not files apart. false when its
+/// check for a stop ended it.
+type Walk = fn(
+    Vec<(std::path::PathBuf, String)>,
+    &mut HashMap<String, Entry>,
+    &dyn Fn() -> bool,
+    Threads,
+    &mut Scanned,
+) -> bool;
+
+/// [`scan`] with `walk` walking the folders it starts from.
+fn scan_with(
+    root: &Path,
+    folders: &Folders,
+    within: Option<&[String]>,
+    threads: Threads,
+    stop: &Stop,
+    walk: Walk,
+) -> Result<Scanned, Error> {
     let span = tracing::debug_span!("scan", files = tracing::field::Empty).entered();
     let mut scanned = Scanned::default();
-    let mut pending = Vec::new();
-    let mut last_parent = None;
-    let mut parents = 0;
     let mut entries = HashMap::new();
     let starts = match within {
         None => folders
@@ -1471,15 +1495,42 @@ fn scan(
             .map(|folder| (native(root, folder), folder.clone()))
             .collect(),
     };
-    let walked = visit_files(
+    if !walk(
         starts,
         &mut entries,
-        || stop.is_asked(),
+        &|| stop.is_asked(),
+        threads,
+        &mut scanned,
+    ) {
+        return Err(Stop::stopped());
+    }
+    scanned.entries = entries;
+    span.record("files", scanned.found.len());
+    Ok(scanned)
+}
+
+/// [`scan`]'s walk on systems other than linux: each folder and file by its whole path, as std
+/// reads them, with the files looked at in batches.
+#[cfg(any(not(target_os = "linux"), test))]
+fn walk_by_paths(
+    starts: Vec<(std::path::PathBuf, String)>,
+    entries: &mut HashMap<String, Entry>,
+    stopped: &dyn Fn() -> bool,
+    threads: Threads,
+    scanned: &mut Scanned,
+) -> bool {
+    let mut pending = Vec::new();
+    let mut last_parent = None;
+    let mut parents = 0;
+    let walked = visit_files(
+        starts,
+        entries,
+        stopped,
         |entry, path, temporary, parent| {
             if last_parent != Some(parent) {
                 // a DirEntry holds its parent's handle on unix, so distinct parents are bounded too
                 if parents == 8 {
-                    scan_pending(&mut pending, threads, &mut scanned);
+                    scan_pending(&mut pending, threads, scanned);
                     parents = 0;
                 }
                 parents += 1;
@@ -1487,21 +1538,19 @@ fn scan(
             }
             pending.push((entry, path, temporary));
             if pending.len() == 4096 {
-                scan_pending(&mut pending, threads, &mut scanned);
+                scan_pending(&mut pending, threads, scanned);
                 parents = 0;
                 last_parent = None;
             }
         },
     );
-    if !walked {
-        return Err(Stop::stopped());
+    if walked {
+        scan_pending(&mut pending, threads, scanned);
     }
-    scan_pending(&mut pending, threads, &mut scanned);
-    scanned.entries = entries;
-    span.record("files", scanned.found.len());
-    Ok(scanned)
+    walked
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn scan_pending(
     pending: &mut Vec<(fs::DirEntry, String, bool)>,
     threads: Threads,
@@ -1743,6 +1792,9 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
     }
     Ok(())
 }
+
+#[cfg(target_os = "linux")]
+mod at;
 
 #[cfg(test)]
 mod tests;

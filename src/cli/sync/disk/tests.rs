@@ -39,16 +39,19 @@ fn parallel_scans_do_not_retain_one_descriptor_per_folder() {
         fs::create_dir_all(&folder).unwrap();
         fs::write(folder.join("x"), b"data").unwrap();
     }
-    let found = scan(
-        dir.path(),
-        &Folders::data("data"),
-        None,
-        Threads::default(),
-        &Stop::default(),
-    )
-    .unwrap()
-    .found;
-    assert_eq!(found.len(), 512);
+    for walk in [at::walk, walk_by_paths] {
+        let found = scan_with(
+            dir.path(),
+            &Folders::data("data"),
+            None,
+            Threads::default(),
+            &Stop::default(),
+            walk,
+        )
+        .unwrap()
+        .found;
+        assert_eq!(found.len(), 512);
+    }
 }
 
 #[test]
@@ -103,6 +106,184 @@ fn scan_thread_limits_preserve_files_and_staging_names() {
             Scanned::default()
         );
     }
+}
+
+/// a data folder of every kind of entry a walk meets: files in batches past 512 and 4,096 and
+/// across more than 8 folders, links to a folder and to a file, a fifo, staged copies at three
+/// depths, two names beyond utf-8 that show as one path, a read-only file with another name and
+/// one alone, empty and unreadable folders, outputs beside the data folder, and a data folder
+/// that is a link.
+#[cfg(target_os = "linux")]
+fn every_kind_of_entry(root: &Path) {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::PermissionsExt;
+
+    for index in 0..5_000 {
+        let path = root.join(format!("data/big/{index:05}.bin"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, index.to_string()).unwrap();
+    }
+    for index in 0..40 {
+        let path = root.join(format!("data/many/f{index:02}/g/x.csv"));
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, "x").unwrap();
+    }
+    for staged in [
+        "data/.fetchloom-0123456789abcdef.copy",
+        "data/many/f03/.fetchloom-00000000000000aa.copy",
+        "data/many/f07/g/.fetchloom-ffffffffffffffff.copy",
+    ] {
+        fs::write(root.join(staged), "partial").unwrap();
+    }
+    let read_only = root.join("data/many/f01/g/x.csv");
+    fs::set_permissions(&read_only, fs::Permissions::from_mode(0o444)).unwrap();
+    fs::hard_link(&read_only, root.join("data/many/f01/g/y.csv")).unwrap();
+    fs::write(root.join("data/many/f02/alone.csv"), "1").unwrap();
+    fs::set_permissions(
+        root.join("data/many/f02/alone.csv"),
+        fs::Permissions::from_mode(0o400),
+    )
+    .unwrap();
+    fs::create_dir_all(root.join("data/empty")).unwrap();
+    fs::create_dir_all(root.join("outside")).unwrap();
+    fs::write(root.join("outside/foreign"), "outside").unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), root.join("data/linked")).unwrap();
+    std::os::unix::fs::symlink(root.join("outside/foreign"), root.join("data/linked-file"))
+        .unwrap();
+    rustix::fs::mknodat(
+        rustix::fs::CWD,
+        root.join("data/pipe"),
+        rustix::fs::FileType::Fifo,
+        rustix::fs::Mode::from_raw_mode(0o600),
+        0,
+    )
+    .unwrap();
+    let odd = std::ffi::OsStr::from_bytes(b"data/odd-\xff.bin");
+    fs::write(root.join(odd), "odd").unwrap();
+    // a second name not utf-8 that shows as the same path, with another size
+    let shares = std::ffi::OsStr::from_bytes(b"data/odd-\xfe.bin");
+    fs::write(root.join(shares), "odd too").unwrap();
+    let closed = root.join("data/closed");
+    fs::create_dir_all(closed.join("inner")).unwrap();
+    fs::write(closed.join("inner/hidden.bin"), "h").unwrap();
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o000)).unwrap();
+    fs::create_dir_all(root.join("results/run")).unwrap();
+    fs::write(root.join("results/run/out.csv"), "o").unwrap();
+    std::os::unix::fs::symlink(root.join("data"), root.join("linked-data")).unwrap();
+}
+
+/// a walk whose first folder holds many files by itself has helpers join once that folder is
+/// listed, to look at its files, and finds what a walk by paths finds.
+#[cfg(target_os = "linux")]
+#[test]
+fn helpers_join_a_walk_at_its_first_large_folder() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let flat = root.join("data/flat");
+    fs::create_dir_all(&flat).unwrap();
+    for index in 0..1_001 {
+        fs::write(flat.join(format!("{index:04}.bin")), "x").unwrap();
+    }
+    let threads = Threads::read(&|_| Some("8".into())).unwrap();
+    let stop = Stop::default();
+    let folders = Folders::data("data");
+    let by_paths = scan_with(root, &folders, None, threads, &stop, walk_by_paths).unwrap();
+    let counting = crate::threads::refuse_after(usize::MAX);
+    let walked = scan(root, &folders, None, threads, &stop).unwrap();
+    let started = usize::MAX - crate::threads::spawns_left().unwrap();
+    drop(counting);
+    assert_eq!(walked, by_paths);
+    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    assert_eq!(started > 0, cores > 1, "{started} helpers on {cores} cores");
+}
+
+/// a walk of each folder in its parent finds what a walk by whole paths finds, in the same order,
+/// over [`every_kind_of_entry`]: of the data folder, with outputs beside it, through a link, of
+/// one that is absent and within folders, on one thread or more, with helpers the system refuses,
+/// and a stop ends either walk.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_walk_in_each_open_folder_finds_what_a_walk_by_paths_finds() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    every_kind_of_entry(root);
+    let closed = root.join("data/closed");
+    let outputs = Folders {
+        data_dir: "data".to_owned(),
+        outputs: vec!["results/run".to_owned()],
+    };
+    let within = ["data/many".to_owned(), "data/big".to_owned()];
+    for count in ["1", "2", "8"] {
+        let threads = Threads::read(&|_| Some(count.into())).unwrap();
+        for (folders, within) in [
+            (Folders::data("data"), None),
+            (outputs.clone(), None),
+            (Folders::data("linked-data"), None),
+            (Folders::data("absent"), None),
+            (Folders::data("data"), Some(&within[..])),
+        ] {
+            let case = format!("{count} threads, {folders:?}, {within:?}");
+            let stop = Stop::default();
+            let by_paths = scan_with(root, &folders, within, threads, &stop, walk_by_paths);
+            let by_paths = by_paths.unwrap();
+            let walked = scan(root, &folders, within, threads, &stop);
+            assert_eq!(walked.unwrap(), by_paths, "{case}");
+            // helpers the system refuses leave their work to the walk itself
+            for started in [0, 1] {
+                let _refusing = crate::threads::refuse_after(started);
+                let walked = scan(root, &folders, within, threads, &stop);
+                assert_eq!(
+                    walked.unwrap(),
+                    by_paths,
+                    "{case}, {started} helpers started"
+                );
+            }
+        }
+    }
+    let whole = scan(
+        root,
+        &Folders::data("data"),
+        None,
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
+    assert!(whole.found.contains_key("data/big/04999.bin"));
+    assert!(whole.found.contains_key("data/odd-\u{fffd}.bin"));
+    assert_eq!(whole.temporaries.len(), 3);
+    assert_eq!(whole.entries.get("data/pipe"), Some(&Entry::Special));
+    assert_eq!(whole.entries.get("data/linked"), Some(&Entry::Link));
+    assert_eq!(whole.entries.get("data/linked-file"), Some(&Entry::Link));
+    assert!(
+        whole
+            .alone
+            .split('\0')
+            .any(|path| path == "data/many/f02/alone.csv")
+    );
+    assert!(
+        !whole
+            .alone
+            .split('\0')
+            .any(|path| path == "data/many/f01/g/x.csv")
+    );
+    assert!(!whole.writable.contains("data/many/f01/g/y.csv"));
+    assert!(whole.writable.contains("data/big/00000.bin"));
+    let stop = Stop::default();
+    stop.ask();
+    for walk in [at::walk, walk_by_paths] {
+        let stopped = scan_with(
+            root,
+            &Folders::data("data"),
+            None,
+            Threads::default(),
+            &stop,
+            walk,
+        );
+        assert!(stopped.is_err());
+    }
+    fs::set_permissions(&closed, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 #[test]
