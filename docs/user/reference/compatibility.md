@@ -10,6 +10,7 @@ these hosted systems execute release-artifact journeys on every CI run. the runn
 |---|---|---|
 | Ubuntu 24.04 | x86_64, arm64 | x86_64: btrfs, xfs and a chmod-refusing FAT mount |
 | Windows Server 2025 | x86_64 | ReFS, exFAT and FAT32 |
+| Windows Server 2022 | x86_64 | ReFS alone: the disk tests, without the journeys |
 | Windows 11 | arm64 | native executable and wheel |
 | macos 15 | apple silicon | HFS+ |
 | macos 15 | intel | native packaged executable, wheel and shell installer |
