@@ -220,13 +220,17 @@ fn names_windows_cannot_store_are_found_in_files_and_archives() {
     };
     assert_eq!(
         unportable(&manifest, &locked.datasets[0], &members),
-        ["top/con.txt", "top/dot.", "what?.csv"],
+        [
+            ("top/con.txt".to_owned(), true),
+            ("top/dot.".to_owned(), true),
+            ("what?.csv".to_owned(), false)
+        ],
         "a lone top folder comes out as it is"
     );
     let (manifest, locked) = pinned(ONE, &[("a", &["ok.csv", "con-data.txt"])]);
     assert_eq!(
         unportable(&manifest, &locked.datasets[0], &|_| None),
-        Vec::<String>::new()
+        Vec::<(String, bool)>::new()
     );
 }
 

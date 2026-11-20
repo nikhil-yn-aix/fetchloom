@@ -74,6 +74,8 @@ fn windows_device_names_are_refused_before_any_request_or_write() -> Result {
 }
 
 /// the files are placed here as they are, and each warning names them, imported or unpacked alike.
+/// its help says what lets a teammate on windows go on: leaving a listed file out, or keeping an
+/// archive packed, since windows cannot unpack one holding such a name.
 #[cfg(unix)]
 #[test]
 fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Result {
@@ -88,11 +90,11 @@ fn names_windows_cannot_store_are_pinned_with_one_warning_per_dataset() -> Resul
     for (link, warning) in [
         (
             "../odd",
-            "warning: odd has 2 files whose names windows and fat disks cannot store: con.txt and what?.csv\n",
+            "warning: odd has 2 files whose names windows and fat disks cannot store: con.txt and what?.csv\n  help: a teammate on windows cannot place them; leave them out with exclude in data.toml if one needs to\n",
         ),
         (
             server.url.as_str(),
-            "warning: pack has a file whose name windows and fat disks cannot store: star*.csv\n",
+            "warning: pack has a file whose name windows and fat disks cannot store: star*.csv\n  help: a teammate on windows cannot unpack the archive that holds them; keep it packed with extract = false in data.toml if one needs to\n",
         ),
     ] {
         let added = sandbox.run(&["add", link])?;
