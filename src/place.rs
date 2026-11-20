@@ -478,6 +478,10 @@ impl Placer {
     /// places every order and says how each went, in order, with what `seen` keeps of each file's
     /// metadata, read right after placing it. the first goes alone to learn which methods the
     /// filesystem allows; copies flushed as a batch take their names only after the flush.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "a placement's checks, its thread and flush choices and its publication stay in order in one place"
+    )]
     pub(crate) fn place_all<T: Send>(
         &mut self,
         count: usize,
