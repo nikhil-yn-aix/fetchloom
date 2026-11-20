@@ -263,6 +263,63 @@ fn an_unsafe_archive_is_refused_whole() -> Result {
     Ok(())
 }
 
+/// windows flushes the members of several archives in one sync to disk one at a time, as `-vv`
+/// tells, and every member lands with its bytes.
+#[cfg(windows)]
+#[test]
+fn several_archives_unpack_flushing_one_at_a_time() -> Result {
+    several_archives_land("unpacked files flush to disk one at a time")
+}
+
+/// syncs three zips of 30 members each, in folders of their own: `-vv` says `told`, and every
+/// member lands with its bytes.
+#[cfg(windows)]
+fn several_archives_land(told: &str) -> Result {
+    let sandbox = Sandbox::new()?;
+    let member = |archive: &str, index: usize| {
+        let name = format!("part{}/{archive}{index:02}.csv", index % 3);
+        (name, format!("{archive},{index}\n").into_bytes())
+    };
+    let mut routes = Vec::new();
+    for archive in ["a", "b", "c"] {
+        let members: Vec<_> = (0..30).map(|index| member(archive, index)).collect();
+        let entries: Vec<(&str, &[u8])> = members
+            .iter()
+            .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+            .collect();
+        routes.push((
+            format!("/files/{archive}.zip"),
+            file(&zip_of(&entries)?, "\"z\""),
+        ));
+    }
+    let server = crate::support::Routes::start(routes)?;
+    sandbox.allow(&server.url);
+    let toml = ["a", "b", "c"]
+        .map(|archive| {
+            format!(
+                "[datasets.{archive}]\nref = \"{}/files/{archive}.zip\"\n",
+                server.url
+            )
+        })
+        .concat();
+    let project = sandbox.folder("project")?;
+    fs::write(project.join("data.toml"), &toml)?;
+    let synced = sandbox
+        .command_in(&project, &["-vv", "--yes", "sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("cache")?)
+        .output()?;
+    ok(&synced)?;
+    let stderr = text(&synced.stderr)?;
+    assert!(stderr.contains(told), "{stderr}");
+    for archive in ["a", "b", "c"] {
+        for (name, bytes) in (0..30).map(|index| member(archive, index)) {
+            let placed = project.join("data").join(archive).join(name);
+            assert_eq!(fs::read(&placed)?, bytes, "{}", placed.display());
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn get_unpacks_a_zip_into_its_folder_and_a_second_run_moves_nothing() -> Result {
     let sandbox = Sandbox::new()?;

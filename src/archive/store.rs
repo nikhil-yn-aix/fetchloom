@@ -391,7 +391,7 @@ fn seal(
         if let Some(advice) = advice {
             advice.offer(&object);
         }
-        object.seal(flush)
+        object.seal_flushing(flush, crate::volume::flush_member)
     })();
     match sealed {
         Ok(sealed) => Ok(Some((path, sealed))),

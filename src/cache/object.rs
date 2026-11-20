@@ -499,6 +499,16 @@ impl NewObject {
     /// closes the object. with `flush` its bytes reach the disk first, so a power cut cannot
     /// leave it empty; without, the caller flushes a whole batch at once before publishing any.
     pub(crate) fn seal(self, flush: bool) -> io::Result<Sealed> {
+        self.seal_flushing(flush, File::sync_all)
+    }
+
+    /// [`NewObject::seal`], flushing through `sync` when `flush` asks, as an archive's member
+    /// flushes through [`crate::volume::flush_member`].
+    pub(crate) fn seal_flushing(
+        self,
+        flush: bool,
+        sync: impl FnOnce(&File) -> io::Result<()>,
+    ) -> io::Result<Sealed> {
         let NewObject {
             file,
             temp,
@@ -511,7 +521,7 @@ impl NewObject {
             tracing::debug!(%err, "could not date an object by its birth");
         }
         if flush {
-            file.sync_all()?;
+            sync(&file)?;
         }
         // a batched object still needs its plain fsync on macos for the batch's `F_FULLFSYNC` to
         // make it durable

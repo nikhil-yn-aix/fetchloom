@@ -626,6 +626,31 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     }
 }
 
+/// held by the one flush of an archive's member under way on windows.
+#[cfg(windows)]
+static FLUSHING: Mutex<()> = Mutex::new(());
+
+/// flushes what was written through `file`, an archive's member, to the disk, as `File::sync_all`
+/// does. on windows no other member's flush runs meanwhile: on a runner's NTFS four flushes at once
+/// took fourteen times as long in all as one after another.
+pub(crate) fn flush_member(file: &File) -> io::Result<()> {
+    #[cfg(windows)]
+    {
+        one_at_a_time(|| file.sync_all())
+    }
+    #[cfg(not(windows))]
+    file.sync_all()
+}
+
+/// runs `flush` holding the one gate.
+#[cfg(windows)]
+fn one_at_a_time<T>(flush: impl FnOnce() -> T) -> T {
+    static TOLD: std::sync::Once = std::sync::Once::new();
+    TOLD.call_once(|| tracing::debug!("unpacked files flush to disk one at a time"));
+    let _one = FLUSHING.lock().unwrap_or_else(PoisonError::into_inner);
+    flush()
+}
+
 /// flushes the entries of the folder `path` on unix, where flushing a file does not make its name
 /// last. elsewhere it does nothing.
 #[cfg_attr(
@@ -919,6 +944,28 @@ mod tests {
 
     fn probes_left(dir: &Path) -> usize {
         fs::read_dir(dir.join("tmp")).unwrap().count()
+    }
+
+    /// a member's flush runs holding the gate, so no other starts until it returns.
+    #[cfg(windows)]
+    #[test]
+    fn a_flush_holds_the_gate_while_it_runs() {
+        let (inside, entered) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let flushing = std::thread::spawn(move || {
+            one_at_a_time(|| {
+                inside.send(()).unwrap();
+                released.recv().unwrap();
+            });
+        });
+        entered.recv().unwrap();
+        assert!(
+            FLUSHING.try_lock().is_err(),
+            "the flush under way holds the gate"
+        );
+        release.send(()).unwrap();
+        flushing.join().unwrap();
+        assert!(FLUSHING.try_lock().is_ok(), "the gate is let go after it");
     }
 
     /// a sealed part is made writable again only while it has no other name and is as long as
