@@ -22,6 +22,8 @@ CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
 HOSTS = Path("/etc/hosts")
 SERVER_ADDRESS = "10.77.0.2"
 HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
+# the lab server's origins, on a private address
+ORIGINS = ("https://lab.flb",)
 # one json line per request: which host and connection it came on, and when it arrived and ended,
 # in milliseconds, so the budget of requests in flight is read from the server's side
 ACCESS_FORMAT = ('{"request":"$request","status":$status,"bytes":$body_bytes_sent,"host":"$host",'
@@ -159,14 +161,16 @@ def call(argv, **kwargs):
 
 def environment():
     """the environment of every lab command: the shell's, less keys, accounts and tool settings,
-    plus the lab's ca bundle, home, caches, venv and proxy bypass."""
+    plus the lab's ca bundle, home, caches, venv, proxy bypass and the origins fetchloom may reach."""
     env = {key: value for key, value in os.environ.items() if not INHERITED.match(key)}
     env.update(REQUESTS_CA_BUNDLE=BUNDLE, SSL_CERT_FILE=BUNDLE,
                TMPDIR=str(ROOT / "scratch"), HOME=str(ROOT / "home"),
                XDG_CACHE_HOME=str(ROOT / "cache"), DVC_NO_ANALYTICS="true",
                GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null",
                GIT_AUTHOR_NAME="benchmark", GIT_AUTHOR_EMAIL="bench@localhost",
-               GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost")
+               GIT_COMMITTER_NAME="benchmark", GIT_COMMITTER_EMAIL="bench@localhost",
+               # fetchloom refuses a private address that a project, not a person, names
+               FETCHLOOM_ALLOWED_ORIGINS=",".join(ORIGINS))
     env["PATH"] = str(VENV / "bin") + os.pathsep + env["PATH"]
     env["NO_PROXY"] = env["no_proxy"] = f"lab.flb,{SERVER_ADDRESS},localhost,127.0.0.1"
     return env

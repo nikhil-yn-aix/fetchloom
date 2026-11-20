@@ -110,7 +110,7 @@ datahugger uses an explicit dataverse landing URL and an identified User-Agent b
 
 the full dataverse TSV/TAB representation difference is reported as a content mismatch; the quick shared file has identical bytes.
 
-client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
+client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc. fetchloom refuses a private address that a project names unless `allowed_origins` lists its origin, so every lab command gets `FETCHLOOM_ALLOWED_ORIGINS` naming the lab server's. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
 
 ## release recheck
 

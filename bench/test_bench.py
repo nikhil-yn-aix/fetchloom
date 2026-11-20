@@ -173,6 +173,13 @@ class MeasurementTests(unittest.TestCase):
             env = lab.environment()
         self.assertEqual({key for key in inherited if key in env}, {"PATH", "LANG"})
 
+    def test_fetchloom_may_reach_the_lab_server_and_nothing_else_the_shell_allowed(self):
+        # fetchloom refuses a private address that data.toml names unless the setting lists its origin
+        with mock.patch.dict(lab.os.environ, dict(PATH="/usr/bin", FETCHLOOM_ALLOWED_ORIGINS="http://10.0.0.5:9000"), clear=True):
+            env = lab.environment()
+        self.assertEqual(env["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb")
+        self.assertEqual(tools.Fetchloom("unused").env(Path("/work"))["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb")
+
     def test_exclusive_lock_rejects_overlapping_runs(self):
         from pathlib import Path
         import shutil
