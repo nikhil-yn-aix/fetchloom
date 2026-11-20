@@ -1784,6 +1784,21 @@ impl<'a> Placing<'a> {
             })
     }
 
+    /// the data folder, as data.toml names it below the project's folder.
+    pub(crate) fn data_folder(&self) -> PathBuf {
+        native(&self.project.root, &self.manifest.data_dir)
+    }
+
+    /// the path and size of the first file placing needs that a data folder taking no file past
+    /// `largest` cannot take, as [`too_large`] finds it.
+    pub(crate) fn too_large_to_place(
+        &self,
+        largest: u64,
+        cache_takes: impl Fn(u64) -> bool,
+    ) -> Option<(&str, u64)> {
+        too_large(&self.targets, &self.actions, largest, cache_takes)
+    }
+
     /// how many files the plan puts in the data folder, placed already or not.
     pub(crate) fn files(&self) -> usize {
         self.targets.len()
@@ -2260,6 +2275,25 @@ pub(crate) struct Seen {
     pub(crate) manifest: Sha256,
     /// none when the project had no data.lock yet.
     pub(crate) lock: Option<Sha256>,
+}
+
+/// the first of `targets` that placing puts on a disk taking no file past `largest`, by its path
+/// and size. placing copies every file onto such a disk, so one the cache holds counts too, while
+/// one the cache's disk cannot take either, as `cache_takes` says, is left to the cache's refusal.
+fn too_large<'t>(
+    targets: &'t [Target<'_>],
+    actions: &[Action],
+    largest: u64,
+    cache_takes: impl Fn(u64) -> bool,
+) -> Option<(&'t str, u64)> {
+    targets
+        .iter()
+        .zip(actions)
+        .filter(|(target, action)| {
+            needs_bytes(action) && target.size > largest && cache_takes(target.size)
+        })
+        .map(|(target, _)| (target.path.as_str(), target.size))
+        .next()
 }
 
 pub(crate) fn needs_bytes(action: &Action) -> bool {
@@ -4546,6 +4580,44 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// a data folder on a disk taking no file past a size, as FAT32, refuses the first file placing
+    /// puts there that is larger, whether the cache holds it or not, and leaves one the cache's
+    /// disk cannot take either to the cache's own refusal; a file placing leaves alone never counts.
+    #[test]
+    fn the_first_file_past_the_data_folders_largest_is_too_large() {
+        fn target<'a>(path: &str, file: &'a LockedFile) -> Target<'a> {
+            Target {
+                dataset: "d",
+                path: path.to_owned(),
+                sha256: file.sha256,
+                size: file.size,
+                copy: false,
+                file,
+            }
+        }
+        let file = |size: u64| LockedFile {
+            path: "big.bin".to_owned(),
+            size,
+            sha256: crate::digest::sha256(b"big"),
+            md5: None,
+            url: "https://example.org/big.bin".to_owned(),
+            unpacks_to: None,
+        };
+        let (small, large) = (file(10), file(11));
+        let targets = [
+            target("data/d/kept.bin", &large),
+            target("data/d/small.bin", &small),
+            target("data/d/big.bin", &large),
+        ];
+        let actions = [Action::Keep, Action::Place, Action::Place];
+        assert_eq!(
+            too_large(&targets, &actions, 10, |_| true),
+            Some(("data/d/big.bin", 11))
+        );
+        assert_eq!(too_large(&targets, &actions, 11, |_| true), None);
+        assert_eq!(too_large(&targets, &actions, 10, |size| size <= 10), None);
+    }
 
     /// a file is checked out fresh only where git's index and last commit hold one blob for it,
     /// the pinned bytes: a staged change, a commit or a stage it lacks, other bytes or another

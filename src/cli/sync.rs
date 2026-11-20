@@ -465,6 +465,7 @@ impl<'a> Loop<'a> {
         if self.verifies {
             placing.check_cached(&self.cache, &self.context.output)?;
         }
+        self.refuse_too_large(&placing)?;
         if !self.room_by_bound(&placing)? {
             self.ask_room(lock, &placing)?;
         }
@@ -497,6 +498,7 @@ impl<'a> Loop<'a> {
             failed = first_left(failed, unpacked)?;
             placing = self.placed_again(manifest, lock, force, placing)?;
             // the copies of what the archives unpacked to count only now that their files are known
+            self.refuse_too_large(&placing)?;
             self.ask_room(lock, &placing)?;
         }
         let missing = match missing {
@@ -880,6 +882,8 @@ impl<'a> Loop<'a> {
         upgrade: &Upgrade,
         given: Vec<Given>,
     ) -> Result<(Lock, Before), Error> {
+        self.context
+            .placing_into(&self.project.root, &manifest.data_dir);
         let existed = old.is_some();
         let (old, given, carried) = self.stated(manifest, old, upgrade, given, true).await?;
         let Drafted {
@@ -1796,6 +1800,30 @@ impl<'a> Loop<'a> {
                 (copies.bytes, copies.beside_cache, free)
             }))
         })
+    }
+
+    /// refuses, before anything downloads, a file the data folder's disk cannot take, as FAT32
+    /// takes none of 4 GiB, naming it: no answer makes the disk hold it, so a yes given before
+    /// waives nothing. a disk without such a limit costs one look, and one the cache's disk cannot
+    /// take either is refused for the cache, as before.
+    fn refuse_too_large(&self, placing: &Placing<'_>) -> Result<(), Error> {
+        let folder = placing.data_folder();
+        let Some(at) = folder.ancestors().find(|path| path.is_dir()) else {
+            return Ok(());
+        };
+        let Some(largest) = crate::space::Filesystem::of(at).largest_file() else {
+            return Ok(());
+        };
+        let cache = crate::space::Filesystem::of(self.cache.root());
+        let Some((path, size)) = placing.too_large_to_place(largest, |size| cache.holds(size))
+        else {
+            return Ok(());
+        };
+        let place = format!("the data folder at {}", units::path(&folder));
+        Err(self.as_left(
+            Error::new(Kind::LocalIo, crate::space::too_large(place, path, size))
+                .help("use a data folder on a disk formatted as exFAT, NTFS, APFS or ext4"),
+        ))
     }
 
     /// asks once before anything downloads when the cache's disk may lack room for all placing
