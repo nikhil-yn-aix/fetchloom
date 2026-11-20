@@ -203,7 +203,9 @@ def vhd(h, name: str, filesystem: str, size_mb: int):
 
 
 def primitives(folder: Path) -> str:
-    """what this account can do in folder, one step at a time, as a cache write does it."""
+    """each step of a cache write in folder, as fetchloom's windows publish does it (src/volume.rs
+    rename_new: a hard link to the final name, then the temporary name deleted), with a writable
+    and with a read-only temporary file."""
     steps = []
 
     def step(name, action):
@@ -211,18 +213,18 @@ def primitives(folder: Path) -> str:
             action()
             steps.append(f"{name}: ok")
         except OSError as err:
-            steps.append(f"{name}: {err.__class__.__name__} winerror={getattr(err, 'winerror', None)} {err}")
+            steps.append(f"{name}: winerror={getattr(err, 'winerror', None)}")
     sub = folder / "zz"
-    temp = sub / "osh-probe.tmp"
-    final = sub / "osh-probe"
     step("mkdir", lambda: sub.mkdir(exist_ok=True))
-    step("create", lambda: temp.write_bytes(b"probe"))
-    step("rename", lambda: os.replace(temp, final))
-    step("readonly", lambda: os.chmod(final, 0o444))
-    step("hardlink", lambda: os.link(final, sub / "osh-probe-link"))
-    step("replace-readonly", lambda: (temp.write_bytes(b"again"), os.replace(temp, final)))
-    step("open-existing-folder", lambda: os.listdir(folder))
-    for leftover in (sub / "osh-probe-link", final, temp):
+    for label, read_only in (("writable", False), ("read-only", True)):
+        temp, final = sub / f"{label}.tmp", sub / f"{label}.final"
+        step(f"{label} create", lambda: temp.write_bytes(b"probe"))
+        if read_only:
+            step(f"{label} seal", lambda: os.chmod(temp, 0o444))
+        step(f"{label} link", lambda: os.link(temp, final))
+        step(f"{label} delete temp", lambda: os.remove(temp))
+    step("delete read-only", lambda: os.remove(sub / "read-only.final"))
+    for leftover in sub.glob("*"):
         try:
             os.chmod(leftover, 0o666)
             os.remove(leftover)
@@ -630,7 +632,7 @@ def j_refs(h):
         h.note("debug-add", f"exit {res.code}; debug tail: {' | '.join(res.err.strip().splitlines()[-25:])[:3000]}", res=res)
         res = h.sh(["cmd", "/d", "/c", "dir", "/s", "/a", "/b", str(cache)], timeout=60)
         h.note("cache-tree", " | ".join(res.out.strip().splitlines()[:60]))
-        h.note("primitives", primitives(cache / "objects"))
+        h.note("primitives", f"on ReFS {primitives(cache / 'objects')} || on NTFS {primitives(h.work)}")
         raise Skip(f"add failed on this ReFS volume ({failed}), so the rest of the journey has nothing to work on")
     h.placed_ok(proj, "lc", "lc.zip", readonly=True)
     report = h.cache_report(proj, env)
