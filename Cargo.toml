@@ -38,7 +38,9 @@ clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4.6"
 console = { version = "0.16", default-features = false }
 fastrand = "2.5"
-flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+# zlib-rs picks its avx2 inflate at run time only with runtime_detection, which sevenz-rust2's
+# defaults turn on today; without it every gzip and zip member took a third longer to inflate
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs", "runtime_detection"] }
 # signs requests to the private S3 buckets the s3_buckets setting lists, with sha2. it is already
 # in the tree on linux, under keyring's secret service store
 hmac = "0.13"
