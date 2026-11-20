@@ -363,6 +363,63 @@ fn listed(sandbox: &Sandbox, args: &[&str]) -> std::io::Result<std::process::Out
         .output()
 }
 
+/// status finds the lists data.lock names once, from the text it parsed, for its warnings of the
+/// lists git does not have and of those data.lock no longer names: a list's, alike when the key of
+/// the list is spelled with an escape, which only parsing finds, and none for files inline.
+#[test]
+fn status_warns_of_lists_it_found_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let in_git = crate::merge::ok(&sandbox, &["init", "-q"])?.is_some();
+    let folder = sandbox.folder("parts")?;
+    for name in ["a.csv", "b.csv"] {
+        fs::write(folder.join(name), name)?;
+    }
+    let work = sandbox.work();
+    let stale = "data.lock.d/parts.0123456789ab.tsv.zst";
+    let unnamed = format!("data.lock no longer names {stale}, so nothing reads it");
+    let warned = || -> Result<Vec<String>> {
+        let output = sandbox.run(&["--json", "status"])?;
+        assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+        Ok(crate::support::warned(&json(&output)?))
+    };
+    let stale_only = |warned: &[String]| {
+        warned
+            .iter()
+            .filter(|warning| warning.contains("no longer names"))
+            .all(|warning| warning.starts_with(&unnamed))
+            && warned.iter().any(|warning| warning.starts_with(&unnamed))
+    };
+    ok(&listed(&sandbox, &["add", "../parts"])?)?;
+    fs::write(work.join(stale), b"a list of another data.lock")?;
+    let lists = warned()?;
+    let untracked = lists
+        .iter()
+        .filter(|warning| warning.contains("which git does not have"))
+        .count();
+    assert_eq!(untracked, usize::from(in_git), "{lists:?}");
+    assert!(stale_only(&lists), "{lists:?}");
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    let escaped = lock.replace("files_in = [", "\"files\\u005fin\" = [");
+    assert!(!escaped.contains("files_in"), "{escaped}");
+    fs::write(work.join("data.lock"), escaped)?;
+    assert_eq!(warned()?, lists);
+    fs::write(work.join("data.lock"), lock)?;
+    ok(&sandbox.run(&["--yes", "remove", "parts"])?)?;
+    ok(&sandbox.run(&["add", "../parts"])?)?;
+    assert!(!fs::read_to_string(work.join("data.lock"))?.contains("files_in"));
+    fs::create_dir_all(work.join("data.lock.d"))?;
+    fs::write(work.join(stale), b"a list of another data.lock")?;
+    let inline = warned()?;
+    assert!(
+        inline
+            .iter()
+            .all(|warning| !warning.contains("which git does not have")),
+        "{inline:?}"
+    );
+    assert!(stale_only(&inline), "{inline:?}");
+    Ok(())
+}
+
 /// asserts that `status` and its json say the same as when data.lock ends with one more blank
 /// line, which no sync recorded, so status reads data.lock whole, and that it left the lists'
 /// rows unread just when `unlisted`.

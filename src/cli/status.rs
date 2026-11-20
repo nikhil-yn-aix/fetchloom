@@ -185,7 +185,7 @@ pub(super) struct Status {
 /// `data.not_ready` for `strict`, as `--check` asks, when the data is not ready to use.
 pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Status, Error> {
     let project = super::project::find(context)?;
-    let (mut status, manifest, lock) = check(
+    let (mut status, manifest, lists) = check(
         &project,
         context.threads,
         &context.stop,
@@ -206,7 +206,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
     let downloads = super::fetch::askable(context, std::mem::take(&mut status.downloads));
     status.to_download = super::fetch::planned(context, downloads);
     let output = &context.output;
-    warn_git(output, &project, lock.as_deref());
+    warn_git(output, &project, lists.as_deref());
     let waiting: Vec<Waiting> = status.waiting.values().cloned().collect();
     super::project::tell_waiting(output, &waiting, &super::sync::Scope::All);
     list(output, &status);
@@ -357,13 +357,13 @@ fn tell_imported_elsewhere(output: &Output, status: &Status, manifest: &Manifest
 /// `fetchloom` alone inside a project: the line `status` ends with, without its lists.
 pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Error> {
     let mirrored = !context.mirrors.mirrors.list.is_empty();
-    let (mut status, manifest, lock) =
+    let (mut status, manifest, lists) =
         check(project, context.threads, &context.stop, None, mirrored)?;
     if let Some(refused) = status.refused.take() {
         return Err(refused);
     }
     let output = &context.output;
-    warn_git(output, project, lock.as_deref());
+    warn_git(output, project, lists.as_deref());
     if !sum_up(output, &status) {
         return Ok(status);
     }
@@ -380,13 +380,22 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
     Ok(status)
 }
 
-/// warns of the files a commit would leave out that a clone needs, the lists data.lock names,
+/// warns of the files a commit would leave out that a clone needs, the `lists` data.lock names,
 /// and of lists data.lock no longer names, which a commit should not take.
-fn warn_git(output: &Output, project: &Project, lock: Option<&str>) {
-    if let Some(text) = lock {
-        warn_untracked(output, project, text);
+fn warn_git(output: &Output, project: &Project, lists: Option<&[String]>) {
+    if let Some(lists) = lists {
+        warn_untracked(output, project, lists);
     }
-    warn_unnamed(output, project, lock);
+    warn_unnamed(output, project, lists);
+}
+
+/// the lists data.lock's `text` names, as [`crate::project::lock::parts`] finds them, with no
+/// parse of a lock of inline files alone, which a key spelled with an escape could not be either.
+fn named_lists(text: &str) -> Vec<String> {
+    if !text.contains("files_in") && !text.contains('\\') {
+        return Vec::new();
+    }
+    crate::project::lock::parts(text)
 }
 
 /// the most lists a warning about lists nothing reads names in its command; `-v` names each.
@@ -395,9 +404,9 @@ const NAMED_LISTS: usize = 5;
 /// warns of the lists in data.lock.d that data.lock no longer names, as after `git checkout` of an
 /// older data.lock, which `git add data.lock.d` would commit. the help names the command that
 /// removes them, since status deletes nothing and only data.lock's next write sweeps them.
-fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
-    use crate::project::lock::{self, lists};
-    let Some(text) = lock else {
+fn warn_unnamed(output: &Output, project: &Project, named: Option<&[String]>) {
+    use crate::project::lock::lists;
+    let Some(named) = named else {
         return;
     };
     let Some(entries) = lists::folder(&project.root)
@@ -406,13 +415,13 @@ fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
     else {
         return;
     };
-    let named: HashSet<String> = lock::parts(text).into_iter().collect();
+    let named: HashSet<&str> = named.iter().map(String::as_str).collect();
     let mut unnamed: Vec<String> = entries
         .flatten()
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
         .filter(|file| lists::is_part(file))
         .map(|file| format!("{}/{file}", lists::FOLDER))
-        .filter(|part| !named.contains(part))
+        .filter(|part| !named.contains(part.as_str()))
         .collect();
     if unnamed.is_empty() {
         return;
@@ -469,10 +478,9 @@ fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
     }
 }
 
-/// warns of the lists data.lock's `text` names that git does not have, so a clone could not read
-/// data.lock; `-v` names each. without git or a repository, nothing is said.
-fn warn_untracked(output: &Output, project: &Project, text: &str) {
-    let parts = crate::project::lock::parts(text);
+/// warns of the `parts` of lists data.lock names that git does not have, so a clone could not
+/// read data.lock; `-v` names each. without git or a repository, nothing is said.
+fn warn_untracked(output: &Output, project: &Project, parts: &[String]) {
     let missing = super::project::untracked(&project.root, parts.iter().map(String::as_str));
     let said = match missing.as_slice() {
         [] => return,
@@ -653,24 +661,20 @@ fn waiting(lock: &Lock, manifest: &Manifest) -> BTreeMap<String, Waiting> {
 
 /// compares the data folder with data.lock by what the disk says, or with `verify` by hashing every
 /// placed file under its bar. a settled project is answered as sync finds it, without a plan. it
-/// hands back data.toml and data.lock's text as it read them, so the warnings read neither again.
-/// `mirrored` says a mirror is set, which may hold the files a changed output's ways on put back.
+/// hands back the lists data.lock names, found in the text it read, so the warnings read neither
+/// file again. `mirrored` says a mirror is set, which may hold the files a changed output's ways
+/// on put back.
 fn check(
     project: &Project,
     threads: Threads,
     stop: &Stop,
     verify: Option<&Output>,
     mirrored: bool,
-) -> Result<(Status, Manifest, Option<String>), Error> {
-    let (text, manifest) = project.manifest()?;
-    let read_manifest = digest::sha256(text.as_bytes());
-    let (read, lock_text, whole) = lock_first(project, (&manifest, read_manifest))?;
-    let seen = place::Seen {
-        manifest: read_manifest,
-        lock: lock_text
-            .as_ref()
-            .map(|text| digest::sha256(text.as_bytes())),
-    };
+) -> Result<(Status, Manifest, Option<Vec<String>>), Error> {
+    let (manifest, read_manifest) = hashed(project.manifest()?);
+    let (read, mut lock_text, whole) = lock_first(project, (&manifest, read_manifest))?;
+    let seen = seen(read_manifest, lock_text.as_deref());
+    let mut named = lists_once(&mut lock_text, whole.is_some());
     let lockless = read.is_none();
     // a sync carries a pin over to the name data.toml gives it now, so status reads data.lock
     // as that sync would leave it, and names what it renames
@@ -726,9 +730,14 @@ fn check(
     }
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
         settled_extra(&mut status, &survey, &manifest);
-        return Ok((status, manifest, lock_text));
+        return Ok((
+            status,
+            manifest,
+            named.or_else(|| lists_once(&mut lock_text, false)),
+        ));
     }
     lock_whole(project, &mut lock, whole.as_ref(), lock_text.as_deref())?;
+    named = named.or_else(|| lists_once(&mut lock_text, false));
     let planned = planned(
         &mut status,
         project,
@@ -765,7 +774,29 @@ fn check(
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
-    Ok((status, manifest, lock_text))
+    Ok((status, manifest, named))
+}
+
+/// data.toml's manifest with the SHA-256 of its `text`, which status holds no longer.
+fn hashed((text, manifest): (String, Manifest)) -> (Manifest, Sha256) {
+    (manifest, digest::sha256(text.as_bytes()))
+}
+
+/// data.toml, by its SHA-256 `manifest`, and data.lock's `lock` text as status read them.
+fn seen(manifest: Sha256, lock: Option<&str>) -> place::Seen {
+    place::Seen {
+        manifest,
+        lock: lock.map(|text| digest::sha256(text.as_bytes())),
+    }
+}
+
+/// the lists data.lock's `text` names, for status's warnings, taking the text once no `whole`
+/// read of it may come; none, the text left, otherwise.
+fn lists_once(text: &mut Option<String>, whole: bool) -> Option<Vec<String>> {
+    if whole {
+        return None;
+    }
+    text.take().map(|text| named_lists(&text))
 }
 
 /// what [`lock_first`] reads: data.lock, its text and a copy of data.toml for a whole read later.
