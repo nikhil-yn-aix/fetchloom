@@ -216,7 +216,7 @@ class ManyVariantTests(unittest.TestCase):
             for name in ("data.toml", "data.lock"):
                 (prepared / name).write_text(name)
             (root / "www").mkdir()
-            case = dict(id="s2", base="s2", profile="lan", quick=False, count=1, size=3, key="sample",
+            case = dict(id="s3", base="s3", profile="lan", quick=False, count=1, size=3, key="sample",
                         server_dir=str(root / "www"), prepared=str(prepared.parent), members=[],
                         files=[dict(name="payload.bin", size=3, url="https://lab.flb/payload.bin",
                                     sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")])
@@ -232,7 +232,7 @@ class ManyVariantTests(unittest.TestCase):
             for iteration in range(2):
                 out = root / f"results-{iteration}"
                 argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
-                        "--profiles", "lan", "--scenarios", "s2", "--rounds", "2", "--seed", "13", "--out", str(out)]
+                        "--profiles", "lan", "--scenarios", "s3", "--rounds", "2", "--seed", "13", "--out", str(out)]
                 for n in range(12):
                     argv += ["--variant", f"v{n}:FETCHLOOM_EXP_V{n}={n}"]
                 with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
@@ -521,6 +521,35 @@ class OneRunTests(unittest.TestCase):
             row = self.one_run(Fast("unused"), measured, dict(self.case, profile="home"))
             self.assertEqual((row["peak_in_flight"], row["connections"], row["over_budget"]), ({"lab.flb": streams}, 1, flagged))
 
+    def test_a_redirected_case_fails_unless_the_log_shows_both_hosts(self):
+        class Fetcher(tools.Tool):
+            name = "fetcher"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        redirected = dict(self.case, id="s2r", base="s2r", profile="home",
+                          files=[dict(self.case["files"][0], url="https://lab.flb/r/key/a.bin")])
+        for hosts, said in ((("lab.flb", "store.flb"), None), (("store.flb",), "lab.flb"), (("lab.flb",), "store.flb")):
+            def measured(*args, **kwargs):
+                # the 302's body is no part of the file; the storage host's answer is
+                (self.root / "access.jsonl").write_text("".join(
+                    json.dumps(dict(request=f"GET {'/r' if host == 'lab.flb' else ''}/key/a.bin HTTP/2.0",
+                                    status=302 if host == "lab.flb" else 200, bytes=145 if host == "lab.flb" else 4,
+                                    host=host, protocol="HTTP/2.0", connection=n, connection_requests=1,
+                                    request_time=0.001, msec=1700000000.005)) + "\n" for n, host in enumerate(hosts)))
+                return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+            row = self.one_run(Fetcher("unused"), measured, redirected)
+            missing = [check for check in row["checks"] if check.startswith("the server log shows no request")]
+            self.assertEqual(missing, [f"the server log shows no request to {said}"] if said else [], hosts)
+            self.assertEqual(row["file_bytes_served"], 4 if "store.flb" in hosts else 0)
+        # a warm case may send nothing at all
+        row = self.one_run(Fetcher("unused"), lambda *args, **kwargs: dict(wall_seconds=1, user_seconds=0, sys_seconds=0,
+                                                                             maxrss_bytes=1, exit_code=0, timeout=False),
+                           dict(redirected, id="s5"))
+        self.assertFalse([check for check in row["checks"] if check.startswith("the server log")])
+
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):
             name = "dvc"
@@ -564,9 +593,9 @@ class MainPreparationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / "owned.json").write_text("{}")
-            case = dict(id="s2", base="s2", profile="lan", quick=True, count=1, size=3, key="sample", members=[], files=[])
+            case = dict(id="s2r", base="s2r", profile="home", quick=True, count=1, size=3, key="sample", members=[], files=[])
             argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4", "--profiles", "home",
-                    "--scenarios", "s2", "--quick", "--out", str(root / "results")]
+                    "--scenarios", "s2r", "--quick", "--out", str(root / "results")]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
                  mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
                  mock.patch.object(lab, "pin_server", return_value={}), \
@@ -593,7 +622,7 @@ class MainRefusalTests(unittest.TestCase):
 
     def refused(self, *arguments, mounted=True):
         argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
-                "--profiles", "home", "--scenarios", "s2", "--out", str(self.root / "results"), *arguments]
+                "--profiles", "home", "--scenarios", "s2r", "--out", str(self.root / "results"), *arguments]
         said = io.StringIO()
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", self.root), \
              mock.patch.object(lab, "require_root"), mock.patch.object(run.os.path, "ismount", return_value=mounted), \

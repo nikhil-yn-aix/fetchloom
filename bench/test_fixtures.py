@@ -91,6 +91,19 @@ class CaseTests(unittest.TestCase):
         self.assertEqual(built[0]["sha256"], built[1]["sha256"])
 
 
+class RedirectTests(unittest.TestCase):
+    def test_each_file_of_the_many_files_case_goes_through_the_redirect(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+            many = fixtures.build(dict(id="s2r", base="s2r", profile="home", quick=True, count=2, size=8), 17)
+            large = fixtures.build(dict(id="s1", base="s1", profile="home", quick=True, count=1, size=8), 17)
+        self.assertEqual([item["url"] for item in many["files"]],
+                         [f"https://lab.flb/r/{many['key']}/file-0000{index}.bin" for index in range(2)])
+        self.assertEqual(large["files"][0]["url"], f"https://lab.flb/{large['key']}/file-00000.bin")
+        # the storage host serves each body at the path without /r
+        self.assertEqual([fixtures.served(item["url"]) for item in many["files"]],
+                         [f"/{many['key']}/file-0000{index}.bin" for index in range(2)])
+
+
 class PreparationTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -121,6 +134,11 @@ class PreparationTests(unittest.TestCase):
         target = self.root / "prepared/case/curl"
         self.assertEqual([path.name for path in target.iterdir()], [".ready"])
         self.assertEqual(json.loads((target / ".ready").read_text())["tool"], "curl")
+
+    def test_dvc_pulls_a_redirected_case_through_the_redirect_too(self):
+        with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "run_group") as run:
+            fixtures.prepare_native(dict(self.case, base="s2r"), self.root / "fetchloom", ["dvc"])
+        self.assertIn(["dvc", "remote", "add", "-d", "lab", "https://lab.flb/r/dvc/case"], [call.args[0] for call in run.call_args_list])
 
     def test_dvc_and_datalad_must_download_what_they_were_prepared_with(self):
         dvc = [call.args[0] for call in self.prepare("dvc").call_args_list]

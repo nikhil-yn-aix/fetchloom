@@ -21,9 +21,12 @@ BUNDLE = "/etc/ssl/certs/ca-certificates.crt"
 CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
 HOSTS = Path("/etc/hosts")
 SERVER_ADDRESS = "10.77.0.2"
-HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
+# the server's own name, and the storage host each file of a redirected case is sent on to, as a
+# repository sends its downloads elsewhere
+HOST, STORE = "lab.flb", "store.flb"
+HOST_LINE = f"{SERVER_ADDRESS} {HOST} {STORE} # fl-bench\n"
 # the lab server's origins, on a private address
-ORIGINS = ("https://lab.flb",)
+ORIGINS = (f"https://{HOST}", f"https://{STORE}")
 # one json line per request: which host and connection it came on, and when it arrived and ended,
 # in milliseconds, so the budget of requests in flight is read from the server's side
 ACCESS_FORMAT = ('{"request":"$request","status":$status,"bytes":$body_bytes_sent,"host":"$host",'
@@ -172,7 +175,7 @@ def environment():
                # fetchloom refuses a private address that a project, not a person, names
                FETCHLOOM_ALLOWED_ORIGINS=",".join(ORIGINS))
     env["PATH"] = str(VENV / "bin") + os.pathsep + env["PATH"]
-    env["NO_PROXY"] = env["no_proxy"] = f"lab.flb,{SERVER_ADDRESS},localhost,127.0.0.1"
+    env["NO_PROXY"] = env["no_proxy"] = f"{HOST},{STORE},{SERVER_ADDRESS},localhost,127.0.0.1"
     return env
 
 
@@ -301,16 +304,46 @@ def drop_caches(files):
                 pass
 
 
+def nginx_config(cert):
+    """the lab server: www under both names, every request logged as ACCESS_FORMAT says, and each
+    path under /r/ on the server's own name sent on to the storage host with a 302."""
+    return f'''pid {ROOT}/nginx.pid;
+error_log {ROOT}/nginx-error.log;
+events {{}}
+http {{
+    log_format bench escape=json '{ACCESS_FORMAT}';
+    access_log {ROOT}/access.jsonl bench;
+    ssl_certificate {cert}/server.crt;
+    ssl_certificate_key {cert}/server.key;
+    root {ROOT}/www;
+    # curl -z sends its own file's time, which is when it downloaded the file; the default
+    # exact match would answer that with the whole body again
+    if_modified_since before;
+    server {{
+        listen {SERVER_ADDRESS}:443 ssl http2;
+        server_name {HOST};
+        location ~ ^/r/(.*)$ {{
+            return 302 https://{STORE}/$1;
+        }}
+    }}
+    server {{
+        listen {SERVER_ADDRESS}:443 ssl http2;
+        server_name {STORE};
+    }}
+}}
+'''
+
+
 def setup(image_gib=12, cpus=None):
-    """a 7-day ca and certificate for lab.flb, nginx serving www in its own network namespace and
-    loop-mounted ext4 and xfs images; refuses what it did not make and undoes itself on failure."""
+    """a 7-day ca and certificate for both lab names, nginx serving www in its own network namespace
+    and loop-mounted ext4 and xfs images; refuses what it did not make and undoes itself on failure."""
     require_root()
     if (ROOT / "owned.json").exists():
         teardown()
     if ROOT.exists() and any(ROOT.iterdir()):
         raise SystemExit(f"refusing to overwrite unowned {ROOT}")
-    if CA.exists() or "lab.flb" in HOSTS.read_text():
-        raise SystemExit("lab.flb or its CA already exists without an ownership marker")
+    if CA.exists() or any(name in HOSTS.read_text() for name in (HOST, STORE)):
+        raise SystemExit(f"{HOST}, {STORE} or their CA already exists without an ownership marker")
     namespaces = subprocess.check_output(["ip", "netns", "list"], text=True)
     if NS in namespaces or subprocess.run(["ip", "link", "show", CLIENT],
                                           capture_output=True).returncode == 0:
@@ -327,8 +360,8 @@ def setup(image_gib=12, cpus=None):
               "-keyout", cert / "ca.key", "-out", cert / "ca.crt", "-days", "7",
               "-subj", "/CN=fetchloom disposable benchmark CA"], **quiet)
         call(["openssl", "req", "-newkey", "rsa:2048", "-nodes", "-keyout",
-              cert / "server.key", "-out", cert / "server.csr", "-subj", "/CN=lab.flb"], **quiet)
-        (cert / "extensions").write_text("subjectAltName=DNS:lab.flb\nextendedKeyUsage=serverAuth\n")
+              cert / "server.key", "-out", cert / "server.csr", "-subj", f"/CN={HOST}"], **quiet)
+        (cert / "extensions").write_text(f"subjectAltName=DNS:{HOST},DNS:{STORE}\nextendedKeyUsage=serverAuth\n")
         call(["openssl", "x509", "-req", "-in", cert / "server.csr", "-CA",
               cert / "ca.crt", "-CAkey", cert / "ca.key", "-CAcreateserial",
               "-out", cert / "server.crt", "-days", "7", "-extfile", cert / "extensions"], **quiet)
@@ -346,25 +379,7 @@ def setup(image_gib=12, cpus=None):
         for args in (["addr", "add", f"{SERVER_ADDRESS}/24", "dev", SERVER],
                      ["link", "set", SERVER, "up"], ["link", "set", "lo", "up"]):
             call(["ip", "-n", NS, *args])
-        config = f'''pid {ROOT}/nginx.pid;
-error_log {ROOT}/nginx-error.log;
-events {{}}
-http {{
-    log_format bench escape=json '{ACCESS_FORMAT}';
-    access_log {ROOT}/access.jsonl bench;
-    server {{
-        listen {SERVER_ADDRESS}:443 ssl http2;
-        server_name lab.flb;
-        ssl_certificate {cert}/server.crt;
-        ssl_certificate_key {cert}/server.key;
-        root {ROOT}/www;
-        # curl -z sends its own file's time, which is when it downloaded the file; the default
-        # exact match would answer that with the whole body again
-        if_modified_since before;
-    }}
-}}
-'''
-        (ROOT / "nginx.conf").write_text(config)
+        (ROOT / "nginx.conf").write_text(nginx_config(cert))
         with affinity(cpus):
             call(["ip", "netns", "exec", NS, "nginx", "-c", ROOT / "nginx.conf"])
         for fs in ("ext4", "xfs"):
@@ -377,9 +392,11 @@ http {{
             call(["mount", "-o", "loop", image, target])
         profile("lan")
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-        with opener.open("https://lab.flb/health", timeout=5) as response:
-            if response.read() != b"fl-bench\n":
-                raise RuntimeError("unexpected lab server response")
+        # the second answers through the redirect, from the storage host
+        for path in ("health", "r/health"):
+            with opener.open(f"https://{HOST}/{path}", timeout=5) as response:
+                if response.read() != b"fl-bench\n":
+                    raise RuntimeError(f"unexpected lab server response to /{path}")
     except BaseException:
         teardown()
         raise
@@ -406,7 +423,8 @@ def teardown():
     time.sleep(0.2)
     subprocess.run(["ip", "netns", "del", NS], capture_output=True)
     subprocess.run(["ip", "link", "del", CLIENT], capture_output=True)
-    HOSTS.write_text(HOSTS.read_text().replace(HOST_LINE, ""))
+    HOSTS.write_text("".join(line for line in HOSTS.read_text().splitlines(keepends=True)
+                             if not line.rstrip().endswith("# fl-bench")))
     CA.unlink(missing_ok=True)
     call(["update-ca-certificates"], stdout=subprocess.DEVNULL)
     shutil.rmtree(ROOT)

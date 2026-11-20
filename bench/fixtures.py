@@ -9,18 +9,22 @@ import random
 import shutil
 import subprocess
 import tarfile
+from urllib.parse import urlsplit
 import zipfile
 
 import lab
 
 
-ALL_SCENARIOS = tuple(f"s{i}" for i in range(1, 10))
 # scenarios measured after an untimed run of another scenario's files, and that scenario
-WARM = {"s5": "s2", "s6": "s2", "s9": "s3"}
+WARM = {"s5": "s2r", "s6": "s2r", "s9": "s3"}
 # the links each scenario runs on: the network cases on the links people have, the cases about the
 # machine's own work on lan, where the link adds nothing
-LINKS = {"s1": ("home", "poor"), "s2": ("home", "poor"), "s3": ("home", "lan"), "s4": ("home",), "s5": ("lan",),
+LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("home", "lan"), "s4": ("home",), "s5": ("lan",),
          "s6": ("lan",), "s7": ("home", "poor"), "s8": ("home",), "s9": ("lan",)}
+ALL_SCENARIOS = tuple(LINKS)
+# the cases whose every link answers with a 302 to the storage host, the commonest shape of a
+# repository's downloads
+REDIRECTED = ("s2r",)
 # the large file and the number of 100 KiB files on each link, sized so a transfer takes 20 to 60 s
 SIZES = {"lan": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (64 * 1024 * 1024, 200)}
 # every member written on 2020-01-01, so an archive's bytes depend only on its members
@@ -65,9 +69,9 @@ def case_specs(profiles, scenarios, quick):
                 continue
             base = "s1" if scenario == "s7" else WARM.get(scenario, scenario)
             large, many = SIZES[profile]
-            size = (large if base == "s1" else 102400 if base == "s2"
+            size = (large if base == "s1" else 102400 if base == "s2r"
                     else 1024 * 1024 if base == "s8" else 4096)
-            count = 1 if base == "s1" else many if base == "s2" else 100 if base == "s8" else 10000
+            count = 1 if base == "s1" else many if base == "s2r" else 100 if base == "s8" else 10000
             if quick:
                 # the resume keeps its whole file, so it is still downloading when it is stopped
                 if scenario != "s7":
@@ -76,6 +80,19 @@ def case_specs(profiles, scenarios, quick):
             cases.append(dict(id=scenario, base=base, profile=profile, size=size,
                               count=count, quick=quick))
     return cases
+
+
+def link(folder, name, redirected=False):
+    """the link of name in a folder of the lab server's www, through the redirect to the storage host
+    when asked."""
+    return f"https://{lab.HOST}/{'r/' if redirected else ''}{folder}/{name}"
+
+
+def served(url):
+    """the path the storage host or the server itself serves a link's body at: a redirected link's
+    path without its /r."""
+    path = urlsplit(url).path
+    return path[2:] if path.startswith("/r/") else path
 
 
 def identity(value):
@@ -131,7 +148,7 @@ def build(case, seed):
                 remaining -= length
                 chunk += 1
         files.append(dict(name=name, sha256=sha256(path), size=path.stat().st_size,
-                          url=f"https://lab.flb/{key}/{name}"))
+                          url=link(key, name, case["base"] in REDIRECTED)))
     members = []
     if case["base"] == "s8":
         members = files
@@ -144,7 +161,7 @@ def build(case, seed):
                 with (target / item["name"]).open("rb") as body:
                     tar.addfile(info, body)
         files = [dict(name=archive.name, sha256=sha256(archive), size=archive.stat().st_size,
-                      url=f"https://lab.flb/{key}/{archive.name}")]
+                      url=link(key, archive.name))]
     if case["base"] == "s4":
         members = files
         archive = target / "members.zip"
@@ -154,7 +171,7 @@ def build(case, seed):
                 info.external_attr = 0o644 << 16
                 z.writestr(info, (target / item["name"]).read_bytes())
         files = [dict(name=archive.name, sha256=sha256(archive), size=archive.stat().st_size,
-                      url=f"https://lab.flb/{key}/{archive.name}")]
+                      url=link(key, archive.name))]
     data = dict(files=files, members=members, server_dir=str(target), fixture_signature=signature)
     write_json(manifest, data)
     return dict(case, **data)
@@ -205,7 +222,7 @@ def prepare_native(case, fetchloom, names):
                 run(["dvc", "remote", "add", "stage", remote])
                 run(["dvc", "push", "-r", "stage"])
                 run(["dvc", "remote", "remove", "stage"])
-                run(["dvc", "remote", "add", "-d", "lab", f"https://lab.flb/dvc/{case['key']}"])
+                run(["dvc", "remote", "add", "-d", "lab", link("dvc", case["key"], case.get("base") in REDIRECTED)])
                 run(["dvc", "remote", "modify", "lab", "verify", "true"])
                 run(["dvc", "config", "cache.type", "reflink,hardlink,copy"])
                 shutil.rmtree(data)

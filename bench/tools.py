@@ -186,6 +186,8 @@ class Curl(Tool):
         for i, item in enumerate(scenario["files"]):
             if i:
                 argv.append("--next")
+            # each transfer after --next starts without the options before it
+            argv.append("-L")
             if scenario["id"] in NOOP:
                 argv.extend(["-z", "data/" + item["name"]])
             if scenario["id"] == "s7":

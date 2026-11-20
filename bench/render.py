@@ -11,7 +11,7 @@ from statistics import median
 # what each network profile stands for, in words a reader knows from their own connection, in the
 # order the results lead with: the links most people have before the lab's own
 LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network"}
-TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
+TITLES = {"s1": "one large file", "s2r": "many files through a redirect", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files"}
 
@@ -120,7 +120,7 @@ SERIF = "'Source Serif 4', Georgia, serif"
 
 # what each scenario does, in words a reader needs no benchmark design for
 STORIES = {"s1": "{files} of {size}, downloaded and checked",
-           "s2": "{files} of {size} each, downloaded and checked",
+           "s2r": "{files} of {size} each, each link sent on to a second host, downloaded and checked",
            "s3": "{files} of {size} each, downloaded and checked",
            "s4": "a zip of {files} of {size} each, downloaded, checked and unpacked",
            "s5": "{files} already in the cache, placed into a new project",

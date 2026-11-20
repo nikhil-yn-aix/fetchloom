@@ -432,7 +432,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         row["free_after_bytes"] = free_bytes(workdir)
         row["disk_bytes"] = before - row["free_after_bytes"]
         time.sleep(0.05)
-        paths = {urlsplit(item["url"]).path for item in case["files"]}
+        paths = {fixtures.served(item["url"]) for item in case["files"]}
         if tool.name == "dvc":
             # DVC addresses file bodies by MD5, not by the input filename
             for path in (lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"):
@@ -442,6 +442,10 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         # flagged rather than failed: the budget is shown, not asserted
         row["over_budget"] = max(row["peak_in_flight"].values(), default=0) > tools.BUDGET
         row["checks"] = verify(tool.outputs(case, workdir))
+        if case.get("base") in fixtures.REDIRECTED and case["id"] not in fixtures.WARM:
+            unseen = [host for host in (lab.HOST, lab.STORE) if not row["hosts"].get(host)]
+            if unseen:
+                row["checks"].append(f"the server log shows no request to {' or '.join(unseen)}")
         if case["id"] == "s7":
             row["download_ratio"] = row["file_bytes_served"] / sum(item["size"] for item in case["files"])
             if not first["interruption_sent"]:

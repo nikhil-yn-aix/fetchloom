@@ -76,15 +76,15 @@ class FixtureTests(unittest.TestCase):
     def test_each_scenario_runs_on_the_links_of_the_design(self):
         cases = fixtures.case_specs(list(lab.PROFILES), fixtures.ALL_SCENARIOS, False)
         self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
-                         sorted([("s1", "home"), ("s1", "poor"), ("s2", "home"), ("s2", "poor"), ("s3", "home"),
+                         sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "home"),
                                  ("s3", "lan"), ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"),
                                  ("s7", "poor"), ("s8", "home"), ("s9", "lan")]))
         sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
         self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
         self.assertEqual(sized["s1", "poor"], (1, 64 * 1024 * 1024))
         self.assertEqual(sized["s7", "poor"], sized["s1", "poor"])
-        self.assertEqual(sized["s2", "home"], (1000, 102400))
-        self.assertEqual(sized["s2", "poor"], (200, 102400))
+        self.assertEqual(sized["s2r", "home"], (1000, 102400))
+        self.assertEqual(sized["s2r", "poor"], (200, 102400))
         self.assertEqual(sized["s3", "home"], (10000, 4096))
         # the resume keeps its whole file in a smoke run, on every link it runs on
         quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7"], True)}
@@ -177,8 +177,8 @@ class MeasurementTests(unittest.TestCase):
         # fetchloom refuses a private address that data.toml names unless the setting lists its origin
         with mock.patch.dict(lab.os.environ, dict(PATH="/usr/bin", FETCHLOOM_ALLOWED_ORIGINS="http://10.0.0.5:9000"), clear=True):
             env = lab.environment()
-        self.assertEqual(env["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb")
-        self.assertEqual(tools.Fetchloom("unused").env(Path("/work"))["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb")
+        self.assertEqual(env["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb,https://store.flb")
+        self.assertEqual(tools.Fetchloom("unused").env(Path("/work"))["FETCHLOOM_ALLOWED_ORIGINS"], "https://lab.flb,https://store.flb")
 
     def test_exclusive_lock_rejects_overlapping_runs(self):
         from pathlib import Path
@@ -578,6 +578,18 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
                          [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
 
+    def test_curl_follows_each_redirect_and_every_tool_fetches_the_redirected_links(self):
+        redirected = [dict(item, url=fixtures.link("key", item["name"], True)) for item in self.FILES]
+        curl = self.lines(tools.Curl, "s2r", redirected)[2].split()
+        # every transfer after --next starts without the options before it, so each gets its own
+        self.assertEqual(curl.count("-L"), len(redirected))
+        self.assertEqual([word for word in curl if word.startswith("https://")], [item["url"] for item in redirected])
+        aria2 = (self.work / "aria2.txt")
+        tools.Aria2c("unused").command(dict(id="s2r", files=redirected, members=[]), self.work)
+        self.assertIn("https://lab.flb/r/key/file-00000.bin\n", aria2.read_text())
+        tools.Pooch("unused").command(dict(id="s2r", files=redirected, members=[]), self.work)
+        self.assertIn("https://lab.flb/r/key/file-00001.bin", (self.work / "registry.json").read_text())
+
     def test_every_tool_keeps_to_four_requests_a_host_by_its_own_flags(self):
         self.assertEqual(tools.BUDGET, 4)
         self.assertEqual(tools.Fetchloom("unused").env(self.work)["FETCHLOOM_HOST_JOBS"], "4")
@@ -592,7 +604,7 @@ class ToolTests(unittest.TestCase):
     def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
         self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])
         flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")
-        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2", "s3", "s4", "s7", "s8"])
+        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2r", "s3", "s4", "s7", "s8"])
         # curl itself still asks the server in the no-op cases
         self.assertTrue(all(plain.supports(dict(id=s)) for s in ("s6", "s9")))
 
@@ -611,10 +623,10 @@ class ToolTests(unittest.TestCase):
 
         with mock.patch.object(tools.lab, "run_group") as run:
             Probe("unused").prepare(dict(id="s5"), self.work)
-        # the cache comes from an untimed run of s2, then a project of its own takes s5's files
-        self.assertEqual(populated, ["s2", "s5"])
+        # the cache comes from an untimed run of s2r, then a project of its own takes s5's files
+        self.assertEqual(populated, ["s2r", "s5"])
         self.assertEqual(run.call_count, 1)
-        self.assertEqual(sorted(path.name for path in (self.work / "first-project").iterdir()), ["s2"])
+        self.assertEqual(sorted(path.name for path in (self.work / "first-project").iterdir()), ["s2r"])
         self.assertEqual(sorted(path.name for path in (self.work / "project").iterdir()), ["s5"])
 
     def test_dvc_pulls_into_a_copy_of_its_prepared_project_with_its_cache_in_the_work_folder(self):
@@ -733,8 +745,9 @@ class LabLifecycleTests(unittest.TestCase):
     def test_setup_refuses_to_replace_what_it_did_not_make(self):
         for name, made, networks, link, said in [
             ("a folder with files", lambda: (self.root / "results").mkdir(parents=True), "", 1, "refusing to overwrite unowned {root}$"),
-            ("a ca", lambda: self.ca.write_text("ca"), "", 1, "lab.flb or its CA already exists without an ownership marker"),
-            ("a hosts line", lambda: self.hosts.write_text(lab.HOST_LINE), "", 1, "lab.flb or its CA already exists"),
+            ("a ca", lambda: self.ca.write_text("ca"), "", 1, "lab.flb, store.flb or their CA already exists without an ownership marker"),
+            ("a hosts line", lambda: self.hosts.write_text(lab.HOST_LINE), "", 1, "or their CA already exists"),
+            ("the storage host's name", lambda: self.hosts.write_text("10.0.0.9 store.flb\n"), "", 1, "or their CA already exists"),
             ("a namespace", lambda: None, f"{lab.NS} (id: 0)\n", 1, "unowned benchmark network already exists"),
             ("a link", lambda: None, "", 0, "unowned benchmark network already exists"),
         ]:
@@ -764,6 +777,13 @@ class LabLifecycleTests(unittest.TestCase):
         self.assertEqual(seen, [{}, {"image_gib": 3}])
         self.assertEqual(call.call_args.args[0][:2], ["openssl", "req"])
         self.assertEqual(self.hosts.read_text(), "127.0.0.1 localhost\n")
+
+    def test_the_server_sends_each_redirected_path_on_to_the_storage_host(self):
+        config = lab.nginx_config(Path("/lab/cert"))
+        self.assertIn("        server_name lab.flb;\n        location ~ ^/r/(.*)$ {\n            return 302 https://store.flb/$1;\n", config)
+        self.assertIn("        server_name store.flb;\n", config)
+        self.assertIn(f"    log_format bench escape=json '{lab.ACCESS_FORMAT}';\n", config)
+        self.assertEqual((lab.HOST_LINE, lab.ORIGINS), ("10.77.0.2 lab.flb store.flb # fl-bench\n", ("https://lab.flb", "https://store.flb")))
 
     def test_teardown_removes_what_setup_made_and_leaves_the_rest_of_the_machine(self):
         with self.machine(), contextlib.redirect_stdout(io.StringIO()) as said:

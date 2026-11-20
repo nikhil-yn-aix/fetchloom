@@ -131,7 +131,7 @@ class IslandCheckTests(unittest.TestCase):
 
     def test_selected_cases_do_not_expand_into_a_cartesian_matrix(self):
         import island
-        cases = ("ext4/lan/s3", "ext4/home/s4", "xfs/home/s4", "ext4/home/s1", "ext4/poor/s2")
+        cases = ("ext4/lan/s3", "ext4/home/s4", "xfs/home/s4", "ext4/home/s1", "ext4/poor/s2r")
         for case in cases:
             self.assertEqual(island.case_choice(case), case)
             fs, profile, scenario = case.split("/")
