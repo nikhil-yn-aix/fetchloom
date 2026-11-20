@@ -1252,6 +1252,88 @@ fn a_name_one_typo_from_a_variable_is_named_with_it() {
     );
 }
 
+/// the check names every variable a check of every name against every variable names, as it
+/// names it, in the same order, though it passes over a name holding neither `FET` nor `OM_`: each
+/// name one typo from one fetchloom reads (a character added, dropped, changed or two swapped,
+/// among letters, a digit, punctuation and two beyond ascii), each known name in either case, and
+/// names a shell holds. a variable added that does not start with `FETCHLOOM_` fails it.
+#[test]
+fn the_name_check_names_what_a_check_of_every_name_names() {
+    let alphabet = ['a', 'Z', '0', '_', '-', '.', 'F', 'O', 'é', '\u{212a}'];
+    let mut names: Vec<String> = Vec::new();
+    for known in known() {
+        let chars: Vec<char> = known.chars().collect();
+        let joined = |parts: &[char]| parts.iter().collect::<String>();
+        for at in 0..=chars.len() {
+            for &letter in &alphabet {
+                let mut added = chars.clone();
+                added.insert(at, letter);
+                names.push(joined(&added));
+                if at < chars.len() {
+                    let mut changed = chars.clone();
+                    changed[at] = letter;
+                    names.push(joined(&changed));
+                }
+            }
+            if at < chars.len() {
+                let mut dropped = chars.clone();
+                dropped.remove(at);
+                names.push(joined(&dropped));
+            }
+            if at + 1 < chars.len() {
+                let mut swapped = chars.clone();
+                swapped.swap(at, at + 1);
+                names.push(joined(&swapped));
+            }
+        }
+        names.push(known.to_owned());
+        names.push(known.to_ascii_lowercase());
+    }
+    names.extend(
+        [
+            "PATH",
+            "HOME",
+            "LANG",
+            "XDG_RUNTIME_DIR",
+            "LS_COLORS",
+            "SSH_AUTH_SOCK",
+            "OLDPWD",
+            "DBUS_SESSION_BUS_ADDRESS",
+            "MODULEPATH",
+            "CONDA_PREFIX",
+            "HF_TOKEN",
+            "OMP_NUM_THREADS",
+        ]
+        .map(str::to_owned),
+    );
+    // every name against every variable, nothing passed over
+    let whole: Vec<(String, &str)> = names
+        .iter()
+        .filter_map(|name| {
+            let compared = if cfg!(windows) {
+                name.to_ascii_uppercase()
+            } else {
+                name.clone()
+            };
+            if known().any(|known| known == compared) {
+                return None;
+            }
+            let meant = known().find(|known| crate::name::one_typo(&compared, known))?;
+            Some((name.clone(), meant))
+        })
+        .collect();
+    assert!(whole.len() > names.len() / 2, "{}", whole.len());
+    let told = misnamed(names.iter().map(OsString::from));
+    let first = whole.iter().zip(&told).position(|(a, b)| a != b);
+    assert!(
+        told.len() == whole.len() && first.is_none(),
+        "{} told of {}, first apart at {first:?}: {:?}",
+        told.len(),
+        whole.len(),
+        first.map(|at| (&whole[at], told.get(at))),
+    );
+}
+
 /// setting a documented variable is never taken for a typo.
 #[test]
 fn every_documented_variable_is_known() {

@@ -843,17 +843,23 @@ fn known() -> impl Iterator<Item = &'static str> {
 
 /// the names among `names` fetchloom does not read but that are one typo from a variable it does,
 /// each with that variable. any other is left alone, as a wrapper or another version may read it.
+/// a name holding neither `FET` nor `OM_` is passed over before any comparison: every variable
+/// fetchloom reads starts with `FETCHLOOM_`, and one typo breaks at most two neighbouring parts of
+/// `FET`, `CHLO` and `OM_`.
 pub(crate) fn misnamed(names: impl IntoIterator<Item = OsString>) -> Vec<(String, &'static str)> {
     names
         .into_iter()
         .filter_map(|name| name.into_string().ok())
         .filter_map(|name| {
             // windows finds a variable by its name in any case
-            let compared = if cfg!(windows) {
-                name.to_ascii_uppercase()
+            let compared: std::borrow::Cow<'_, str> = if cfg!(windows) {
+                std::borrow::Cow::Owned(name.to_ascii_uppercase())
             } else {
-                name.clone()
+                std::borrow::Cow::Borrowed(&name)
             };
+            if !compared.contains("FET") && !compared.contains("OM_") {
+                return None;
+            }
             if known().any(|known| known == compared) {
                 return None;
             }

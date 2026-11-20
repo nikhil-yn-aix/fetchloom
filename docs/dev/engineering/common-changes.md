@@ -43,7 +43,7 @@ put parsing and conflicts in `args.rs`, then pass the value through `Context` or
 
 to add a setting:
 
-1. name its settings-file key and the variable that overrides it in `KEYS` in `src/settings.rs`, which the file reader, `variable` and the typo check `misnamed` read, and add the key to `LISTS`, `BOOLEANS` or `CLEARED` when it holds a list or true or false, or when an empty variable must clear it. a variable without a key goes in `OTHERS`.
+1. name its settings-file key and the variable that overrides it in `KEYS` in `src/settings.rs`, which the file reader, `variable` and the typo check `misnamed` read, and add the key to `LISTS`, `BOOLEANS` or `CLEARED` when it holds a list or true or false, or when an empty variable must clear it. a variable without a key goes in `OTHERS`. every variable's name starts with `FETCHLOOM_`: `misnamed` passes over a name holding neither `FET` nor `OM_`, and `the_name_check_names_what_a_check_of_every_name_names` fails for a variable that does not.
 2. give `Settings` a `Set` field, its default in `Settings::defaults`, and read it in `Settings::read` with the reader of its kind, such as `count`, `size`, `seconds` or `boolean`, which records where the value came from.
 3. when a level derives it, add it to `Limits` in `src/settings/resources.rs`, give each level its value in `Level::limits` and read it in `Settings::read` through `derived`, so a value set by name still wins; a setting no level derives joins the values `the_default_level_keeps_the_defaults_and_no_level_moves_what_it_does_not_derive` compares.
 4. add its row to `rows` in `src/cli/settings.rs`, so `fetchloom settings` shows its value and where it came from.
