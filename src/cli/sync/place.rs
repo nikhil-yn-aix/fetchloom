@@ -1522,6 +1522,8 @@ impl<'a> Placing<'a> {
         &self,
         holds: impl Fn(&Sha256, u64) -> Result<bool, Error> + Sync,
     ) -> Result<Vec<(String, &'a LockedFile)>, Error> {
+        #[cfg(test)]
+        tests::looking_through();
         let needed: Vec<&Target> = self
             .targets
             .iter()
@@ -1755,6 +1757,22 @@ impl<'a> Placing<'a> {
             }
         }
         left_by_move(&mut preview.placement.retired, &preview.placement.kept);
+    }
+
+    /// the most bytes the run could download for placing: the size of the locked file of each
+    /// target it needs, a file two share counted twice, so at least what the room counts were the
+    /// cache to lack them all. none where a file is an archive, whose download the room counts with
+    /// its parts, or too large for a FAT32 cache, which the room refuses by name.
+    pub(crate) fn placing_bound(&self) -> Option<u64> {
+        self.targets
+            .iter()
+            .zip(&self.actions)
+            .filter(|(_, action)| needs_bytes(action))
+            .try_fold(0, |bound: u64, (target, _)| {
+                let file = target.file;
+                (file.unpacks_to.is_none() && file.size <= crate::space::FAT_LARGEST)
+                    .then_some(bound.saturating_add(file.size))
+            })
     }
 
     /// how many files the plan puts in the data folder, placed already or not.
@@ -5237,6 +5255,234 @@ mod tests {
                 assert_eq!(kept, [b"my notes\n"]);
             }
         }
+    }
+
+    thread_local! {
+        static PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    pub(super) fn looking_through() {
+        PASSES.set(PASSES.get() + 1);
+    }
+
+    /// what one sync from the cache of weather's three files did, its lookup switch `once` and a
+    /// cache `budget`, the first file's object left writable (in doubt) if `writable`: the looks at
+    /// what placing lacks that preparing made, and the sync's answer, after `between` had its way
+    /// with the cache and the three objects' digests once prepared. `after` then sees the cache and
+    /// the project. the files' links are on this machine, which no download may reach.
+    fn synced_from_cache(
+        (once, budget, writable): (bool, Option<u64>, bool),
+        between: impl FnOnce(&Cache, &[Sha256]),
+        after: impl FnOnce(usize, Result<Placement, Error>, &Cache, &[Sha256], &Project),
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let contents: [&[u8]; 3] = [b"lerwick,9.1\n", b"wick,8.4\n", b"kirkwall,8.9\n"];
+        let files: Vec<LockedFile> = contents
+            .iter()
+            .zip(["a.csv", "b.csv", "c.csv"])
+            .map(|(bytes, path)| LockedFile {
+                path: path.to_owned(),
+                size: bytes.len() as u64,
+                sha256: crate::cache::tests::store(&cache, bytes).digest,
+                md5: None,
+                url: format!("http://127.0.0.1/{path}"),
+                unpacks_to: None,
+            })
+            .collect();
+        let digests: Vec<Sha256> = files.iter().map(|file| file.sha256).collect();
+        if writable {
+            let object = cache.object_path(&digests[0]);
+            let mut permissions = fs::metadata(&object).unwrap().permissions();
+            #[expect(
+                clippy::permissions_set_readonly_false,
+                reason = "a writable object is one in doubt"
+            )]
+            permissions.set_readonly(false);
+            fs::set_permissions(&object, permissions).unwrap();
+        }
+        let lock = Lock {
+            datasets: vec![crate::project::lock::Locked {
+                name: "weather".to_owned(),
+                reference: "http://127.0.0.1/weather".to_owned(),
+                spec: String::new(),
+                extract: true,
+                decompress: false,
+                web_page: false,
+                at: None,
+                resolved: "http://127.0.0.1/weather".to_owned(),
+                title: None,
+                license: None,
+                doi: None,
+                access: crate::source::Access::Unknown,
+                timestamp: "2026-01-01T00:00:00Z".to_owned(),
+                files,
+            }],
+            ..Lock::default()
+        };
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"http://127.0.0.1/weather\"\n").unwrap();
+        let project = Project::at(dir.path().join("project"));
+        fs::create_dir_all(&project.root).unwrap();
+        let mut context = crate::cli::Context::new(quiet());
+        context.feel.lookup_once_placing = once;
+        context.settings.cache_budget.value = budget;
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .enable_all()
+            .build()
+            .unwrap();
+        let net = std::sync::Arc::new(context.net());
+        let work = crate::cli::sync::Loop::new(&context, &project, net, cache.clone());
+        let plan = plan::from_cache(&manifest, &lock, &cache).unwrap();
+        let passes = PASSES.get();
+        let prepared =
+            runtime.block_on(work.prepare(&manifest, &lock, plan, false, surveyed(&project)));
+        let passes = PASSES.get() - passes;
+        let placed = prepared.and_then(|placing| {
+            between(&cache, &digests);
+            work.apply(&manifest, &lock, placing, None)
+        });
+        after(passes, placed, &cache, &digests, &project);
+    }
+
+    /// with the switch, a sync from the cache with room for every file looks once at what the
+    /// cache lacks, after the fill, where it looked twice, and places the same files. a cache
+    /// budget, which only the room's look can weigh, keeps both.
+    #[test]
+    fn a_sync_with_room_for_every_file_looks_once() {
+        for (once, budget, expected) in
+            [(true, None, 1), (false, None, 2), (true, Some(1 << 40), 2)]
+        {
+            synced_from_cache(
+                (once, budget, false),
+                |_, _| {},
+                |passes, placed, _, _, project| {
+                    assert_eq!(passes, expected, "once: {once}, budget: {budget:?}");
+                    placed.unwrap();
+                    let placed = fs::read(project.root.join("data/weather/b.csv")).unwrap();
+                    assert_eq!(placed, b"wick,8.4\n");
+                },
+            );
+        }
+    }
+
+    /// an object in doubt, as a writable one is, still gets the strong look after the fill, which
+    /// seals it before it is placed.
+    #[test]
+    fn a_doubted_object_is_sealed_with_one_look_as_before() {
+        for once in [true, false] {
+            synced_from_cache(
+                (once, None, true),
+                |_, _| {},
+                |_, placed, cache, digests, _| {
+                    placed.unwrap();
+                    let object = fs::metadata(cache.object_path(&digests[0])).unwrap();
+                    assert!(object.permissions().readonly(), "once: {once}");
+                },
+            );
+        }
+    }
+
+    /// an object removed from the cache after preparing and before placing is never placed blind:
+    /// placing stops and names it, and says to run the command again, with the switch or without.
+    #[test]
+    fn an_object_gone_before_placing_is_named() {
+        for once in [true, false] {
+            synced_from_cache(
+                (once, None, false),
+                |cache, digests| cache.drop_object(&digests[1]).unwrap(),
+                |_, placed, cache, digests, _| {
+                    let error = placed.unwrap_err();
+                    let object = cache.object_path(&digests[1]).display().to_string();
+                    assert!(
+                        error
+                            .message
+                            .starts_with(&format!("the cache lost {object}")),
+                        "once: {once}: {}",
+                        error.message
+                    );
+                    assert_eq!(
+                        error.help.as_deref(),
+                        Some("run the same command again to download it")
+                    );
+                },
+            );
+        }
+    }
+
+    /// the most a placing could download is the size of the file of every target it needs, one
+    /// two share twice, and of none it keeps; an archive, or a file larger than FAT32 holds, gives
+    /// no bound, as the room refuses that by name.
+    #[test]
+    fn the_bound_of_a_placing_is_the_size_of_every_file_it_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().join("project"));
+        fs::create_dir_all(&project.root).unwrap();
+        let manifest =
+            Manifest::parse("[datasets.weather]\nref = \"http://127.0.0.1/weather\"\n").unwrap();
+        let file = |path: &str, size: u64, unpacks: bool| LockedFile {
+            path: path.to_owned(),
+            size,
+            sha256: crate::digest::sha256(path.as_bytes()),
+            md5: None,
+            url: format!("http://127.0.0.1/{path}"),
+            unpacks_to: unpacks.then(|| crate::digest::sha256(b"tree")),
+        };
+        let bound = |files: &[LockedFile], actions: Vec<Action>| {
+            let targets = files
+                .iter()
+                .enumerate()
+                .map(|(at, file)| Target {
+                    dataset: "weather",
+                    path: format!("data/weather/{at}"),
+                    sha256: file.sha256,
+                    size: file.size,
+                    copy: false,
+                    file,
+                })
+                .collect();
+            Placing {
+                project: &project,
+                manifest: &manifest,
+                targets,
+                unknown: Vec::new(),
+                waiting: Vec::new(),
+                actions,
+                survey: surveyed(&project),
+                scope: Scope::All,
+                unlisted: plan::Unlisted::new(),
+                vouched: true,
+                outputs: Outputs::default(),
+                changed: Vec::new(),
+                extras: Vec::new(),
+                unmarking: Vec::new(),
+                still_marked: Vec::new(),
+                elsewhere: Vec::new(),
+                forced: Vec::new(),
+            }
+            .placing_bound()
+        };
+        let a = file("a.csv", 10, false);
+        let b = file("b.csv", 20, false);
+        let placed = [a.clone(), b, a, file("kept.csv", 40, false)];
+        let actions = vec![
+            Action::Place,
+            Action::Replace(Stale::Outdated),
+            Action::Place,
+            Action::Keep,
+        ];
+        assert_eq!(bound(&placed, actions), Some(40));
+        assert_eq!(
+            bound(&[file("set.zip", 10, true)], vec![Action::Place]),
+            None
+        );
+        let largest = crate::space::FAT_LARGEST;
+        let fits = file("fits.bin", largest, false);
+        assert_eq!(bound(&[fits], vec![Action::Place]), Some(largest));
+        let huge = file("huge.bin", largest + 1, false);
+        assert_eq!(bound(&[huge], vec![Action::Place]), None);
+        assert_eq!(bound(&[], Vec::new()), Some(0));
     }
 
     fn quiet() -> Output {

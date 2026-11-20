@@ -821,10 +821,11 @@ pub(crate) fn copy_apart(from: &Path, to: &Path) -> Result {
     Ok(())
 }
 
-/// whether a variable of the machine running the tests could change what fetchloom does.
+/// whether a variable of the machine running the tests could change what fetchloom does. an
+/// experiment switch set for the tests reaches every run, so a command's tests can run with it on.
 fn leaks(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
-    name.starts_with("FETCHLOOM_")
+    (name.starts_with("FETCHLOOM_") && !name.starts_with("FETCHLOOM_EXP_"))
         || name.starts_with("ONEDRIVE")
         || name.starts_with("KAGGLE_")
         || name.starts_with("KAGGLEHUB_")

@@ -465,7 +465,9 @@ impl<'a> Loop<'a> {
         if self.verifies {
             placing.check_cached(&self.cache, &self.context.output)?;
         }
-        self.ask_room(lock, &placing)?;
+        if !self.room_by_bound(&placing)? {
+            self.ask_room(lock, &placing)?;
+        }
         // the first failure that leaves files for a later run waits until the rest is in
         let mut failed = None;
         let mut unknown = archives::of(lock, placing.unknown());
@@ -1724,6 +1726,34 @@ impl<'a> Loop<'a> {
         self.context.yes || self.roomy.load(Ordering::Relaxed)
     }
 
+    /// whether the room's checks pass even if the run downloads every object `placing` needs, as the
+    /// sizes the plan holds show, so [`Loop::ask_room`] would ask and warn of nothing and its look at
+    /// what the cache lacks can be skipped, where the switch is on. never where those checks could
+    /// weigh more than the room: offline, asked already, a cache budget, an archive to unpack or one
+    /// that stands for files, or a file too large for some disk.
+    fn room_by_bound(&self, placing: &Placing<'_>) -> Result<bool, Error> {
+        if !self.context.feel.lookup_once_placing
+            || self.roomy.load(Ordering::Relaxed)
+            || self.net.offline().enabled()
+            || self.context.settings.cache_budget.value.is_some()
+            || !placing.unknown().is_empty()
+        {
+            return Ok(false);
+        }
+        let Some(bound) = placing.placing_bound() else {
+            return Ok(false);
+        };
+        let free = crate::space::free(self.cache.root());
+        room_for(bound, free, || {
+            let clones = || self.cache.clones();
+            let copies = placing.copies(self.cache.root(), &clones)?;
+            Ok(copies.map(|copies| {
+                let free = crate::space::free(&copies.at);
+                (copies.bytes, copies.beside_cache, free)
+            }))
+        })
+    }
+
     /// asks once before anything downloads when the cache's disk may lack room for all placing
     /// needs, which per-download questions miss, then likewise for the data folder's copies.
     fn ask_room(&self, lock: &Lock, placing: &Placing<'_>) -> Result<(), Error> {
@@ -2907,6 +2937,28 @@ fn lacks_files(error: &Error) -> bool {
     matches!(error.kind.exit_code(), 10 | 20 | 30 | 40)
 }
 
+/// whether [`Loop::ask_room`] finds room for `downloads` bytes, weighed in its order: on the
+/// cache's disk, `free`, then, only once that holds them, for what `copies` gives of placing's
+/// copies: their bytes, whether they share the cache's disk, and the room on theirs. room for more
+/// bytes is room for fewer.
+fn room_for(
+    downloads: u64,
+    free: Option<u64>,
+    copies: impl FnOnce() -> Result<Option<(u64, bool, Option<u64>)>, Error>,
+) -> Result<bool, Error> {
+    if crate::space::short(downloads, free).is_some() {
+        return Ok(false);
+    }
+    Ok(copies()?.is_none_or(|(bytes, beside_cache, free)| {
+        let needed = if beside_cache {
+            bytes.saturating_add(downloads)
+        } else {
+            bytes
+        };
+        crate::space::short(needed, free).is_none()
+    }))
+}
+
 /// `failed`, else the failure of `result` when it [`lacks_files`], so the run goes on getting
 /// what it can; any other failure stops the run at once. the one kept is boxed, as it waits
 /// across downloads in the run's future.
@@ -3257,6 +3309,29 @@ mod tests {
         assert_eq!(jobs.iter().map(facts).collect::<Vec<_>>(), kept);
         assert!(jobs[1].dataset.is_none() && jobs[1].again.is_none());
         assert_eq!(unpack, Vec::<String>::new());
+    }
+
+    /// the room's checks pass for some downloads only where the cache's disk holds them and the
+    /// data folder's disk holds placing's copies, with the downloads too where it is the cache's;
+    /// a disk whose room is unknown is never short, and the copies are weighed only once the
+    /// cache's disk holds the downloads, as `ask_room` weighs them.
+    #[test]
+    fn room_for_downloads_is_room_on_both_disks() {
+        let room = |downloads: u64, free: Option<u64>, copies: Option<(u64, bool, Option<u64>)>| {
+            room_for(downloads, free, || Ok(copies)).unwrap()
+        };
+        assert!(room(100, Some(100), None));
+        assert!(!room(101, Some(100), None));
+        assert!(room(u64::MAX, None, None));
+        assert!(room(50, Some(100), Some((50, true, Some(100)))));
+        assert!(!room(51, Some(100), Some((50, true, Some(100)))));
+        assert!(room(100, Some(100), Some((100, false, Some(100)))));
+        assert!(!room(0, Some(100), Some((101, false, Some(100)))));
+        assert!(room(10, Some(100), Some((u64::MAX, true, None))));
+        let short = room_for(101, Some(100), || {
+            unreachable!("copies weighed on a full disk")
+        });
+        assert!(!short.unwrap());
     }
 
     fn context() -> Context {
