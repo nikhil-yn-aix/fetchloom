@@ -1059,9 +1059,7 @@ fn needed_focused(
         // windows registers a folder under each spelling it was reached by, another case, a short
         // name or a junction, so the folder itself counts once; a gone one's records all go
         let folder = fs::canonicalize(&project.root).unwrap_or_else(|_| project.root.clone());
-        if !counted.insert(folder) {
-            continue;
-        }
+        counted.insert(folder);
         // data.toml that does not read counts as one without members tables: more is kept
         let kept = std::str::from_utf8(&text)
             .ok()

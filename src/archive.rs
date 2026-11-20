@@ -462,7 +462,7 @@ fn unopened(path: &Path, err: &io::Error) -> Error {
     }
 }
 
-const REFUSED_HELP: &str = "keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract";
+const REFUSED_HELP: &str = "keep the archive packed with --no-extract, or with extract = false on its dataset in data.toml";
 
 /// how a person keeps a single compressed file packed, as [`REFUSED_HELP`] says of an archive.
 pub(crate) const FILE_PACKED_HELP: &str = "keep the file packed with decompress = false on its dataset in data.toml, or add it without --decompress";

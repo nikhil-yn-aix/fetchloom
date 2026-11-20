@@ -1616,11 +1616,7 @@ impl Cache {
             }
         }
         // the download and the new object are one file until the download's name goes
-        if new {
-            volume.remove_twin(source, path)?;
-        } else {
-            volume.remove(source)?;
-        }
+        volume.remove(source)?;
         Ok(new)
     }
 }

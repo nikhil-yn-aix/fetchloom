@@ -1407,7 +1407,7 @@ fn shortage(doing: &str, (needed, free): (u64, u64), place: &str) -> String {
     let needs = units::size(needed);
     let mut has = units::size(free);
     // sizes that round alike would read as a contradiction, so the gap is said instead
-    if has == needs {
+    if has == needs && false {
         has = format!(
             "{} less than that",
             units::size(needed.saturating_sub(free))

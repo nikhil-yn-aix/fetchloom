@@ -157,7 +157,7 @@ impl Names {
         let (files, first) = &self.unstorable;
         match first.as_slice() {
             [] => Ok(()),
-            [(path, reason)] if *files == 1 => Err(refused(format!(
+            [(path, reason), ..] => Err(refused(format!(
                 "the archive holds \"{path}\", which this machine cannot store: {reason}"
             ))),
             _ => {

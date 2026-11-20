@@ -397,10 +397,6 @@ fn planned_path(
             };
             if theirs().any(|target| target.path == wanted || target.path.starts_with(&prefix)) {
                 wanted
-            } else if let Some(own) =
-                composed_alike(theirs().map(|target| target.path.as_str()), &wanted)
-            {
-                own
             } else {
                 let prefix = format!("{folder}/");
                 let inside: Vec<&str> = theirs()

@@ -1997,7 +1997,7 @@ impl<'a> Placing<'a> {
         let rolled_back = (stopped || failure.is_some() || flushed.is_err()) && adding.is_some();
         let undone = rolled_back
             && adding.is_some_and(|adding| undo(project, &root, threads, state, &adding, checked));
-        let taken_back = rolled_back && mark::take_back(&project.root, &mut placer, state, &made);
+        let taken_back = undone && mark::take_back(&project.root, &mut placer, state, &made);
         // a run that ends early tells no placement, so its error says where each changed copy went
         let ended = |error: Error| kept_copies(error, &placement.changed_copies);
         flushed.map_err(ended)?;
@@ -3056,8 +3056,7 @@ fn settle<'t, 'a>(
                         if let Err(error) =
                             make_way(project, placer, survey, &taken, target, forced, placement)
                         {
-                            unmade = unmade.or(Some(error));
-                            continue;
+                            return Err(error);
                         }
                         // sync removed it, so a run that cannot place the pin leaves no record
                         // that would have the next run tell of a file someone deleted

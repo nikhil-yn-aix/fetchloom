@@ -10,6 +10,7 @@ $ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
    Resolved hf:datasets/scikit-learn/iris@0bda0ce · 3 of 4 files · 16.6 KiB · license cc0-1.0
  Downloaded 3 files · 16.6 KiB in 83 ms
     Started a project in ~/iris-study
+    Ignored data/ in .gitignore, since its files come from data.lock
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`

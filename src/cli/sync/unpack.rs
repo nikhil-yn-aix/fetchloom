@@ -425,7 +425,7 @@ impl Loop<'_> {
                 "a teammate on windows cannot place them; leave them out with exclude in data.toml if one needs to"
             }
             (false, _) => {
-                "a teammate on windows cannot unpack the archive that holds them; keep it packed with extract = false in data.toml if one needs to"
+                "a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to"
             }
             (true, true) => {
                 "a teammate on windows cannot place them: leave out the files the source lists with exclude in data.toml, and keep the archives that hold the rest packed with extract = false, if one needs to"
