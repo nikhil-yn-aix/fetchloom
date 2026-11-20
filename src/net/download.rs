@@ -460,6 +460,24 @@ enum Instead {
     Relink(Box<dyn super::Relink>),
 }
 
+/// what a revalidating request sent before its download is claimed came back with.
+enum Unclaimed {
+    /// the file is the one its record names.
+    NotModified,
+    /// an answer with a body, which needs the claim.
+    Body(Sent),
+    /// no answer, which the download's own try meets again.
+    Failed,
+}
+
+/// an answer to a request sent before the download was claimed, when it came, and the slots it
+/// holds, which its download's first try takes over.
+struct Sent {
+    response: reqwest::Response,
+    at: Instant,
+    permits: Option<super::Permits>,
+}
+
 /// splitting and request ownership across this file's retries.
 struct Transfer {
     split: bool,
@@ -467,6 +485,9 @@ struct Transfer {
     /// a request for the rest got a part of the same file from its first byte, the whole file
     /// again, so the try that starts over tells it as an answer that sends no parts.
     sent_whole: bool,
+    /// the answer to the request asked before the claim, which the first try takes when no bytes
+    /// were kept.
+    sent: Option<Sent>,
 }
 
 /// where a response starts, its total size and the server's version proof.
@@ -832,7 +853,23 @@ impl Net {
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         let pinned = fetch.expect.sha256;
-        let (partial, waited) = self.claim(&fetch.url, pinned.as_ref(), cache, on).await?;
+        // a 304 on a date alone stands only once the link's size is checked, which the claimed
+        // download does
+        let mut sent = match &known {
+            Some(record) if record.validators.etag.is_some() => {
+                match self.unclaimed(fetch, &record.validators).await? {
+                    Unclaimed::NotModified => {
+                        return recalled(record.clone(), Origin::NotModified, on);
+                    }
+                    Unclaimed::Body(sent) => Some(sent),
+                    Unclaimed::Failed => None,
+                }
+            }
+            _ => None,
+        };
+        let (partial, waited) = self
+            .claim(&fetch.url, pinned.as_ref(), cache, on, &mut sent)
+            .await?;
         // another run can publish between the lookup and a claim that never reports contention
         if let Some(found) = self.in_cache(fetch, cache) {
             return Ok(found);
@@ -867,9 +904,44 @@ impl Net {
             }
             Ok(())
         };
-        let done = self.transfer(fetch, cache, &partial, known, &heard).await;
+        let done = self
+            .transfer(fetch, cache, &partial, known, &heard, sent)
+            .await;
         unfinished.done = done.is_ok();
         done
+    }
+
+    /// asks for a revalidated file as its record names it before the download is claimed, since
+    /// only an answer with a body needs the claim: an upgrade of a folder of 20,000 unchanged
+    /// files made and undid a claim for each 304.
+    ///
+    /// # Errors
+    ///
+    /// a stop while waiting for a slot.
+    async fn unclaimed(&self, fetch: &Fetch, known: &Validators) -> Result<Unclaimed, Error> {
+        let mut permits = Some(self.permit(&fetch.from).await?);
+        let shape = conditions(None, None, Some(known));
+        let holding = super::Holding::new(&fetch.from, &mut permits);
+        let Ok(response) = self
+            .send_body(&fetch.from, fetch.mirror, shape, Some(holding))
+            .await
+        else {
+            return Ok(Unclaimed::Failed);
+        };
+        let at = Instant::now();
+        if response.status() != StatusCode::NOT_MODIFIED {
+            return Ok(Unclaimed::Body(Sent {
+                response,
+                at,
+                permits,
+            }));
+        }
+        let host = self.paced(&fetch.from);
+        if let Some(super::Answering(waited)) = response.extensions().get() {
+            self.heard.answered(&host, *waited);
+        }
+        tracing::debug!(url = %crate::shown::Shown(&fetch.from), status = 304, "response");
+        Ok(Unclaimed::NotModified)
     }
 
     /// tries one download until its bytes are in the cache and checked.
@@ -884,9 +956,13 @@ impl Net {
         partial: &Partial,
         mut known: Option<UrlRecord>,
         on: Listener<'_>,
+        sent: Option<Sent>,
     ) -> Result<Fetched, Error> {
         let mut whole = kept_before(fetch, partial, on)?;
         let has_copy = known.is_some();
+        // an answer asked for before the claim asked from the first byte, so it is the first try's
+        // only when no earlier run kept the whole file
+        let mut sent = sent.filter(|_| whole.is_none());
         let mut validators = known.as_ref().map(|record| record.validators.clone());
         let mut from = fetch.from.clone();
         let mut diversions = 0;
@@ -896,11 +972,13 @@ impl Net {
         // answers did not match
         let mut state = Transfer {
             split: true,
-            permits: match whole {
-                Some(_) => None,
-                None => Some(self.permit(&fetch.from).await?),
+            permits: match (&whole, &mut sent) {
+                (Some(_), _) => None,
+                (None, Some(sent)) => sent.permits.take(),
+                (None, None) => Some(self.permit(&fetch.from).await?),
             },
             sent_whole: false,
+            sent,
         };
         let began = Instant::now();
         let mut retry = Retry::downloading(self, fetch, on);
@@ -1052,19 +1130,24 @@ impl Net {
     }
 
     /// claims the download of `url`, or of the file `pinned` names from any link, waiting while
-    /// another fetchloom downloads the same. says whether it had to wait.
+    /// another fetchloom downloads the same. says whether it had to wait. an answer `sent` before
+    /// the claim is let go before any wait.
     async fn claim(
         &self,
         url: &Url,
         pinned: Option<&Sha256>,
         cache: &Cache,
         on: Listener<'_>,
+        sent: &mut Option<Sent>,
     ) -> Result<(Partial, bool), Error> {
         let mut waited = false;
         loop {
             match cache.claim_pinned(url.as_str(), pinned) {
                 Ok(Claim::Owned(partial)) => return Ok((partial, waited)),
                 Ok(Claim::Busy) => {
+                    // its slots may be all the download this waits for needs, as one link listed
+                    // twice in one run is on a host that takes one request at a time
+                    drop(sent.take());
                     let cache = cache.clone();
                     let waiting_for = url.as_str().to_owned();
                     let published = tokio::task::spawn_blocking(move || {
@@ -1127,11 +1210,18 @@ impl Net {
             .filter(|_| !whole)
             .and_then(|_| partial.next_kept());
         let shape = conditions(asked.as_ref(), until, known);
-        let holding = super::Holding::new(&fetch.from, &mut state.permits);
-        let response = self
-            .send_body(from, fetch.mirror, shape, Some(holding))
-            .await?;
-        let answer_at = Instant::now();
+        // the answer asked for before the claim asked for no kept bytes, so bytes kept since ask
+        // again for the rest
+        let (response, answer_at) =
+            if let Some(sent) = state.sent.take().filter(|_| earlier.is_none()) {
+                (sent.response, sent.at)
+            } else {
+                let holding = super::Holding::new(&fetch.from, &mut state.permits);
+                let response = self
+                    .send_body(from, fetch.mirror, shape, Some(holding))
+                    .await?;
+                (response, Instant::now())
+            };
         let host = self.paced(&fetch.from);
         if let Some(super::Answering(waited)) = response.extensions().get() {
             self.heard.answered(&host, *waited);

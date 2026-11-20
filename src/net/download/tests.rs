@@ -1684,6 +1684,141 @@ fn a_304_to_a_request_that_named_no_copy_is_refused() {
     assert!(cache.url_record(file.as_str()).is_none());
 }
 
+/// what a download stopped where it would wait for a claim says.
+const WAITED: &str = "the download waited for a claim";
+
+fn stop_at_wait(event: &Event) -> Result<(), Error> {
+    match event {
+        Event::Waiting => Err(Error::new(Kind::Interrupted, WAITED)),
+        _ => Ok(()),
+    }
+}
+
+/// a cache in `folder` holding a link fetched once under the `ETag` "e1", and the revalidation
+/// that asks for it again.
+fn fetched_once(url: &Url, folder: &std::path::Path) -> (Net, Cache, Fetch) {
+    let cache = Cache::open(folder.join("cache")).unwrap();
+    let asking = net(url);
+    let fetch = Fetch {
+        revalidate: true,
+        ..Fetch::new(url.clone())
+    };
+    let first = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(first.digest, crate::digest::sha256(b"abcdefgh"));
+    (asking, cache, fetch)
+}
+
+/// a revalidation asks before it claims, so a 304 never waits for a claim another run holds.
+#[test]
+fn a_304_asked_before_the_claim_never_waits_for_it() {
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\"")], b"abcdefgh"),
+        reply("304 Not Modified", &[("ETag", "\"e1\"")], b""),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let (asking, cache, fetch) = fetched_once(&url, folder.path());
+    let Claim::Owned(_other) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let again = block_on(asking.download(&fetch, &cache, &|event| stop_at_wait(&event))).unwrap();
+    assert_eq!(again.origin, Origin::NotModified);
+    assert_eq!(again.digest, crate::digest::sha256(b"abcdefgh"));
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 2);
+    assert!(asked[1].contains("if-none-match: \"e1\""), "{}", asked[1]);
+}
+
+/// a revalidated file that changed takes one request: the answer asked for before the claim is
+/// the download's.
+#[test]
+fn a_changed_file_asked_before_its_claim_downloads_in_one_request() {
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\"")], b"abcdefgh"),
+        reply("200 OK", &[("ETag", "\"e2\"")], b"ijklmnop"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let (asking, cache, fetch) = fetched_once(&url, folder.path());
+    let again = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(again.digest, crate::digest::sha256(b"ijklmnop"));
+    assert_eq!(
+        fs::read(cache.object_path(&again.digest)).unwrap(),
+        b"ijklmnop"
+    );
+    let record = cache.url_record(url.as_str()).unwrap();
+    assert_eq!(record.validators.etag.as_deref(), Some("\"e2\""));
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 2);
+    assert!(asked[1].contains("if-none-match: \"e1\""), "{}", asked[1]);
+}
+
+/// an answer with a body, asked for before the claim, waits for the claim before it writes and
+/// lets its slot go before the wait, since the run holding the claim may be this one and need it.
+#[test]
+fn a_changed_file_waits_for_the_claim_with_its_slot_free() {
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\"")], b"abcdefgh"),
+        reply("200 OK", &[("ETag", "\"e2\"")], b"ijklmnop"),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let (asking, cache, fetch) = fetched_once(&url, folder.path());
+    let Claim::Owned(_other) = cache.claim(url.as_str()).unwrap() else {
+        panic!("nothing else holds the download");
+    };
+    let free = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let again = block_on(asking.download(&fetch, &cache, &|event| {
+        if matches!(event, Event::Waiting) {
+            free.store(asking.jobs.available_permits(), Ordering::Relaxed);
+        }
+        stop_at_wait(&event)
+    }));
+    assert_eq!(again.unwrap_err().message, WAITED);
+    assert_eq!(free.load(Ordering::Relaxed), 1);
+    assert_eq!(lines(&asked).len(), 2);
+    assert_eq!(cache.objects().len(), 1);
+    let record = cache.url_record(url.as_str()).unwrap();
+    assert_eq!(record.validators.etag.as_deref(), Some("\"e1\""));
+}
+
+/// bytes an earlier run kept are asked for from where they end: the answer asked for before the
+/// claim asked from the first byte, so it is let go for one that asks for the rest.
+#[test]
+fn bytes_kept_before_a_revalidation_are_asked_for_from_their_end() {
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\"")], b"abcdefgh"),
+        reply("200 OK", &[("ETag", "\"v1\"")], b"ijklmnop"),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
+            b"mnop",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let (asking, cache, fetch) = fetched_once(&url, folder.path());
+    kept_part(&cache, &url, b"ijklmnop", 4);
+    let again = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(again.digest, crate::digest::sha256(b"ijklmnop"));
+    let asked = asked.lock().unwrap();
+    assert_eq!(asked.len(), 3);
+    let last = asked.last().unwrap();
+    assert!(last.contains("range: bytes=4-"), "{last}");
+}
+
+/// a revalidation whose server hangs up before answering the request asked before the claim asks
+/// again from the download's own try.
+#[test]
+fn a_revalidation_that_hears_nothing_asks_again() {
+    let (url, asked) = serve(vec![
+        reply("200 OK", &[("ETag", "\"e1\"")], b"abcdefgh"),
+        Vec::new(),
+        reply("304 Not Modified", &[("ETag", "\"e1\"")], b""),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let (asking, cache, fetch) = fetched_once(&url, folder.path());
+    let again = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(again.origin, Origin::NotModified);
+    assert_eq!(lines(&asked).len(), 3);
+}
+
 fn source_fetch(source: &str, from: &Url) -> Fetch {
     let source = Url::parse(source).unwrap();
     Fetch {
@@ -1811,6 +1946,7 @@ fn an_interrupted_pipelined_download_resumes_with_the_right_digest() {
         split: false,
         permits: None,
         sent_whole: false,
+        sent: None,
     };
     let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
     assert!(matches!(result, Err(Failure::Transient { .. })));
@@ -2029,6 +2165,7 @@ fn a_resumed_download_tells_what_an_earlier_run_kept_before_the_server_answers()
         split: false,
         permits: None,
         sent_whole: false,
+        sent: None,
     };
     let result = block_on(net.attempt(&url, &fetch, &partial, None, &|_| Ok(()), &mut split));
     assert!(matches!(result, Err(Failure::Transient { .. })));
