@@ -2257,7 +2257,7 @@ fn too_large<'t>(
         .iter()
         .zip(actions)
         .filter(|(target, action)| {
-            needs_bytes(action) && target.size > largest && cache_takes(target.size)
+            needs_bytes(action) && target.size > largest
         })
         .map(|(target, _)| (target.path.as_str(), target.size))
         .next()

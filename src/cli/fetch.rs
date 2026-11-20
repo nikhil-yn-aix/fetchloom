@@ -1105,9 +1105,6 @@ impl<'a> Watch<'a> {
         }
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
-        if unknown && let Some(total) = total {
-            self.check_data_disk(total)?;
-        }
         // the size a listing rounds was asked about before the downloads, as a known one is
         let asked = matches!(self.job.fetch.listed, Listed::About(_));
         let free = self.approval.cache.as_deref().map(self.approval.free);
