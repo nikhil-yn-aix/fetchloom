@@ -1307,21 +1307,12 @@ impl<'a> Loop<'a> {
         let (mirrored, elsewhere) = self.made_where(manifest, lock, made).await?;
         self.leave_out(&mut placing, elsewhere, lock);
         let archives = archives::of(lock, wanted);
-        for (dataset, archive) in &archives {
-            if archive.file.unpacks_to.is_some() {
-                unpack.push(format!("{dataset}/{}", archive.file.path));
-            }
-            // an import's archive the cache holds needs no link, and has none to give
-            let cached = |file: &LockedFile| {
-                !damaged.contains(&file.sha256)
-                    && self.cache.find(&file.sha256, Some(file.size)).is_some()
-            };
-            for file in archive.files().into_iter().filter(|file| !cached(file)) {
-                jobs.push(job(manifest, lock, dataset, file)?);
-            }
-        }
-        let mut seen = BTreeSet::new();
-        jobs.retain(|job| seen.insert(job.label.clone()));
+        // an import's archive the cache holds needs no link, and has none to give
+        let cached = |file: &LockedFile| {
+            !damaged.contains(&file.sha256)
+                && self.cache.find(&file.sha256, Some(file.size)).is_some()
+        };
+        dry_jobs(manifest, lock, &archives, &mut jobs, &mut unpack, cached)?;
         let mut seen = BTreeSet::new();
         unpack.retain(|label| seen.insert(label.clone()));
         let available =
@@ -2780,19 +2771,7 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
     let pinned = lock.get(dataset);
 
     Job {
-        fetch: Fetch {
-            expect: Expect {
-                sha256: Some(file.sha256),
-                md5: file.md5,
-                size: Some(file.size),
-            },
-            revalidate: false,
-            record: pinned
-                .is_some_and(|locked| draft::vouched_by_server(&locked.resolved, &file.url)),
-            unpack: false,
-            page,
-            ..source::fetch_plan(url)
-        },
+        fetch: pinned_fetch(pinned, file, url, page),
         label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
         again: pinned.map(|locked| Again {
@@ -2801,6 +2780,87 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
             alone: locked.files.len() == 1,
             changed: locked.timestamp.clone(),
         }),
+    }
+}
+
+/// adds to relocking's `jobs` a dry run's job for each file of `archives` that is not `cached`
+/// and that relocking does not download already, then keeps the first job of each label, without
+/// copying the labels.
+fn dry_jobs(
+    manifest: &Manifest,
+    lock: &Lock,
+    archives: &[(String, Archive<'_>)],
+    jobs: &mut Vec<Job>,
+    unpack: &mut Vec<String>,
+    cached: impl Fn(&LockedFile) -> bool,
+) -> Result<(), Error> {
+    let more = {
+        // a file relocking downloads keeps relocking's job, the first its label names
+        let relocked: HashSet<(&str, &str)> = jobs
+            .iter()
+            .filter_map(|job| job.label.split_once('/'))
+            .collect();
+        let mut more = Vec::new();
+        for (dataset, archive) in archives {
+            if archive.file.unpacks_to.is_some() {
+                unpack.push(format!("{dataset}/{}", archive.file.path));
+            }
+            for file in archive.files() {
+                let at = (dataset.as_str(), file.path.as_str());
+                if !relocked.contains(&at) && !cached(file) {
+                    more.push(dry_job(manifest, lock, dataset, file)?);
+                }
+            }
+        }
+        more
+    };
+    if jobs.is_empty() {
+        *jobs = more;
+    } else {
+        jobs.extend(more);
+    }
+    let first: Vec<bool> = {
+        let mut seen = HashSet::new();
+        jobs.iter()
+            .map(|job| seen.insert(job.label.as_str()))
+            .collect()
+    };
+    let mut first = first.into_iter();
+    jobs.retain(|_| first.next().unwrap_or(true));
+    Ok(())
+}
+
+/// [`job`] for a dry run, which downloads nothing: the same fetch and label, without the dataset
+/// and the way to ask again that only a download reads.
+fn dry_job(
+    manifest: &Manifest,
+    lock: &Lock,
+    dataset: &str,
+    file: &LockedFile,
+) -> Result<Job, Error> {
+    let url = source_link(manifest, dataset, file)?;
+    let fetch = pinned_fetch(lock.get(dataset), file, &url, asks_page(manifest, dataset));
+    Ok(Job {
+        fetch,
+        label: format!("{dataset}/{}", file.path),
+        dataset: None,
+        again: None,
+    })
+}
+
+/// the download of `file` from `url`, as data.lock pins it in `pinned`.
+fn pinned_fetch(pinned: Option<&Locked>, file: &LockedFile, url: &Url, page: bool) -> Fetch {
+    Fetch {
+        expect: Expect {
+            sha256: Some(file.sha256),
+            md5: file.md5,
+            size: Some(file.size),
+        },
+        revalidate: false,
+        record: pinned.is_some_and(|locked| draft::vouched_by_server(&locked.resolved, &file.url)),
+        unpack: false,
+        page,
+        ..source::fetch_plan(url)
     }
 }
 
@@ -3136,6 +3196,62 @@ mod tests {
         assert_eq!(budget(jobs.iter()), 2 * MB + MB / 2);
         let huge = [job(Some(u64::MAX), true)];
         assert_eq!(budget(huge.iter()), u64::MAX);
+    }
+
+    /// a dry run keeps relocking's job for a file relocking downloads, without asking the cache
+    /// about it or building another, builds the other files' jobs with the fetch and label a
+    /// download's has, and keeps the first job of each label.
+    #[test]
+    fn dry_jobs_are_the_jobs_a_download_keeps() {
+        let manifest =
+            Manifest::parse("[datasets.set]\nref = 'https://example.org/data/'\n").unwrap();
+        let file = |path: &str| LockedFile {
+            path: path.to_owned(),
+            size: path.len() as u64,
+            sha256: digest::sha256(path.as_bytes()),
+            md5: None,
+            url: format!("https://example.org/data/{path}"),
+            unpacks_to: None,
+        };
+        let lock = Lock {
+            datasets: vec![Locked {
+                files: vec![file("a.csv"), file("b.csv"), file("c.csv")],
+                ..locked("set")
+            }],
+            ..Lock::default()
+        };
+        let [a, b, c] = [0, 1, 2].map(|index| &lock.datasets[0].files[index]);
+        let full = |file: &LockedFile| {
+            make_job(&lock, "set", file, &Url::parse(&file.url).unwrap(), false)
+        };
+        let mut relocking = full(b);
+        relocking.fetch.revalidate = true;
+        let facts = |job: &Job| {
+            let fetch = &job.fetch;
+            (
+                job.label.clone(),
+                fetch.url.clone(),
+                fetch.from.clone(),
+                (fetch.expect.sha256, fetch.expect.size),
+                (fetch.record, fetch.page, fetch.revalidate),
+            )
+        };
+        let kept = [facts(&relocking), facts(&full(a))];
+        let archives = archives::of(
+            &lock,
+            [a, b, c, a].map(|file| ("set".to_owned(), file)).into(),
+        );
+        let asked = std::cell::RefCell::new(Vec::new());
+        let cached = |file: &LockedFile| {
+            asked.borrow_mut().push(file.path.clone());
+            file.path == "c.csv"
+        };
+        let (mut jobs, mut unpack) = (vec![relocking], Vec::new());
+        dry_jobs(&manifest, &lock, &archives, &mut jobs, &mut unpack, cached).unwrap();
+        assert_eq!(asked.into_inner(), ["a.csv", "c.csv", "a.csv"]);
+        assert_eq!(jobs.iter().map(facts).collect::<Vec<_>>(), kept);
+        assert!(jobs[1].dataset.is_none() && jobs[1].again.is_none());
+        assert_eq!(unpack, Vec::<String>::new());
     }
 
     fn context() -> Context {

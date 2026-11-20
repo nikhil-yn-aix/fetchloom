@@ -64,6 +64,154 @@ fn lock_dry_run_refuses_a_private_address_as_lock_does() -> Result {
     Ok(())
 }
 
+/// a folder listing as python's http.server writes it, of `entries` in `folder`.
+fn listing(folder: &str, entries: &[&str]) -> Vec<crate::support::Part> {
+    let mut items = String::new();
+    for entry in entries {
+        items.push_str("<li><a href=\"");
+        items.push_str(entry);
+        items.push_str("\">");
+        items.push_str(entry);
+        items.push_str("</a></li>\n");
+    }
+    let html = format!(
+        "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for {folder}</title>\n</head>\n<body>\n<h1>Directory listing for {folder}</h1>\n<hr>\n<ul>\n{items}</ul>\n<hr>\n</body>\n</html>\n"
+    );
+    reply(
+        "200 OK",
+        &[
+            ("Content-Type", "text/html; charset=utf-8"),
+            ("Content-Length", &html.len().to_string()),
+        ],
+        html.as_bytes(),
+    )
+}
+
+/// each run's exit code and what it planned in [`a_dry_run_plans_each_download_once`]: its json's
+/// changes, an offline run's refusal, or the lines naming each file to fetch and what it would
+/// download.
+fn plans_each_download_once() -> [(Option<i32>, String); 7] {
+    let places = r#""place":["data/data/a.csv","data/data/b.csv","data/data/sub/c.csv""#;
+    [
+        (
+            Some(0),
+            format!(
+                r#"{{"download":[{{"path":"data/a.csv","size":null}},{{"path":"data/b.csv","size":null}},{{"path":"data/sub/c.csv","size":null}}],{places}],"remove":[],"replace":[],"to_download":{{"bytes":0,"files":3,"sizes_unknown":3,"time":null}},"unpack":[]}}"#
+            ),
+        ),
+        (
+            Some(0),
+            "Would fetch data/a.csv · size unknown\nWould fetch data/b.csv · size unknown\nWould fetch data/sub/c.csv · size unknown".to_owned(),
+        ),
+        (
+            Some(0),
+            format!(
+                r#"{{"download":[{{"path":"data/a.csv","size":2}},{{"path":"data/b.csv","size":3}},{{"path":"data/sub/c.csv","size":32}}],{places}],"remove":[],"replace":[],"to_download":{{"bytes":37,"files":3,"sizes_unknown":0,"time":null}},"unpack":[]}}"#
+            ),
+        ),
+        (
+            Some(0),
+            "Would fetch data/a.csv · 2 B\nWould fetch data/b.csv · 3 B\nWould fetch data/sub/c.csv · 32 B\nWould download 3 files · 37 B".to_owned(),
+        ),
+        (
+            Some(20),
+            "error: offline, and 3 files data.lock names are not in the cache\n  data/a.csv\n  data/b.csv\n  data/sub/c.csv\n  help: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`\n".to_owned(),
+        ),
+        (
+            Some(0),
+            format!(
+                r#"{{"download":[{{"path":"more/d.csv","size":null}},{{"path":"data/a.csv","size":2}},{{"path":"data/b.csv","size":3}},{{"path":"data/sub/c.csv","size":32}}],{places},"data/more/d.csv"],"remove":[],"replace":[],"to_download":{{"bytes":37,"files":4,"sizes_unknown":1,"time":null}},"unpack":[]}}"#
+            ),
+        ),
+        (
+            Some(0),
+            "Would fetch more/d.csv · size unknown\nWould fetch data/a.csv · 2 B\nWould fetch data/b.csv · 3 B\nWould fetch data/sub/c.csv · 32 B\nWould download 4 files · 37 B and 1 of unknown size".to_owned(),
+        ),
+    ]
+}
+
+/// a dry run plans each file it would fetch once, as a download would fetch it: adding a folder
+/// whose files relocking downloads, syncing a clone whose cache lacks every pinned file, offline
+/// too, and both in one sync. each run's exit code, the downloads its json plans and the lines
+/// -v tells of them are as a sync that built each job as a download does told them.
+#[test]
+fn a_dry_run_plans_each_download_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            listing("/data/", &["a.csv", "b.csv", "sub/"]),
+        ),
+        ("/data/sub/".to_owned(), listing("/data/sub/", &["c.csv"])),
+        ("/data/a.csv".to_owned(), file(b"a\n", "\"a\"")),
+        ("/data/b.csv".to_owned(), file(b"bb\n", "\"b\"")),
+        ("/data/sub/c.csv".to_owned(), file(IRIS, "\"c\"")),
+        ("/more/".to_owned(), listing("/more/", &["d.csv"])),
+        ("/more/d.csv".to_owned(), file(b"ddd\n", "\"d\"")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let (data, more) = (
+        format!("{}/data/", routes.url),
+        format!("{}/more/", routes.url),
+    );
+    let (clone, empty) = (sandbox.folder("clone")?, sandbox.folder("empty-cache")?);
+    // a run's exit code and what it planned: its json's changes, what an offline run refused, or
+    // the lines that name each file a run would fetch and what it would download
+    let told = |args: &[&str]| -> Result<(Option<i32>, String)> {
+        let mut command = sandbox.command(args);
+        if fs::exists(sandbox.work().join("data.lock"))? {
+            command.current_dir(&clone).env("FETCHLOOM_CACHE", &empty);
+        }
+        let output = command.output()?;
+        let said = match args[0] {
+            "--json" => json(&output)?["result"]["changes"].to_string(),
+            "--offline" => text(&output.stderr)?,
+            _ => {
+                let lines = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+                let planned = lines.lines().map(str::trim_start).filter(|line| {
+                    line.starts_with("Would fetch ") || line.starts_with("Would download ")
+                });
+                planned.collect::<Vec<_>>().join("\n")
+            }
+        };
+        Ok((output.status.code(), said))
+    };
+    let mut runs = vec![
+        told(&["--json", "add", &data, "--dry-run"])?,
+        told(&["-v", "add", &data, "--dry-run"])?,
+    ];
+    let added = sandbox.run(&["add", &data])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    runs.push(told(&["--json", "sync", "--dry-run"])?);
+    runs.push(told(&["-v", "sync", "--dry-run"])?);
+    runs.push(told(&["--offline", "sync", "--dry-run"])?);
+    // a dataset relocking pins beside those the cache lacks
+    let manifest = clone.join("data.toml");
+    let pinned = fs::read_to_string(&manifest)?;
+    fs::write(
+        &manifest,
+        format!("{pinned}\n[datasets.more]\nref = \"{more}\"\n"),
+    )?;
+    runs.push(told(&["--json", "sync", "--dry-run"])?);
+    runs.push(told(&["-v", "sync", "--dry-run"])?);
+    let expected = plans_each_download_once();
+    for (run, ((code, said), (want_code, want))) in runs.iter().zip(expected).enumerate() {
+        assert_eq!((*code, said), (want_code, &want), "run {run}");
+    }
+    let downloads = |said: &str| -> Result<Option<usize>> {
+        let changes: serde_json::Value = serde_json::from_str(said)?;
+        Ok(changes["download"].as_array().map(Vec::len))
+    };
+    assert_eq!(downloads(&runs[0].1)?, Some(3), "{}", runs[0].1);
+    assert_eq!(downloads(&runs[2].1)?, Some(3), "{}", runs[2].1);
+    assert_ne!(runs[4].0, Some(0), "{}", runs[4].1);
+    assert_eq!(downloads(&runs[5].1)?, Some(4), "{}", runs[5].1);
+    Ok(())
+}
+
 #[test]
 fn sync_dry_run_on_a_fresh_clone_tells_what_it_would_place() -> Result {
     let sandbox = Sandbox::new()?;
