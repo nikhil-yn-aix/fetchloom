@@ -784,12 +784,12 @@ pub(super) fn write(
     (changed, told)
 }
 
-/// the most new markers [`write`] holds open at once on linux, written and waiting for their
+/// the most new markers [`write()`] holds open at once on linux, written and waiting for their
 /// flush. a rewrite of fetchloom's own never waits among them.
 const TOGETHER: usize = 64;
 
 /// flushes the new markers `begun` wrote at once, then names each flushed one in order and settles
-/// it as [`write`] does. says whether the state's record of any changed.
+/// it as [`write()`] does. says whether the state's record of any changed.
 fn name_flushed(
     placer: &Placer,
     state: &mut State,
@@ -819,7 +819,7 @@ fn name_flushed(
     changed
 }
 
-/// a marker [`write`] is to write, with what it knew of it before.
+/// a marker [`write()`] is to write, with what it knew of it before.
 struct Marker<'p> {
     folder: &'p String,
     there: bool,
@@ -862,7 +862,7 @@ impl Marker<'_> {
     }
 }
 
-/// what [`put`] found at a marker's path.
+/// what [`finish`] found at a marker's path.
 enum Put {
     /// the new text took the marker's name.
     Written,
