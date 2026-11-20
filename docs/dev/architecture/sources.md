@@ -62,6 +62,8 @@ a path on this machine is refused before routing, with no request, so a person's
 
 github and gitlab file-page URLs are normalized to raw URLs before ordinary URL resolution. [URL references](../../user/sources/urls-and-dois.md) owns accepted forms and HTML warnings.
 
+a github folder below its repository's top is listed by its own tree, `git/trees/<commit>:<folder>?recursive=1`, in one request (`Repo::subtree` in `src/source/github.rs`), its entries made relative to the folder. an answer other than 2xx, as for a folder github does not have or a file at that path, or one cut short, falls back to the whole tree and, where github cuts that short, the walk folder by folder, which tells a missing folder or a file as before, one request later. a folder at the top asks for the whole tree.
+
 DOIs ask the JSON handle API at `doi.org` for their registered URL. that URL's host selects an adapter. unknown hosts and another DOI are refused without fetching a landing page; DOI prefixes do not select a repository.
 
 ### catalog search

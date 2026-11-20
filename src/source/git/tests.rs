@@ -288,12 +288,9 @@ fn a_ref_with_a_slash_is_found_part_by_part() {
         .on(&format!("{API}/commits/release"), 422, no_commit)
         .on(&format!("{API}/commits/release%2Fv1"), 200, COMMIT)
         .on(
-            &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+            &format!("{API}/git/trees/{COMMIT}:data?recursive=1"),
             200,
-            tree(
-                &serde_json::json!([subtree("data", "1"), blob("data/rows.csv", 19)]),
-                false,
-            ),
+            tree(&serde_json::json!([blob("rows.csv", 19)]), false),
         );
     let link = "https://github.com/lab/survey/tree/release/v1/data";
     let listing = block_on(folder(link).listing(&recorded, false)).unwrap();
@@ -313,7 +310,7 @@ fn a_ref_with_a_slash_is_found_part_by_part() {
         [
             format!("{API}/commits/release"),
             format!("{API}/commits/release%2Fv1"),
-            format!("{API}/git/trees/{COMMIT}?recursive=1"),
+            format!("{API}/git/trees/{COMMIT}:data?recursive=1"),
         ]
     );
     assert!(
@@ -343,15 +340,16 @@ fn a_ref_with_a_slash_is_found_part_by_part() {
 }
 
 /// a folder of 2,000 files takes two requests of github's api, the most a run without a key can
-/// spare: the commit its branch names, then the whole tree in one answer.
+/// spare: the commit its branch names, then the folder's own tree in one answer.
 #[test]
 fn a_folder_of_two_thousand_files_takes_two_requests() {
-    let mut entries = vec![subtree("data", "d"), blob("README.md", 9)];
-    entries.extend((0..2000).map(|n| blob(&format!("data/{n:04}.csv"), 2048)));
+    let entries: Vec<serde_json::Value> = (0..2000)
+        .map(|n| blob(&format!("{n:04}.csv"), 2048))
+        .collect();
     let recorded = Recorded::default()
         .on(&format!("{API}/commits/main"), 200, COMMIT)
         .on(
-            &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+            &format!("{API}/git/trees/{COMMIT}:data?recursive=1"),
             200,
             tree(&serde_json::Value::from(entries), false),
         );
@@ -443,16 +441,26 @@ fn each_file_carries_its_blob_in_its_own_repository() {
     assert_eq!(blobs(&listing), [Some((page, empty))]);
 }
 
-/// past its limits github cuts a tree's answer short, so the folders on the way to the one
-/// asked for are listed one by one, then its subtrees whole, each cut short one in turn.
+/// past its limits github cuts a tree's answer short, the folder's own as the whole one, so the
+/// folders on the way to the one asked for are listed one by one, then its subtrees whole, each
+/// cut short one in turn.
 #[test]
 fn a_tree_github_cuts_short_is_walked_folder_by_folder() {
     let at = |id: &str, recursive: bool| {
         let whole = if recursive { "?recursive=1" } else { "" };
         format!("{API}/git/trees/{id}{whole}")
     };
+    let cut = tree(
+        &serde_json::json!([subtree("big", "b"), blob("big/a.csv", 1)]),
+        true,
+    );
     let recorded = Recorded::default()
         .on(&format!("{API}/commits/main"), 200, COMMIT)
+        .on(
+            &at(&format!("{COMMIT}:data/survey"), true),
+            200,
+            cut.clone(),
+        )
         .on(
             &at(COMMIT, true),
             200,
@@ -482,14 +490,7 @@ fn a_tree_github_cuts_short_is_walked_folder_by_folder() {
                 false,
             ),
         )
-        .on(
-            &at("s", true),
-            200,
-            tree(
-                &serde_json::json!([subtree("big", "b"), blob("big/a.csv", 1)]),
-                true,
-            ),
-        )
+        .on(&at("s", true), 200, cut)
         .on(
             &at("s", false),
             200,
@@ -527,7 +528,7 @@ fn a_tree_github_cuts_short_is_walked_folder_by_folder() {
     for skipped in [at("o", false), at("k", false), at("o", true), at("k", true)] {
         assert!(!asked.contains(&skipped), "{skipped}: {asked:?}");
     }
-    assert_eq!(asked.len(), 8, "{asked:?}");
+    assert_eq!(asked.len(), 9, "{asked:?}");
 }
 
 /// a folder of more entries than github's api gives at once, even alone, cannot be listed whole,
@@ -556,13 +557,19 @@ fn a_folder_github_cannot_list_whole_is_refused() {
     );
 }
 
-/// a folder the tree lacks, or a file the link names as a folder, says which, and so does a
-/// folder of git's links alone.
+/// a folder the tree lacks, or a file the link names as a folder, which github answers its own
+/// tree for with no tree, says which once the whole tree is read, and so does a folder of git's
+/// links alone, whose own tree holds them.
 #[test]
 fn a_folder_missing_a_file_or_links_alone_say_which() {
-    let recorded = |entries: serde_json::Value| {
+    let recorded = |entries: serde_json::Value, (status, own): (u16, String)| {
         Recorded::default()
             .on(&format!("{API}/commits/main"), 200, COMMIT)
+            .on(
+                &format!("{API}/git/trees/{COMMIT}:data?recursive=1"),
+                status,
+                own,
+            )
             .on(
                 &format!("{API}/git/trees/{COMMIT}?recursive=1"),
                 200,
@@ -570,15 +577,21 @@ fn a_folder_missing_a_file_or_links_alone_say_which() {
             )
     };
     let link = "https://github.com/lab/survey/tree/main/data";
-    for (entries, kind, message, help) in [
+    let missing = r#"{"message":"Not Found","status":"404"}"#.to_owned();
+    let a_file = r#"{"message":"SHA must identify a commit or a tree","status":"422"}"#.to_owned();
+    let vendor =
+        serde_json::json!({"path": "vendor", "mode": "160000", "type": "commit", "sha": COMMIT});
+    for (entries, own, kind, message, help) in [
         (
             serde_json::json!([blob("other.csv", 1)]),
+            (404, missing),
             Kind::ReferenceUnresolved,
             "https://github.com/lab/survey has no folder data at main",
             "check the folder's name at https://github.com/lab/survey/tree/main; git keeps no empty folder",
         ),
         (
             serde_json::json!([blob("data", 1)]),
+            (422, a_file),
             Kind::ReferenceInvalid,
             "data in https://github.com/lab/survey at main is a file, not a folder",
             "pin that one file by its own link: https://github.com/lab/survey/blob/main/data",
@@ -588,12 +601,13 @@ fn a_folder_missing_a_file_or_links_alone_say_which() {
                 subtree("data", "d"),
                 {"path": "data/vendor", "mode": "160000", "type": "commit", "sha": COMMIT},
             ]),
+            (200, tree(&serde_json::json!([vendor]), false)),
             Kind::ReferenceUnresolved,
             "https://github.com/lab/survey/tree/main/data holds no file, only 1 submodule, which git keeps as links rather than files: vendor",
             "copy the link of a folder that holds the files themselves",
         ),
     ] {
-        let error = block_on(folder(link).listing(&recorded(entries), false)).unwrap_err();
+        let error = block_on(folder(link).listing(&recorded(entries, own), false)).unwrap_err();
         assert_eq!(error.kind, kind, "{message}");
         assert_eq!(error.message, message);
         assert_eq!(error.help.as_deref(), Some(help));
@@ -617,14 +631,10 @@ fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
             )
             .on(&format!("{API}/commits/main"), 200, COMMIT)
             .on(
-                &format!("{API}/git/trees/{COMMIT}?recursive=1"),
+                &format!("{API}/git/trees/{COMMIT}:data?recursive=1"),
                 200,
                 tree(
-                    &serde_json::json!([
-                        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
-                        blob("data/rows.csv", 19),
-                        blob("data/big.bin", 2048)
-                    ]),
+                    &serde_json::json!([blob("rows.csv", 19), blob("big.bin", 2048)]),
                     false,
                 ),
             )
@@ -651,7 +661,7 @@ fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
         [
             API.to_owned(),
             format!("{API}/commits/main accept: application/vnd.github.sha"),
-            format!("{API}/git/trees/{COMMIT}?recursive=1")
+            format!("{API}/git/trees/{COMMIT}:data?recursive=1")
         ]
     );
 
@@ -699,7 +709,7 @@ fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
 #[test]
 fn a_private_folder_past_the_keys_requests_says_so() {
     let link = "https://github.com/lab/survey/tree/main/data";
-    let trees = format!("{API}/git/trees/{COMMIT}?recursive=1");
+    let trees = format!("{API}/git/trees/{COMMIT}:data?recursive=1");
     let recorded = |entries: serde_json::Value| {
         Recorded::default()
             .on(API, 200, r#"{"full_name":"lab/survey","private":true}"#)
@@ -707,11 +717,7 @@ fn a_private_folder_past_the_keys_requests_says_so() {
             .on(&trees, 200, tree(&entries, false))
             .remaining(&trees, 1)
     };
-    let two = serde_json::json!([
-        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
-        blob("data/rows.csv", 19),
-        blob("data/notes.txt", 18)
-    ]);
+    let two = serde_json::json!([blob("rows.csv", 19), blob("notes.txt", 18)]);
     let listing = block_on(folder(link).listing(&recorded(two), true)).unwrap();
     assert_eq!(
         listing.warnings,
@@ -719,19 +725,13 @@ fn a_private_folder_past_the_keys_requests_says_so() {
             "each file of a private repository takes one of github's api requests, and this key has 1 left this hour for the folder's 2 files: the rest wait for github's limit to start over"
         ]
     );
-    let one = serde_json::json!([
-        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
-        blob("data/rows.csv", 19)
-    ]);
+    let one = serde_json::json!([blob("rows.csv", 19)]);
     let listing = block_on(folder(link).listing(&recorded(one), true)).unwrap();
     assert!(listing.warnings.is_empty(), "{:?}", listing.warnings);
 
-    let mut unserved = blob("data/rows.csv", 19);
+    let mut unserved = blob("rows.csv", 19);
     unserved["sha"] = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391e69de29bb2d1d6434b8b29ae".into();
-    let entries = serde_json::json!([
-        subtree("data", "4b825dc642cb6eb9a060e54bf8d69288fbee4904"),
-        unserved
-    ]);
+    let entries = serde_json::json!([unserved]);
     let error = block_on(folder(link).listing(&recorded(entries), true)).unwrap_err();
     assert_eq!(error.kind, Kind::SourceInvalid);
     assert!(
@@ -962,5 +962,65 @@ fn a_commit_links_404_says_its_server_has_no_bytes() {
         "https://api.github.com/repos/lab/secret/git/blobs/0bda0ce801be0fa2f464ff845a9d5ceae99aad7d",
     ] {
         assert!(unserved(&Url::parse(link).unwrap()).is_none(), "{link}");
+    }
+}
+
+/// a folder below the top is asked for by its own tree first, `<commit>:<path>`, and lists as the
+/// walk from the top does, in one request where github answers it whole; where github cuts that
+/// answer short, has no such tree or finds a file there, the walk from the top answers next.
+#[test]
+fn a_folder_asked_by_its_own_tree_lists_as_the_walk_does() {
+    let repo = super::super::github::Repo::named("lab", "survey").unwrap();
+    let whole = format!("{API}/git/trees/{COMMIT}?recursive=1");
+    let own = format!("{API}/git/trees/{COMMIT}:data/survey?recursive=1");
+    let top = tree(
+        &serde_json::json!([
+            subtree("data", "d"),
+            subtree("data/survey", "s"),
+            subtree("data/survey/big", "b"),
+            blob("data/survey/big/a.csv", 3),
+            blob("data/survey/rows.csv", 2),
+            blob("top.csv", 1)
+        ]),
+        false,
+    );
+    let below = |truncated: bool| {
+        tree(
+            &serde_json::json!([
+                subtree("big", "b"),
+                blob("big/a.csv", 3),
+                blob("rows.csv", 2)
+            ]),
+            truncated,
+        )
+    };
+    let listed = |recorded: &Recorded| {
+        block_on(repo.tree(recorded, COMMIT, "data/survey", false))
+            .unwrap()
+            .0
+    };
+    let answered = Recorded::default()
+        .on(&whole, 200, top.clone())
+        .on(&own, 200, below(false));
+    let own_tree = listed(&answered);
+    let Listed::Entries(entries) = &own_tree else {
+        panic!("{own_tree:?}");
+    };
+    let found: Vec<&str> = entries.iter().map(|entry| entry.path.as_str()).collect();
+    assert_eq!(found, ["big", "big/a.csv", "rows.csv"]);
+    assert_eq!(answered.asked(), std::slice::from_ref(&own));
+    for (status, body) in [
+        (200, below(true)),
+        (404, r#"{"message": "Not Found"}"#.to_owned()),
+        (
+            422,
+            r#"{"message": "SHA must identify a commit or a tree"}"#.to_owned(),
+        ),
+    ] {
+        let recorded = Recorded::default()
+            .on(&whole, 200, top.clone())
+            .on(&own, status, body);
+        assert_eq!(listed(&recorded), own_tree, "{status}");
+        assert_eq!(recorded.asked(), [own.clone(), whole.clone()], "{status}");
     }
 }

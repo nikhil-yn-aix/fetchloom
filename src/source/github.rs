@@ -321,10 +321,10 @@ impl Repo {
         }
     }
 
-    /// what the tree at `commit` holds in `folder`: the whole tree in one answer, or, where github
-    /// cuts that short, the folders on the way to `folder` one by one, then each of its subtrees
-    /// whole where github allows; and the requests github's rate limit left after the last
-    /// answer, when it said.
+    /// what the tree at `commit` holds in `folder`: a folder below the top by its own tree in one
+    /// answer, else the whole tree in one answer, or, where github cuts that short, the folders on
+    /// the way to `folder` one by one, then each of its subtrees whole where github allows; and
+    /// the requests github's rate limit left after the last answer, when it said.
     pub(super) async fn tree(
         &self,
         api: &impl Api,
@@ -333,6 +333,13 @@ impl Repo {
         signed_in: bool,
     ) -> Result<(Listed, Option<u64>), Error> {
         let mut pages = super::Pages::most(api.most_files());
+        if !folder.is_empty()
+            && let Some(listed) = self
+                .subtree(api, commit, folder, signed_in, &mut pages)
+                .await?
+        {
+            return Ok(listed);
+        }
         let whole = self
             .listed(api, (commit, ""), true, signed_in, &mut pages, 0)
             .await?;
@@ -427,7 +434,47 @@ impl Repo {
             url.query_pairs_mut().append_pair("recursive", "1");
         }
         let response = get(api, &url, &[], signed_in).await?;
-        let answer: Answered = super::json(self, &response)?;
+        self.read_tree(&response, path)
+    }
+
+    /// `folder` at `commit` by its own tree, `<commit>:<folder>`, whole, and the requests github's
+    /// rate limit left; none when github cuts it short or answers with no tree, as for a folder
+    /// it does not have or a file, which the walk from the top then tells as it does.
+    async fn subtree(
+        &self,
+        api: &impl Api,
+        commit: &str,
+        folder: &str,
+        signed_in: bool,
+        pages: &mut super::Pages<String>,
+    ) -> Result<Option<(Listed, Option<u64>)>, Error> {
+        pages
+            .next(format!("subtree {folder}"), 0)
+            .map_err(|reason| invalid(self, &reason))?;
+        let mut parts = folder.split('/');
+        let head = format!("{commit}:{}", parts.next().unwrap_or_default());
+        let mut segments = vec!["git", "trees", head.as_str()];
+        segments.extend(parts);
+        let mut url = self
+            .url(&segments)
+            .map_err(|reason| invalid(self, reason))?;
+        url.query_pairs_mut().append_pair("recursive", "1");
+        let response = get(api, &url, &[], signed_in).await?;
+        if !(200..300).contains(&response.status) {
+            return Ok(None);
+        }
+        let tree = self.read_tree(&response, folder)?;
+        // the answer is the folder's own tree, so it is a folder, whose entries it holds
+        Ok((!tree.truncated).then(|| {
+            let entries = super::git::relative(tree.entries, folder);
+            (Listed::Entries(entries), tree.remaining)
+        }))
+    }
+
+    /// the tree github's answer `response` gives, its entries at their paths in the repository,
+    /// the tree's own being `path`.
+    fn read_tree(&self, response: &Response, path: &str) -> Result<Tree, Error> {
+        let answer: Answered = super::json(self, response)?;
         let entries = answer
             .tree
             .into_iter()

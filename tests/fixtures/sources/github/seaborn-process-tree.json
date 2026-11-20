@@ -1,0 +1,111 @@
+{
+  "sha": "0015761099c99537288210a92dcef24f34eadddf",
+  "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/trees/0015761099c99537288210a92dcef24f34eadddf",
+  "tree": [
+    {
+      "path": "attention.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "53e9aea31c84128df3a1011049d98d68839e56cf",
+      "size": 347,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/53e9aea31c84128df3a1011049d98d68839e56cf"
+    },
+    {
+      "path": "dowjones.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ed41640320fc29107dc83a79b9172ddfe8c22500",
+      "size": 191,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/ed41640320fc29107dc83a79b9172ddfe8c22500"
+    },
+    {
+      "path": "exercise.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "201d287971241a0b501191e5a04916cdb770d1db",
+      "size": 385,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/201d287971241a0b501191e5a04916cdb770d1db"
+    },
+    {
+      "path": "flights.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "ab28b84e4f122c84997390dd9bcac9a7ecebf598",
+      "size": 1037,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/ab28b84e4f122c84997390dd9bcac9a7ecebf598"
+    },
+    {
+      "path": "gammas.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "447a1a130e99abaadd5ac227a7af1ba04498de78",
+      "size": 882,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/447a1a130e99abaadd5ac227a7af1ba04498de78"
+    },
+    {
+      "path": "geyser.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "3aaf439b09fc98a56b4d4748f02bb55e698caa61",
+      "size": 323,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/3aaf439b09fc98a56b4d4748f02bb55e698caa61"
+    },
+    {
+      "path": "glue.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "7b497159394faa7ee201c9db2db77faf8e86adee",
+      "size": 268,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/7b497159394faa7ee201c9db2db77faf8e86adee"
+    },
+    {
+      "path": "healthexp.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "55adf00b63e8394f21610774418798dd9cd3757c",
+      "size": 682,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/55adf00b63e8394f21610774418798dd9cd3757c"
+    },
+    {
+      "path": "mpg.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "b744d4b9767909e1f28e3ab25d85ca76a0c123ee",
+      "size": 264,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/b744d4b9767909e1f28e3ab25d85ca76a0c123ee"
+    },
+    {
+      "path": "planets.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "9f0247828e619c1b467edc2486d116a413958a4b",
+      "size": 316,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/9f0247828e619c1b467edc2486d116a413958a4b"
+    },
+    {
+      "path": "seaice.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f987b688559b1d776f7eef74ba33807f36d43a81",
+      "size": 522,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/f987b688559b1d776f7eef74ba33807f36d43a81"
+    },
+    {
+      "path": "taxis.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "1ed8d0031d4158a72821a313d13106c8b28cb015",
+      "size": 1387,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/1ed8d0031d4158a72821a313d13106c8b28cb015"
+    },
+    {
+      "path": "titanic.py",
+      "mode": "100644",
+      "type": "blob",
+      "sha": "f8c390a1b7b0f583f61902199bf7b4644d0a8b81",
+      "size": 881,
+      "url": "https://api.github.com/repos/mwaskom/seaborn-data/git/blobs/f8c390a1b7b0f583f61902199bf7b4644d0a8b81"
+    }
+  ],
+  "truncated": false
+}

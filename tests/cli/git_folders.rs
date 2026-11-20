@@ -97,8 +97,8 @@ fn github(branch: &str, commit: &str, held: &[(&str, Held)]) -> Result<Vec<(Stri
 }
 
 /// github's answers for the repository `name` with `branch` at `commit`, whose tree holds
-/// `held`, each blob by its id: the commit the branch names, its whole tree in one answer, and
-/// each file where github serves it. raw.githubusercontent.com serves what git holds, a pointer
+/// `held`, each blob by its id: the commit the branch names, its whole tree and each folder's own
+/// in one answer, and each file where github serves it. raw.githubusercontent.com serves what git holds, a pointer
 /// for a file git-lfs keeps; github.com sends a file on to it, or one git-lfs keeps to
 /// media.githubusercontent.com.
 fn on_github(
@@ -167,6 +167,25 @@ fn on_github(
             commit.as_bytes(),
         ),
     ));
+    // each folder's own tree, as `git/trees/<commit>:<folder>` names it, its entries inside it
+    let paths: Vec<&str> = held.iter().map(|(path, _)| *path).collect();
+    for folder in folders(&paths) {
+        let inside: Vec<serde_json::Value> = tree
+            .iter()
+            .filter_map(|entry| {
+                let path = entry["path"]
+                    .as_str()?
+                    .strip_prefix(&format!("{folder}/"))?;
+                let mut entry = entry.clone();
+                entry["path"] = path.into();
+                Some(entry)
+            })
+            .collect();
+        routes.push((
+            format!("{api}/git/trees/{commit}:{}?recursive=1", encoded(&folder)),
+            answer(&serde_json::json!({"sha": folder, "tree": inside, "truncated": false}))?,
+        ));
+    }
     routes.push((
         format!("{api}/git/trees/{commit}?recursive=1"),
         answer(&serde_json::json!({
@@ -177,6 +196,18 @@ fn on_github(
         }))?,
     ));
     Ok(routes)
+}
+
+/// `target` with a folder's own tree, which a listing of a folder below the top asks for, named
+/// as the whole tree it stands for: either is a listing's one tree request.
+fn one_tree(target: &str) -> String {
+    let Some((api, rest)) = target.split_once("/git/trees/") else {
+        return target.to_owned();
+    };
+    match (rest.split_once(':'), rest.split_once('?')) {
+        (Some((commit, _)), Some((_, query))) => format!("{api}/git/trees/{commit}?{query}"),
+        _ => target.to_owned(),
+    }
 }
 
 /// a command whose requests to every host go to `routes`.
@@ -393,7 +424,7 @@ fn a_github_folder_at_a_branch_pins_every_file_at_its_commit() -> Result {
         asked,
         [
             format!("{GITHUB_API}/commits/main"),
-            format!("{GITHUB_API}/git/trees/{FIRST}?recursive=1"),
+            format!("{GITHUB_API}/git/trees/{FIRST}:data?recursive=1"),
         ]
     );
 
@@ -1807,7 +1838,10 @@ fn a_bare_gitlab_link_pins_its_default_branch() -> Result {
 
 /// the requests since the first `before`, sorted, since a run downloads its files at once.
 fn asked_since(routes: &Routes, before: usize) -> Vec<String> {
-    let mut asked = routes.targets()[before..].to_vec();
+    let mut asked: Vec<String> = routes.targets()[before..]
+        .iter()
+        .map(|target| one_tree(target))
+        .collect();
     asked.sort();
     asked
 }
@@ -2436,5 +2470,46 @@ fn a_foreign_record_stands_only_in_a_cache_this_user_alone_writes() -> Result {
         assert_eq!(fs::read(work.join("data/survey/big.bin"))?, placed_as);
         assert_eq!(fs::read(work.join("data/survey/other.bin"))?, other);
     }
+    Ok(())
+}
+
+/// a folder below its repository's top pins as the whole tree pins it, its tree asked for in one
+/// request of its own rather than the whole repository's.
+#[test]
+fn a_github_folder_asked_by_its_own_tree_pins_as_the_whole_tree_does() -> Result {
+    let held = [
+        ("README.md", Held::File(b"# survey\n")),
+        ("data/rows.csv", Held::File(ROWS)),
+        ("data/2020/field notes.txt", Held::File(NOTES)),
+        ("other/rows.csv", Held::File(NOTES)),
+    ];
+    let routes = Routes::start(github("main", FIRST, &held)?)?;
+    let sandbox = Sandbox::new()?;
+    ok(&run(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "https://github.com/lab/survey/tree/main/data",
+            "--as",
+            "survey",
+        ],
+    )?)?;
+    assert_eq!(
+        pins(&sandbox.work(), "survey")?,
+        pinned_as(&[("2020/field notes.txt", NOTES), ("rows.csv", ROWS)])
+    );
+    let asked: Vec<String> = routes
+        .targets()
+        .into_iter()
+        .filter(|target| target.starts_with("/api.github.com"))
+        .collect();
+    assert_eq!(
+        asked,
+        [
+            format!("{GITHUB_API}/commits/main"),
+            format!("{GITHUB_API}/git/trees/{FIRST}:data?recursive=1")
+        ]
+    );
     Ok(())
 }

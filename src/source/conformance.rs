@@ -343,6 +343,18 @@ fn rows() -> Vec<Row> {
         .fixture(
             &format!("{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f?recursive=1"),
             "github/seaborn-tree.json",
+        )
+        .fixture(
+            &format!(
+                "{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f:raw?recursive=1"
+            ),
+            "github/seaborn-raw-tree.json",
+        )
+        .fixture(
+            &format!(
+                "{seaborn}/git/trees/71e2436a092d714350de0fc409ca8a8714e7e78f:process?recursive=1"
+            ),
+            "github/seaborn-process-tree.json",
         );
     rows.push(Row {
         reference: "https://github.com/mwaskom/seaborn-data/tree/master/raw",
