@@ -22,7 +22,7 @@ a sole archive loses one top folder its members share. beside other selected fil
 
 members enter the cache before they are placed, and the archive's own bytes then leave it, unless a project needs them packed. [the tree hash](data-lock.md#the-tree-hash) records member paths before placement drops a top folder.
 
-fetchloom unpacks zip, 7z and tar archives itself on every system. it leaves a `.rar` packed, and the warning's help names a program for the system it runs on and a command that unpacks the archive into a folder beside it, inside the data folder, which fetchloom's `.gitignore` keeps out of git. for `data/sample/sample.rar`, run from the project's folder:
+fetchloom unpacks zip, 7z and tar archives itself on every system. it leaves a `.rar` packed, and the warning's help names a program for the system it runs on and a command that unpacks the archive into a folder beside it, inside the dataset's folder, which its `.gitignore` keeps out of git when the dataset has that folder to itself. for `data/sample/sample.rar`, run from the project's folder:
 
 | system | program | the help |
 |---|---|---|

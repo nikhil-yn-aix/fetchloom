@@ -21,10 +21,9 @@ fetchloom add https://huggingface.co/datasets/scikit-learn/iris
 either way, it ends with:
 
 ```text
-   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 3 of 4 files · 16.6 KiB · cc0-1.0
+   Resolved hf:datasets/scikit-learn/iris@0bda0ce · 3 of 4 files · 16.6 KiB · license cc0-1.0
  Downloaded 3 files · 16.6 KiB in 83 ms
     Started a project in ~/iris-study
-    Ignored data/ in .gitignore, since its files come from data.lock
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom sync`
@@ -37,7 +36,7 @@ the folder now holds:
 | `data.toml` | the datasets this project wants, one entry named `iris` |
 | `data.lock` | the exact files, with their sizes and SHA-256 |
 | `data/iris/Iris.csv` | the table, next to the other files the dataset ships, all read-only so you cannot change them by accident |
-| `.gitignore` | the line `/data/`, which keeps the data folder out of git, now or after a later `git init` |
+| `data/iris/.gitignore` | the line `*`, which keeps the dataset's folder out of git, now or after a later `git init`, and a comment naming this project |
 | `.fetchloom/` | fetchloom's notes about this machine; leave it alone |
 
 the downloaded bytes also live once in a shared cache, so another project that needs iris gets them without a second download. [concepts](../concepts/README.md) explains the cache and how files are placed.
@@ -60,10 +59,10 @@ fetchloom path iris/Iris.csv
 
 ## restore it somewhere else
 
-commit `data.toml` and `data.lock` to git, or copy them to another machine; leave `data/` and `.fetchloom/` out. the first `add` already put `data/` in `.gitignore`, in a git repository or not, so a `git init` later leaves the data out; in a git repository its `next:` line said `commit data.toml, data.lock and .gitignore`. then:
+commit `data.toml` and `data.lock` to git, or copy them to another machine; leave `data/` and `.fetchloom/` out. each dataset's folder already holds its own `.gitignore`, in a git repository or not, so a `git init` later leaves the data out. then:
 
 ```sh
-git add data.toml data.lock .gitignore
+git add data.toml data.lock
 git commit -m "pin iris"
 ```
 
