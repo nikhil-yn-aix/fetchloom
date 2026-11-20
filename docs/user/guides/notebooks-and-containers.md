@@ -65,7 +65,7 @@ a `!` line runs fetchloom as a terminal does and shows its progress, which the p
 }
 ```
 
-then add `/.fetchloom-cache/` to the repository's `.gitignore`: fetchloom adds `data/` there itself, not the cache. the cache and `data/` share one mount, so fetchloom can link files instead of copying them.
+then add `/.fetchloom-cache/` to the repository's `.gitignore`: each dataset's folder keeps itself out of git with a `.gitignore` inside it, but the cache does not. the cache and `data/` share one mount, so fetchloom can link files instead of copying them.
 
 ## containers and kubernetes
 
