@@ -467,13 +467,20 @@ pub(crate) fn is_plain(metadata: &Metadata) -> bool {
 /// opens `path` to read and write without following a link at its end, and refuses anything
 /// that is not a plain file. `create` makes a missing file.
 pub(crate) fn open_unfollowed(path: &Path, create: bool) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options
-        .read(true)
-        .write(true)
-        .create(create)
-        .truncate(false);
-    open_plain(path, &mut options)
+    #[cfg(target_os = "linux")]
+    {
+        raw_plain(path, true, create)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let mut options = OpenOptions::new();
+        options
+            .read(true)
+            .write(true)
+            .create(create)
+            .truncate(false);
+        open_plain(path, &mut options)
+    }
 }
 
 #[cfg(test)]
@@ -521,7 +528,50 @@ pub(crate) fn lock(lock: &File) -> io::Result<()> {
 
 /// shares the no-follow checks so reading an object never needs write access to its bytes.
 pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
+    #[cfg(target_os = "linux")]
+    {
+        raw_plain(path, false, false)
+    }
+    #[cfg(not(target_os = "linux"))]
     open_plain(path, OpenOptions::new().read(true))
+}
+
+/// opens `path` as `open_plain` does on other systems, through one `open` of rustix's, where std's
+/// open on musl sets close-on-exec again with a second call: read and write with `write`, made if
+/// missing with `create`, never following a link, never waiting on a fifo, closed on exec, and the
+/// same refusal of anything but a plain file.
+#[cfg(target_os = "linux")]
+fn raw_plain(path: &Path, write: bool, create: bool) -> io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let mut flags = if write { OFlags::RDWR } else { OFlags::RDONLY };
+    if create {
+        flags |= OFlags::CREATE;
+    }
+    flags |= OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    let opened = rustix::io::retry_on_intr(|| {
+        rustix::fs::open(path, flags, Mode::from_bits_truncate(0o666))
+    });
+    let file = match opened {
+        Ok(file) => File::from(file),
+        Err(rustix::io::Errno::LOOP) => return Err(not_plain(path)),
+        Err(err) => return Err(err.into()),
+    };
+    if is_plain(&file.metadata()?) {
+        Ok(file)
+    } else {
+        Err(not_plain(path))
+    }
+}
+
+/// the refusal to read or write `path`, a link or a special file.
+fn not_plain(path: &Path) -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidInput,
+        format!(
+            "{} is a link or a special file, which fetchloom never reads or writes",
+            path.display()
+        ),
+    )
 }
 
 /// opens an object to hash it and then date it again: to read, and on windows also to set its
@@ -541,6 +591,7 @@ pub(crate) fn open_to_redate(path: &Path) -> io::Result<File> {
     read_unfollowed(path)
 }
 
+#[cfg(any(not(target_os = "linux"), test))]
 fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
     #[cfg(unix)]
     {
@@ -556,15 +607,7 @@ fn open_plain(path: &Path, options: &mut OpenOptions) -> io::Result<File> {
         const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
         options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
     }
-    let refused = || {
-        io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "{} is a link or a special file, which fetchloom never reads or writes",
-                path.display()
-            ),
-        )
-    };
+    let refused = || not_plain(path);
     let opened = options.open(path);
     // what unix answers when the name is a link
     #[cfg(unix)]
@@ -1078,5 +1121,69 @@ mod tests {
         }
         assert!(refuses_links(&io::ErrorKind::Unsupported.into()));
         assert!(!refuses_links(&io::ErrorKind::Other.into()));
+    }
+
+    /// on linux a file opens with one call and comes out as std's open gives it: a plain file to
+    /// read, or to read and write, made where asked; a link, a folder, a fifo, a missing name or
+    /// one the user may not read refused with the same error.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn one_call_opens_and_refuses_as_std_does() {
+        use std::io::{Read as _, Write as _};
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let plain = dir.path().join("plain");
+        fs::write(&plain, b"bytes").unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&plain, &link).unwrap();
+        let fifo = dir.path().join("fifo");
+        rustix::fs::mknodat(
+            rustix::fs::CWD,
+            &fifo,
+            rustix::fs::FileType::Fifo,
+            rustix::fs::Mode::from_bits_truncate(0o600),
+            0,
+        )
+        .unwrap();
+        let locked = dir.path().join("locked");
+        fs::write(&locked, b"secret").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+        // root reads any file, so the locked case says nothing there
+        let root = rustix::process::geteuid().is_root();
+        let missing = dir.path().join("missing");
+        let said = |opened: io::Result<File>| match opened {
+            Ok(mut file) => {
+                let metadata = file.metadata().unwrap();
+                let mut read = Vec::new();
+                file.read_to_end(&mut read).unwrap();
+                Ok((read, metadata.len(), metadata.is_file()))
+            }
+            Err(err) => Err((err.kind(), err.raw_os_error(), err.to_string())),
+        };
+        let paths = [&plain, &link, dir.path(), &fifo, &locked, &missing];
+        for path in paths.map(Path::new) {
+            if root && path == locked {
+                continue;
+            }
+            for write in [false, true] {
+                let mut options = OpenOptions::new();
+                options.read(true).write(write).truncate(false);
+                let std = said(open_plain(path, &mut options));
+                let raw = said(raw_plain(path, write, false));
+                assert_eq!(std, raw, "{} {write}", path.display());
+            }
+        }
+        assert_eq!(said(read_unfollowed(&plain)).unwrap().0, b"bytes");
+        let made = dir.path().join("made");
+        let mut file = open_unfollowed(&made, true).unwrap();
+        file.write_all(b"new").unwrap();
+        assert_eq!(fs::read(&made).unwrap(), b"new");
+        let kept = open_unfollowed(&plain, true).unwrap().metadata().unwrap();
+        assert_eq!(
+            kept.len(),
+            5,
+            "an open that may make a file never empties one"
+        );
     }
 }
