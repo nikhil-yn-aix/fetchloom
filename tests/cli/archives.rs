@@ -8,7 +8,9 @@ use std::process::Output;
 
 use sevenz_rust2::{ArchiveEntry, ArchiveWriter, SourceReader};
 
-use crate::support::{Result, Sandbox, Server, delete, edit, file, json, ok, reply, text, zip_of};
+use crate::support::{
+    Part, Result, Sandbox, Server, delete, edit, file, json, ok, reply, text, zip_of,
+};
 
 const PATH: &str = "/files/dataset.zip";
 /// the tree python computed over the files in tests/fixtures/archives/python.zip.
@@ -1993,4 +1995,89 @@ mod split {
         assert!(!fs::read_to_string(sandbox.work().join("data.lock"))?.contains("unpacks_to"));
         Ok(())
     }
+}
+
+/// a zip's bytes, and the files it holds by their paths.
+type Zipped = (Vec<u8>, Vec<(String, Vec<u8>)>);
+
+/// a zip of `count` csv files whose names start with `name`, and those files by their paths.
+fn csv_zip(name: &str, count: usize) -> Result<Zipped> {
+    let files: Vec<(String, Vec<u8>)> = (0..count)
+        .map(|n| {
+            (
+                format!("{name}{n}.csv"),
+                format!("{name},{n}\n").into_bytes(),
+            )
+        })
+        .collect();
+    let entries: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(path, bytes)| (path.as_str(), bytes.as_slice()))
+        .collect();
+    Ok((zip_of(&entries)?, files))
+}
+
+/// a clone of `sandbox`'s project in the folder `name`: its data.toml and data.lock, with `from`
+/// put as `to` in both.
+fn cloned(sandbox: &Sandbox, name: &str, (from, to): (&str, &str)) -> Result<PathBuf> {
+    let clone = sandbox.folder(name)?;
+    for file in ["data.toml", "data.lock"] {
+        let text = fs::read_to_string(sandbox.work().join(file))?;
+        fs::write(clone.join(file), text.replace(from, to))?;
+    }
+    Ok(clone)
+}
+
+/// a server for /files/`name`.zip that answers the add of `zip` to `sandbox`'s project, which
+/// this makes, and then `answers`.
+fn added(sandbox: &Sandbox, name: &str, zip: &[u8], answers: Vec<Vec<Part>>) -> Result<Server> {
+    let mut all = vec![file(zip, "\"z\"")];
+    all.extend(answers);
+    let server = Server::start(&format!("/files/{name}.zip"), all)?;
+    sandbox.allow(&server.url);
+    ok(&sandbox.run(&["add", &server.url])?)?;
+    Ok(server)
+}
+
+/// an archive that fails to unpack leaves its own dataset waiting and every other archive to
+/// unpack and place, and the one error names each that failed: of a, b and c, unpacked one at a
+/// time in that order, a and c are past `FETCHLOOM_ARCHIVE_FILES`, and b between them still lands.
+#[test]
+fn an_archive_that_fails_to_unpack_leaves_the_others_to_place() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zips = [csv_zip("a", 5)?, csv_zip("b", 3)?, csv_zip("c", 6)?];
+    let mut servers = Vec::new();
+    for (name, (zip, _)) in ["a", "b", "c"].into_iter().zip(&zips) {
+        servers.push(added(&sandbox, name, zip, vec![file(zip, "\"z\"")])?);
+    }
+    let clone = cloned(&sandbox, "clone", ("", ""))?;
+    let synced = sandbox
+        .command_in(&clone, &["sync"])
+        .env("FETCHLOOM_CACHE", sandbox.folder("cold")?)
+        .env("FETCHLOOM_ARCHIVE_FILES", "4")
+        .env("FETCHLOOM_THREADS", "1")
+        .output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(10), "{stderr}");
+    for told in [
+        "2 archives could not be unpacked",
+        "a/a.zip: the archive holds more than 4 entries",
+        "c/c.zip",
+        "placed b, whose files are all on this machine",
+        "a, c wait for files this run could not get",
+    ] {
+        assert!(stderr.contains(told), "{told}: {stderr}");
+    }
+    let data = clone.join("data");
+    for (path, bytes) in &zips[1].1 {
+        assert_eq!(&fs::read(data.join("b").join(path))?, bytes);
+    }
+    for (name, (_, files)) in [("a", &zips[0]), ("c", &zips[2])] {
+        assert!(
+            files
+                .iter()
+                .all(|(path, _)| !data.join(name).join(path).exists())
+        );
+    }
+    Ok(())
 }

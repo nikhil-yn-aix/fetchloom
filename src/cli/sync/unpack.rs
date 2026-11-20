@@ -3,7 +3,6 @@
 
 use std::cell::Cell;
 use std::num::NonZero;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -11,6 +10,7 @@ use tokio::task::JoinSet;
 
 use super::super::Context;
 use super::super::cache::needed_for_drop;
+use super::super::fetch::{Told as Named, alike};
 use super::draft::{self, Draft, Unit, Why};
 use super::place::Placing;
 use super::{Loop, job};
@@ -128,7 +128,8 @@ impl Unpack {
 }
 
 /// unpacks archives the cache holds and records what each holds, or none for bytes that are no
-/// archive after all; a few run at once, each with a bar on a terminal.
+/// archive after all; a few run at once, each with a bar on a terminal. one that fails leaves the
+/// others to unpack, and the error names every one that failed, as [`unpacks_failed`] joins them.
 pub(in crate::cli) async fn unpack_all(
     context: &Context,
     cache: &Cache,
@@ -154,7 +155,6 @@ pub(in crate::cli) async fn unpack_all(
     // an xz stream of several blocks decodes on the archive's share of the threads
     let share = writers.map_or_else(|| processors.div_ceil(at_once), |writers| writers + 1);
     limits.xz_threads = u32::try_from(share).unwrap_or(u32::MAX);
-    let failed = Arc::new(AtomicBool::new(false));
     // a debug build's tests stop every unpacking once it read a byte, as a ctrl-c then would
     let stops_for_tests = crate::machine::pretended("FETCHLOOM_TEST_STOP_UNPACKING").is_some();
     let what = match archives.as_slice() {
@@ -165,19 +165,19 @@ pub(in crate::cli) async fn unpack_all(
     let ticker = Arc::new(context.output.ticker("Unpacking", what, sizes));
     let mut tasks = JoinSet::new();
     let mut queue = archives.into_iter();
+    let mut failed: Vec<Failed> = Vec::new();
     loop {
         while tasks.len() < at_once
             && let Some((index, unpack)) = queue.next()
         {
             let cache = cache.clone();
             let stop = context.stop.clone();
-            let failed = failed.clone();
             let told = Told::new(&context.output, &unpack, ticker.clone());
             tasks.spawn_blocking(move || {
                 let started = Instant::now();
                 let watch = |now: u64| {
                     told.heard(now);
-                    stop.is_asked() || failed.load(Ordering::Relaxed) || stops_for_tests && now > 0
+                    stop.is_asked() || stops_for_tests && now > 0
                 };
                 let unpacked = unpack_one(&cache, &unpack, &limits, &watch, writers);
                 drop(told);
@@ -218,14 +218,60 @@ pub(in crate::cli) async fn unpack_all(
             Err(err) if unpack.lone && err.kind == Kind::SourceInvalid => {
                 tell_lone(&context.output, &unpack.label);
             }
-            Err(err) => {
-                // the others stop at their next read
-                failed.store(true, Ordering::Relaxed);
-                return Err(err.detail(format!("in {}", unpack.label)));
-            }
+            Err(err) => failed.push((index, unpack.label.clone(), err)),
         }
     }
-    Ok(results)
+    match unpacks_failed(failed) {
+        Some(error) => Err(error),
+        None => Ok(results),
+    }
+}
+
+/// an unpacking that failed: its place in its batch, its archive's label, and why.
+pub(in crate::cli) type Failed = (usize, String, Error);
+
+/// the one error for `failed`, the unpackings of a batch that failed, or none when none did: one
+/// alone as it failed, in its archive; several as one error, of the kind of the first in the
+/// batch's order, naming each. a stop among them is the error, as the run was stopped.
+pub(in crate::cli) fn unpacks_failed(mut failed: Vec<Failed>) -> Option<Error> {
+    failed.sort_by_key(|(index, ..)| *index);
+    if let Some(at) = failed
+        .iter()
+        .position(|(_, _, error)| error.kind == Kind::Interrupted)
+    {
+        failed.swap(0, at);
+        failed.truncate(1);
+    }
+    if failed.len() <= 1 {
+        return failed
+            .pop()
+            .map(|(_, label, error)| error.detail(format!("in {label}")));
+    }
+    let (_, _, first) = failed.first()?;
+    let shared = failed
+        .iter()
+        .all(|(_, _, error)| error.help == first.help)
+        .then(|| first.help.clone())
+        .flatten();
+    let named: Vec<Named<'_>> = failed
+        .iter()
+        .map(|(_, label, error)| Named {
+            alone: format!("{label}: {}", error.message),
+            label: label.clone(),
+            error,
+        })
+        .collect();
+    let mut error = Error::new(
+        first.kind,
+        format!(
+            "{} could not be unpacked",
+            units::count(failed.len() as u64, "archive", "archives")
+        ),
+    );
+    error.details = alike(&named, shared.is_some());
+    Some(error.help(shared.unwrap_or_else(|| {
+        "the other archives unpacked. fix the errors above, then run the same command again".into()
+    })))
 }
 
 /// unpacks `unpack` from the cache, as [`unpack_all`] runs each, with why a file decompress was
@@ -923,6 +969,44 @@ mod tests {
             }],
             ..Lock::default()
         }
+    }
+
+    /// a batch's one failed unpacking is its own error, in its archive; several are one error, of
+    /// the first's kind in the batch's order, naming each, whatever order they ended in; a stop
+    /// among them is the error.
+    #[test]
+    fn failed_unpackings_are_each_named_and_a_stop_is_the_error() {
+        let failed = |index: usize, label: &str, kind: Kind, message: &str| {
+            (index, label.to_owned(), Error::new(kind, message))
+        };
+        assert!(unpacks_failed(Vec::new()).is_none());
+        let one = unpacks_failed(vec![failed(1, "b/b.zip", Kind::SourceInvalid, "damaged")]);
+        let one = one.unwrap();
+        assert_eq!(
+            (one.kind, one.message.as_str()),
+            (Kind::SourceInvalid, "damaged")
+        );
+        assert_eq!(one.details, ["in b/b.zip"]);
+        let two = unpacks_failed(vec![
+            failed(2, "c/c.zip", Kind::LocalIo, "the disk is full"),
+            failed(0, "a/a.zip", Kind::SourceInvalid, "damaged"),
+        ])
+        .unwrap();
+        assert_eq!(two.kind, Kind::SourceInvalid);
+        assert_eq!(two.message, "2 archives could not be unpacked");
+        assert_eq!(
+            two.details,
+            ["a/a.zip: damaged", "c/c.zip: the disk is full"]
+        );
+        let stopped = unpacks_failed(vec![
+            failed(0, "a/a.zip", Kind::SourceInvalid, "damaged"),
+            failed(1, "b/b.zip", Kind::Interrupted, "stopped"),
+        ])
+        .unwrap();
+        assert_eq!(
+            (stopped.kind, stopped.message.as_str()),
+            (Kind::Interrupted, "stopped")
+        );
     }
 
     /// once the readers are done the bar fills toward nothing, so it never stands full with no time
