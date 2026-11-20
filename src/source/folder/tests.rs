@@ -910,3 +910,195 @@ fn a_link_ending_in_a_slash_names_a_folder() {
         Reference::Url(url("https://example.org/my%20data/"))
     );
 }
+
+/// a network that answers as `recorded` does, each answer a turn of the executor after its
+/// request, as a server's comes after a moment, which lets a walk ask for `window` listings at
+/// once; it keeps the most requests that waited together.
+struct Overlapping {
+    recorded: Recorded,
+    window: usize,
+    waiting: std::sync::atomic::AtomicUsize,
+    most: std::sync::atomic::AtomicUsize,
+}
+
+impl Overlapping {
+    fn new(recorded: &Recorded, window: usize) -> Overlapping {
+        Overlapping {
+            recorded: recorded.clone(),
+            window,
+            waiting: std::sync::atomic::AtomicUsize::new(0),
+            most: std::sync::atomic::AtomicUsize::new(0),
+        }
+    }
+}
+
+impl Api for Overlapping {
+    fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
+        self.recorded.get(url)
+    }
+
+    fn get_with(
+        &self,
+        url: &Url,
+        headers: Extra,
+    ) -> impl Future<Output = Result<Response, Error>> + Send {
+        use std::sync::atomic::Ordering::SeqCst;
+        let answer = self.recorded.get_with(url, headers);
+        async move {
+            let waiting = self.waiting.fetch_add(1, SeqCst) + 1;
+            self.most.fetch_max(waiting, SeqCst);
+            tokio::task::yield_now().await;
+            self.waiting.fetch_sub(1, SeqCst);
+            answer.await
+        }
+    }
+
+    fn listing_window(&self, _url: &Url) -> usize {
+        self.window
+    }
+
+    fn most_files(&self) -> usize {
+        self.recorded.most_files()
+    }
+}
+
+/// what a walk of [`DATA`] over `recorded`, asking for up to `window` listings at once, ends
+/// in: its files, warnings, folders and rounded sizes, or its error, then the requests it made
+/// and the most that waited together.
+fn walked(recorded: &Recorded, select: &[Glob], window: usize) -> (String, Vec<String>, usize) {
+    let network = Overlapping::new(recorded, window);
+    let ended = match block_on(folder(DATA).resolve(&network, select)) {
+        Ok(listing) => {
+            let mut rounded: Vec<_> = listing.rounded.unwrap_or_default().into_iter().collect();
+            rounded.sort();
+            format!(
+                "{:?} {:?} {:?} {rounded:?}",
+                listing.files, listing.warnings, listing.within
+            )
+        }
+        Err(error) => format!("{:?}: {} ({:?})", error.kind, error.message, error.help),
+    };
+    let most = network.most.load(std::sync::atomic::Ordering::SeqCst);
+    (ended, network.recorded.asked(), most)
+}
+
+/// a tree of folders wider than a walk asks for at once, one of them deeper: a/ and b/ hold a
+/// file each, c/ a file and the folder c/d/, and e/ and f/ a file each.
+fn wide() -> Recorded {
+    let at = |path: &str| format!("{DATA}{path}");
+    Recorded::default()
+        .on(
+            DATA,
+            200,
+            nginx(DATA, &["top.csv", "a/", "b/", "c/", "e/", "f/"]),
+        )
+        .on(&at("a/"), 200, nginx(&at("a/"), &["a.csv"]))
+        .on(&at("b/"), 200, nginx(&at("b/"), &["b.csv"]))
+        .on(&at("c/"), 200, nginx(&at("c/"), &["c.csv", "d/"]))
+        .on(&at("c/d/"), 200, nginx(&at("c/d/"), &["d.csv"]))
+        .on(&at("e/"), 200, nginx(&at("e/"), &["e.csv"]))
+        .on(&at("f/"), 200, nginx(&at("f/"), &["f.csv"]))
+}
+
+/// asking for the listings of a folder's folders together, a walk reads their answers in the
+/// order it found the folders, so it ends with what it ends with asking for one at a time: the
+/// same files, warnings and sizes, or the same first error, as at a folder that is gone, one
+/// that is no listing, one that lists a folder above it again, or too many files. it asks for
+/// the same listings, but where it stops it may have asked for those after the one it stopped
+/// at already.
+#[test]
+fn a_walk_asking_for_listings_together_ends_as_one_asking_in_turn() {
+    let at = |path: &str| format!("{DATA}{path}");
+    let looped = Recorded::default()
+        .on(DATA, 200, nginx(DATA, &["a/", "b/", "loop/"]))
+        .on(&at("a/"), 200, nginx(&at("a/"), &["a.csv"]))
+        .on(&at("b/"), 200, nginx(&at("b/"), &["b.csv"]))
+        .on(
+            &at("loop/"),
+            200,
+            nginx(&at("loop/"), &["a/", "b/", "loop/"]),
+        );
+    let page = b"<html><head><title>Our lab</title></head><body><p>hi</p></body></html>".to_vec();
+    let sized = |folder: &str, rows: &[(&str, &str)]| {
+        let path = url(folder).path().to_owned();
+        let rows = rows
+            .iter()
+            .map(|(name, size)| {
+                format!("<a href=\"{name}\">{name}</a>  13-May-2024 16:01  {size}\n")
+            })
+            .collect::<Vec<_>>()
+            .concat();
+        format!("<html><head><title>Index of {path}</title></head><body><pre><a href=\"../\">../</a>\n{rows}</pre></body></html>").into_bytes()
+    };
+    let rounded = Recorded::default()
+        .on(
+            DATA,
+            200,
+            sized(DATA, &[("a.gz", "1.3M"), ("b.txt", "771"), ("sub/", "-")]),
+        )
+        .on(&at("sub/"), 200, sized(&at("sub/"), &[("c.gz", "2.4G")]));
+    let cases = [
+        ("a tree wider than the window", wide(), Vec::new(), true),
+        ("two folders deep", nested(), Vec::new(), true),
+        ("rounded sizes", rounded, Vec::new(), true),
+        (
+            "a pattern's folders",
+            wide(),
+            vec![Glob::new("c/**").unwrap()],
+            true,
+        ),
+        (
+            "a folder gone",
+            wide().answer(&at("b/"), 404, Vec::new()),
+            Vec::new(),
+            false,
+        ),
+        (
+            "a page that is no listing",
+            wide().answer(&at("b/"), 200, page.clone()),
+            Vec::new(),
+            false,
+        ),
+        (
+            "a folder gone and a page after it",
+            wide()
+                .answer(&at("b/"), 404, Vec::new())
+                .answer(&at("e/"), 200, page),
+            Vec::new(),
+            false,
+        ),
+        (
+            "links outside two folders",
+            wide()
+                .answer(&at("a/"), 200, nginx(&at("a/"), &["a.csv", "../../x.csv"]))
+                .answer(&at("e/"), 200, nginx(&at("e/"), &["e.csv", "/y.csv"])),
+            Vec::new(),
+            true,
+        ),
+        ("a folder listing one above it", looped, Vec::new(), false),
+        ("too many files", wide().most(5), Vec::new(), false),
+    ];
+    for (case, recorded, select, ends_alike) in cases {
+        let (one, one_asked, one_most) = walked(&recorded, &select, 1);
+        let (four, four_asked, _) = walked(&recorded, &select, 4);
+        assert_eq!(one.starts_with('['), ends_alike, "{case}: {one}");
+        assert_eq!(four, one, "{case}");
+        assert_eq!(one_most, 1, "{case}");
+        if ends_alike {
+            assert_eq!(four_asked, one_asked, "{case}");
+        } else {
+            assert!(four_asked.starts_with(&one_asked), "{case}: {four_asked:?}");
+        }
+    }
+}
+
+/// a walk with a window of four asks for the listings of four of the folders it found before
+/// any answer comes; with a window of two, two; and asking for one at a time, one.
+#[test]
+fn a_walk_asks_for_as_many_listings_at_once_as_its_window() {
+    for (window, most) in [(1, 1), (2, 2), (4, 4)] {
+        let (_, asked, waited) = walked(&wide(), &[], window);
+        assert_eq!(waited, most, "a window of {window}");
+        assert_eq!(asked.len(), 7, "a window of {window}");
+    }
+}

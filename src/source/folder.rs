@@ -9,7 +9,10 @@ use std::cmp::Reverse;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
+use std::future::Future;
 use std::hash::{Hash as _, Hasher as _};
+use std::pin::Pin;
+use std::task::Poll;
 
 use percent_encoding::percent_decode_str;
 use url::Url;
@@ -787,6 +790,10 @@ impl Folder {
             rounded: HashMap::new(),
         };
         walk.add("", &self.url, index)?;
+        let window = api.listing_window(&self.url);
+        if window > 1 {
+            self.list_together(api, &mut walk, window).await?;
+        }
         while let Some((path, url)) = walk.folders.pop_front() {
             let response = api.get_with(&url, LISTING).await?;
             self.answered(&response, &url, &path)?;
@@ -819,6 +826,52 @@ impl Folder {
             within,
             rounded: (!walk.rounded.is_empty()).then_some(walk.rounded),
         })
+    }
+
+    /// lists the folders `walk` queues, `window` at once, reading each answer in the order the
+    /// walk queued its folder, so the walk finds, warns of and stops at what it would asking for
+    /// one listing at a time.
+    async fn list_together(
+        &self,
+        api: &impl Api,
+        walk: &mut Walk<'_>,
+        window: usize,
+    ) -> Result<(), Error> {
+        let ask = |path: String, url: Url| Asked {
+            answer: None,
+            asking: Box::pin(async move {
+                let response = api.get_with(&url, LISTING).await;
+                (path, url, response)
+            }),
+        };
+        let mut asked = VecDeque::new();
+        loop {
+            while asked.len() < window
+                && let Some((path, url)) = walk.folders.pop_front()
+            {
+                asked.push_back(ask(path, url));
+            }
+            if asked.is_empty() {
+                return Ok(());
+            }
+            let (path, url, response) = std::future::poll_fn(|cx| {
+                for each in &mut asked {
+                    each.poll(cx);
+                }
+                match asked.front_mut().and_then(|first| first.answer.take()) {
+                    Some(answer) => {
+                        asked.pop_front();
+                        Poll::Ready(answer)
+                    }
+                    None => Poll::Pending,
+                }
+            })
+            .await;
+            let response = response?;
+            self.answered(&response, &url, &path)?;
+            let index = self.listed(&response.text(), &response, &url, &path)?;
+            walk.add(&path, &url, index)?;
+        }
     }
 
     /// refuses the answer to the listing of the folder at `path`, the top one for an empty path,
@@ -988,6 +1041,23 @@ fn bucket_of(url: &Url) -> Option<&str> {
         path.next().filter(|_| path.next().is_some())
     })?;
     crate::net::s3::is_bucket(bucket).then_some(bucket)
+}
+
+/// a listing [`Folder::list_together`] asked for: the request, until its answer comes.
+struct Asked<F: Future> {
+    asking: Pin<Box<F>>,
+    answer: Option<F::Output>,
+}
+
+impl<F: Future> Asked<F> {
+    /// lets the request make progress, keeping its answer once it comes.
+    fn poll(&mut self, cx: &mut std::task::Context<'_>) {
+        if self.answer.is_none()
+            && let Poll::Ready(answer) = self.asking.as_mut().poll(cx)
+        {
+            self.answer = Some(answer);
+        }
+    }
 }
 
 /// a folder's walk: the files listed so far, the folders still to list, by path and link, and

@@ -674,6 +674,10 @@ impl<A: Api> Api for Scoped<'_, A> {
         self.api.most_files()
     }
 
+    fn listing_window(&self, url: &Url) -> usize {
+        self.api.listing_window(url)
+    }
+
     fn drive_refused<'b>(
         &'b self,
         id: &'b str,

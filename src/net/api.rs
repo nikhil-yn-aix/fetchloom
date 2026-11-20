@@ -85,6 +85,12 @@ pub(crate) trait Api: Sync {
         MOST_FILES
     }
 
+    /// how many listings a folder's walk may ask `url`'s host for at once.
+    fn listing_window(&self, url: &Url) -> usize {
+        let _ = url;
+        1
+    }
+
     /// tells the network that drive refused item `id` without a token, and asks whether drive's
     /// api may be asked about it with one. a network that sends no google credentials says no.
     fn drive_refused<'a>(
@@ -193,6 +199,12 @@ impl Response {
 impl Api for Net {
     fn most_files(&self) -> usize {
         self.most_files
+    }
+
+    /// as many as the host takes downloads at once.
+    fn listing_window(&self, url: &Url) -> usize {
+        let most = (self.rules.most_at_once)(&self.paced(url));
+        most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
     }
 
     async fn get(&self, url: &Url) -> Result<Response, Error> {

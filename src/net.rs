@@ -1749,6 +1749,34 @@ mod tests {
         assert_eq!(with_causes(&echoed), "could not connect: refused");
     }
 
+    /// a folder's walk asks a host for as many listings at once as the host takes downloads: the
+    /// run's limit to one host, or fewer where a source's rules let its host take fewer.
+    #[test]
+    fn a_walk_lists_as_many_folders_at_once_as_its_host_takes_downloads() {
+        use crate::net::Api as _;
+        let net = |host_jobs: usize| {
+            Net::new(
+                Options {
+                    offline: Offline::No,
+                    jobs: 8,
+                    credentials: Vec::new(),
+                    split: Splitting::Never,
+                },
+                Arc::default(),
+                Arc::default(),
+                Arc::new(|_| {}),
+            )
+            .with_host_jobs(host_jobs)
+            .with_rules(crate::source::rules())
+        };
+        let folder = Url::parse("https://example.org/data/").unwrap();
+        assert_eq!(net(HOST_JOBS).listing_window(&folder), 4);
+        assert_eq!(net(2).listing_window(&folder), 2);
+        assert_eq!(net(16).listing_window(&folder), 16);
+        let one_at_once = Url::parse("https://api.semanticscholar.org/datasets/v1/").unwrap();
+        assert_eq!(net(HOST_JOBS).listing_window(&one_at_once), 1);
+    }
+
     #[test]
     fn request_slots_are_shared_across_paths_and_ports_of_a_host() {
         for (jobs, host_jobs) in [(1, 4), (8, 4), (32, 16)] {

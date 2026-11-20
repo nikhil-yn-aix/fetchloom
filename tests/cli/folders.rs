@@ -1467,3 +1467,66 @@ fn an_add_in_a_private_cache_asks_with_its_own_record() -> Result {
     assert!(lock.contains(&sha256_hex(IRIS)), "{lock}");
     Ok(())
 }
+
+/// a folder's walk asks for the listings of the folders it found together, as many as its host
+/// takes downloads: a server that answers none of three folders' listings before all three were
+/// asked answers them all. the dry run and the add then plan and pin what they do with one
+/// download at a time to the host, which asks for one listing at a time.
+#[test]
+fn listings_asked_together_add_as_listings_asked_in_turn() -> Result {
+    let server = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            nginx("/data/", &["iris.csv", "a/", "b/", "c/"]),
+        ),
+        ("/data/a/".to_owned(), nginx("/data/a/", &["tips.csv"])),
+        ("/data/b/".to_owned(), nginx("/data/b/", &["new.csv"])),
+        ("/data/c/".to_owned(), nginx("/data/c/", &["iris.csv"])),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/a/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+        ("/data/b/new.csv".to_owned(), file(NEW, "\"n1\"")),
+        ("/data/c/iris.csv".to_owned(), file(IRIS, "\"i2\"")),
+    ])?;
+    let folder = format!("{}/data/", server.url);
+    let mut arms = Vec::new();
+    for host_jobs in ["1", "4"] {
+        if host_jobs == "4" {
+            server.together(&["/data/a/", "/data/b/", "/data/c/"].map(str::to_owned));
+        }
+        let sandbox = Sandbox::new()?;
+        let dry = sandbox
+            .command(&["--json", "add", &folder, "--dry-run"])
+            .env("FETCHLOOM_HOST_JOBS", host_jobs)
+            .output()?;
+        assert_eq!(
+            dry.status.code(),
+            Some(0),
+            "{host_jobs}: {}",
+            text(&dry.stderr)?
+        );
+        let added = sandbox
+            .command(&["add", &folder])
+            .env("FETCHLOOM_HOST_JOBS", host_jobs)
+            .output()?;
+        assert_eq!(
+            added.status.code(),
+            Some(0),
+            "{host_jobs}: {}",
+            text(&added.stderr)?
+        );
+        let lock = fs::read_to_string(sandbox.work().join("data.lock"))?;
+        let lock: Vec<String> = lock
+            .lines()
+            .filter(|line| !line.starts_with("locked = "))
+            .map(str::to_owned)
+            .collect();
+        arms.push((json(&dry)?["result"]["changes"].clone(), lock));
+    }
+    assert_eq!(arms[1], arms[0]);
+    assert!(
+        arms[0].1.iter().any(|line| line.contains("c/iris.csv")),
+        "{:?}",
+        arms[0].1
+    );
+    Ok(())
+}
