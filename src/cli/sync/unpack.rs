@@ -401,10 +401,11 @@ impl Loop<'_> {
     fn tell_unportable(&self, manifest: &Manifest, locked: &Locked) {
         const SHOWN: usize = 3;
         let members = |archive: &Archive<'_>| archive.recorded(&self.cache);
-        let paths = plan::unportable(manifest, locked, &members);
-        if paths.is_empty() {
+        let unportable = plan::unportable(manifest, locked, &members);
+        if unportable.is_empty() {
             return;
         }
+        let paths: Vec<&str> = unportable.iter().map(|(path, _)| path.as_str()).collect();
         let listed = units::some_of(&paths, SHOWN);
         let name = &locked.name;
         let said = match paths.len() {
@@ -416,11 +417,23 @@ impl Loop<'_> {
                 units::grouped(count as u64)
             ),
         };
-        self.context.output.warn_with(
-            Warning::PlaceUnportable,
-            &said,
-            "a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to",
-        );
+        // windows refuses to unpack an archive holding one, which no members table changes
+        let unpacked = unportable.iter().any(|(_, unpacked)| *unpacked);
+        let listed_too = unportable.iter().any(|(_, unpacked)| !*unpacked);
+        let help = match (listed_too, unpacked) {
+            (true, false) => {
+                "a teammate on windows cannot place them; leave them out with exclude in data.toml if one needs to"
+            }
+            (false, _) => {
+                "a teammate on windows cannot unpack the archive that holds them; keep it packed with extract = false in data.toml if one needs to"
+            }
+            (true, true) => {
+                "a teammate on windows cannot place them: leave out the files the source lists with exclude in data.toml, and keep the archives that hold the rest packed with extract = false, if one needs to"
+            }
+        };
+        self.context
+            .output
+            .warn_with(Warning::PlaceUnportable, &said, help);
     }
 
     /// the archives `placing` puts in the data folder that stay packed, with dataset and why: kept
