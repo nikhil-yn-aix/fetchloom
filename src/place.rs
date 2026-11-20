@@ -1435,7 +1435,7 @@ pub(crate) fn run_flushing_until_failure<T: Sync, R: Send, E: Send>(
 
 /// how many threads flush `items` files that each flush on their own.
 fn flushers(items: usize, cap: Threads) -> usize {
-    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let threads = crate::threads::available_parallelism().map_or(1, NonZero::get);
     cap.limit(threads.min(FLUSHERS).min(items))
 }
 
@@ -1493,7 +1493,7 @@ pub(crate) fn run_hashes_until_failure<T: Sync, R: Send, E: Send>(
     cap: Threads,
     job: impl Fn(&T) -> Result<R, E> + Sync,
 ) -> Vec<Option<Result<R, E>>> {
-    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     run_until_failure(
         items,
         hash_workers(items.len(), bytes, processors, cap),

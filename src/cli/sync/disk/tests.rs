@@ -193,7 +193,7 @@ fn helpers_join_a_walk_at_its_first_large_folder() {
     let started = usize::MAX - crate::threads::spawns_left().unwrap();
     drop(counting);
     assert_eq!(walked, by_paths);
-    let cores = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
+    let cores = crate::threads::available_parallelism().map_or(1, std::num::NonZero::get);
     assert_eq!(started > 0, cores > 1, "{started} helpers on {cores} cores");
 }
 

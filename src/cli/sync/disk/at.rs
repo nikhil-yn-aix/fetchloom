@@ -192,7 +192,7 @@ pub(super) fn walk(
     scanned: &mut Scanned,
 ) -> bool {
     let most = threads.limit(
-        std::thread::available_parallelism()
+        crate::threads::available_parallelism()
             .map_or(1, std::num::NonZero::get)
             .min(HELPERS),
     );

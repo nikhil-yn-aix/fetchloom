@@ -2580,7 +2580,7 @@ fn placing_into_btrfs_takes_a_few_threads() {
     assert_eq!(placing_threads(any, Filesystem::Btrfs).limit(2), 2);
 
     let (folder, object) = cache(true);
-    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     // the first file goes alone on the calling thread, before any worker starts
     let caller = std::thread::current().id();
     for (filesystem, sync) in [
@@ -2704,7 +2704,7 @@ fn a_few_copies_flushed_alone_go_on_threads() {
     use std::sync::Mutex;
 
     let (folder, object) = cache(true);
-    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
     let runs = [true, false].into_iter().flat_map(|sync| {
         [1, 60, MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1].map(|files| (sync, files))
     });
