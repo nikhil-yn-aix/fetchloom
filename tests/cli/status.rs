@@ -101,6 +101,86 @@ fn status_writes_a_lists_rows_together() -> Result {
     Ok(())
 }
 
+/// a run's exit code, what it showed and what it said on stderr.
+type Shown = (Option<i32>, String, String);
+
+/// a settled status whose data folder lists no more files than it records, which it answers
+/// without looking for others, answers as when the folder also holds a file the system made,
+/// which is no difference and has it look: with nothing else, with a person's file in a dataset's
+/// folder, with a changed copy sync kept, and with a file missing beside one extra. a person's
+/// file and a changed copy are still found.
+#[test]
+fn a_settled_status_answers_alike_with_only_its_recorded_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"i\"")),
+        ("/files/b.csv".to_owned(), file(b"b\n", "\"b\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/files/iris.csv", source.url)])?)?;
+    ok(&sandbox.run(&["add", &format!("{}/files/b.csv", source.url)])?)?;
+    let work = sandbox.work();
+    let system = work.join("data/iris/.DS_Store");
+    let answers = || -> Result<Vec<Shown>> {
+        let mut runs = Vec::new();
+        for args in [&["status"][..], &["--json", "status"]] {
+            let output = sandbox.run(args)?;
+            let shown = if args.contains(&"--json") {
+                let mut document = json(&output)?;
+                document["work"]["elapsed_ms"] = serde_json::Value::Null;
+                document.to_string()
+            } else {
+                text(&output.stdout)?
+            };
+            runs.push((output.status.code(), shown, text(&output.stderr)?));
+        }
+        Ok(runs)
+    };
+    let alike = |case: &str| -> Result<Vec<Shown>> {
+        let only = answers()?;
+        fs::write(&system, "made by the system\n")?;
+        let beside = answers()?;
+        fs::remove_file(&system)?;
+        assert_eq!(only, beside, "{case}");
+        Ok(only)
+    };
+    let found = |runs: &[Shown], kind: &str| -> Result<serde_json::Value> {
+        let document: serde_json::Value = serde_json::from_str(&runs[1].1)?;
+        Ok(document["result"][kind].clone())
+    };
+    let settled = alike("nothing extra")?;
+    assert_eq!(settled[0].0, Some(0));
+    assert_eq!(settled[0].1, "");
+    fs::write(work.join("data/b/notes.txt"), "mine\n")?;
+    let yours = alike("a person's file")?;
+    assert_eq!(
+        found(&yours, "yours")?,
+        serde_json::json!(["data/b/notes.txt"])
+    );
+    fs::write(work.join("data/b/b.csv.changed"), "theirs\n")?;
+    let kept = alike("a changed copy")?;
+    assert_eq!(
+        found(&kept, "extra")?,
+        serde_json::json!(["data/b/b.csv.changed"])
+    );
+    assert!(
+        kept[0].1.contains("Extra data/b/b.csv.changed"),
+        "{}",
+        kept[0].1
+    );
+    fs::remove_file(work.join("data/b/notes.txt"))?;
+    fs::remove_file(work.join("data/b/b.csv.changed"))?;
+    assert_eq!(alike("nothing extra again")?, settled);
+    delete(&work.join("data/b/b.csv"))?;
+    fs::write(work.join("data/b/notes.txt"), "mine\n")?;
+    let missing = alike("one missing beside one extra")?;
+    assert_eq!(
+        found(&missing, "missing")?,
+        serde_json::json!(["data/b/b.csv"])
+    );
+    Ok(())
+}
+
 /// the files finder, a mac on another disk and explorer make in a data folder are no difference,
 /// a person's own file there is theirs, kept, which json names, and a folder sync or remove leaves
 /// holding only the system's files goes, taking them with it.

@@ -725,9 +725,7 @@ fn check(
         status.hashed_only = survey.verify(&project.root, &Scope::All, Some(output))?;
     }
     if place::untouched(project, &manifest, &survey, &seen, false, &Scope::All)?.is_some() {
-        let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
-        status.extra = extra(&survey, &recorded, &manifest);
-        sort_unplaced(&mut status, &survey, &manifest, &recorded);
+        settled_extra(&mut status, &survey, &manifest);
         return Ok((status, manifest, lock_text));
     }
     let planned = planned(
@@ -1053,6 +1051,19 @@ fn sort_unplaced(
     status.kept_copies = kept_copies(&status.extra, wanted);
     status.set_aside = set_aside(&status.extra, survey);
     sort_extra(status, &plan::Owned::of(manifest));
+}
+
+/// sorts into `status` the files a settled project's data folder holds that no record claims, as
+/// sync finds them.
+fn settled_extra(status: &mut Status, survey: &Survey, manifest: &Manifest) {
+    // every record is listed as recorded, so a listing of as many files holds no other one,
+    // and with nothing extra, sorting it changes nothing
+    if survey.disk.len() == survey.state.files.len() {
+        return;
+    }
+    let recorded: HashSet<&str> = survey.state.files.keys().map(String::as_str).collect();
+    status.extra = extra(survey, &recorded, manifest);
+    sort_unplaced(status, survey, manifest, &recorded);
 }
 
 /// leaves in `extra` only the files fetchloom did not place that count as differences: a changed
