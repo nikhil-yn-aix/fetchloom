@@ -983,44 +983,51 @@ fn a_large_import_is_counted_with_its_thousands_apart() -> Result {
     Ok(())
 }
 
-/// an import of more than 64 files, which waits for one flush, takes as many workers as their
-/// bytes repay, as its trace shows, and of two files it cannot read tells the first in the files'
-/// order and pins nothing.
+/// an import of files it cannot read tells the first of them in the files' order and pins nothing,
+/// whether it is small, its files flushed one by one, on linux a few at once, or larger, waiting
+/// for one flush on as many workers as its bytes repay, a way its trace shows.
 #[cfg(unix)]
 #[test]
-fn a_large_import_tells_its_first_unreadable_file() -> Result {
+fn an_import_tells_its_first_unreadable_file() -> Result {
     use std::os::unix::fs::PermissionsExt as _;
     if rustix::process::geteuid().is_root() {
         return skipped("unprivileged", "root ignores file permissions");
     }
-    let sandbox = Sandbox::new()?;
-    let folder = sandbox.folder("rows")?;
     // 80 files of 512 KiB are 40 MiB, enough bytes for several workers where their count asks one
-    for index in 0..80 {
-        let mut row = format!("{index}\n").into_bytes();
-        row.resize(512 << 10, b'x');
-        fs::write(folder.join(format!("r{index:02}.csv")), row)?;
+    for (files, size) in [(20, 0), (80, 512 << 10)] {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("rows")?;
+        for index in 0..files {
+            let mut row = format!("{index}\n").into_bytes();
+            row.resize(row.len().max(size), b'x');
+            fs::write(folder.join(format!("r{index:02}.csv")), row)?;
+        }
+        let locked = ["r05.csv", "r13.csv"];
+        for name in locked {
+            fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o000))?;
+        }
+        let trace = sandbox.work().join("trace.json");
+        let output = sandbox
+            .command(&["add", "../rows"])
+            .env("FETCHLOOM_TRACE", &trace)
+            .output()?;
+        for name in locked {
+            fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o644))?;
+        }
+        let stderr = text(&output.stderr)?;
+        assert_ne!(output.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.contains("r05.csv") && !stderr.contains("r13.csv"),
+            "{stderr}"
+        );
+        assert!(!sandbox.work().join("data.lock").exists(), "{stderr}");
+        let spans = fs::read_to_string(&trace)?;
+        assert_eq!(
+            spans.contains("\"name\":\"import_by_bytes\""),
+            files > 64,
+            "{files}"
+        );
     }
-    let locked = ["r05.csv", "r13.csv"];
-    for name in locked {
-        fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o000))?;
-    }
-    let trace = sandbox.work().join("trace.json");
-    let output = sandbox
-        .command(&["add", "../rows"])
-        .env("FETCHLOOM_TRACE", &trace)
-        .output()?;
-    for name in locked {
-        fs::set_permissions(folder.join(name), fs::Permissions::from_mode(0o644))?;
-    }
-    let stderr = text(&output.stderr)?;
-    assert_ne!(output.status.code(), Some(0), "{stderr}");
-    assert!(
-        stderr.contains("r05.csv") && !stderr.contains("r13.csv"),
-        "{stderr}"
-    );
-    assert!(!sandbox.work().join("data.lock").exists(), "{stderr}");
-    assert!(fs::read_to_string(&trace)?.contains("\"name\":\"import_by_bytes\""));
     Ok(())
 }
 

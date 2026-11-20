@@ -733,8 +733,11 @@ pub(super) fn write(
     planned: &[(String, bool)],
     contents: &BTreeMap<String, Content>,
 ) -> (bool, Vec<(String, bool)>) {
+    // on linux new markers are written first and flushed together, each before its name
+    let together = cfg!(target_os = "linux");
     let mut changed = false;
     let mut told = Vec::new();
+    let mut begun = Vec::new();
     for (folder, there) in planned {
         let before = state.markers.get(folder).cloned();
         let Some(text) = text_of(contents, folder) else {
@@ -744,30 +747,119 @@ pub(super) fn write(
             changed |= forget(state, folder);
             continue;
         };
+        // a rewrite checks the marker is still fetchloom's just before its own flush and name, so
+        // a person's edit meanwhile stays: the new markers waiting are named first
+        if *there && !begun.is_empty() {
+            changed |= name_flushed(placer, state, std::mem::take(&mut begun), &mut told);
+        }
         let named = is_named(text);
         let was_named = *there && held(root, placer, folder).is_some_and(|held| is_named(&held));
-        match put(root, placer, state, folder, text, *there) {
-            Ok(Put::Written) => {
-                if !there || named != was_named {
-                    told.push((folder.clone(), named));
-                }
-                note(state, folder, text);
+        let mut step = begin(root, placer, state, folder, text, *there);
+        let marker = Marker {
+            folder,
+            there: *there,
+            text,
+            named,
+            was_named,
+            before,
+        };
+        if together && !*there {
+            begun.push((marker, step));
+            if begun.len() == TOGETHER {
+                changed |= name_flushed(placer, state, std::mem::take(&mut begun), &mut told);
             }
-            Ok(Put::Held) => note(state, folder, text),
+            continue;
+        }
+        if let Ok(Begun::Unflushed(written)) = &step
+            && let Err(err) = placer.flush_new(&written.file)
+        {
+            step = Err(written.unwritten(placer, err));
+        }
+        let put = finish(placer, step);
+        changed |= marker.settle(state, put, &mut told);
+    }
+    if !begun.is_empty() {
+        changed |= name_flushed(placer, state, begun, &mut told);
+    }
+    (changed, told)
+}
+
+/// the most new markers [`write`] holds open at once on linux, written and waiting for their
+/// flush. a rewrite of fetchloom's own never waits among them.
+const TOGETHER: usize = 64;
+
+/// flushes the new markers `begun` wrote at once, then names each flushed one in order and settles
+/// it as [`write`] does. says whether the state's record of any changed.
+fn name_flushed(
+    placer: &Placer,
+    state: &mut State,
+    begun: Vec<(Marker<'_>, io::Result<Begun>)>,
+    told: &mut Vec<(String, bool)>,
+) -> bool {
+    // each new marker's bytes are on disk before it takes its name, as when they flush one by one
+    let files: Vec<Option<&std::fs::File>> = begun
+        .iter()
+        .map(|(_, step)| match step {
+            Ok(Begun::Unflushed(written)) => Some(&written.file),
+            _ => None,
+        })
+        .collect();
+    let flushed = place::run_flushing(&files, placer.threads(), |file| {
+        file.map_or(Ok(()), |file| placer.flush_new(file))
+    });
+    let mut changed = false;
+    for ((marker, step), flushed) in begun.into_iter().zip(flushed) {
+        let step = match (step, flushed) {
+            (Ok(Begun::Unflushed(written)), Err(err)) => Err(written.unwritten(placer, err)),
+            (step, _) => step,
+        };
+        let put = finish(placer, step);
+        changed |= marker.settle(state, put, told);
+    }
+    changed
+}
+
+/// a marker [`write`] is to write, with what it knew of it before.
+struct Marker<'p> {
+    folder: &'p String,
+    there: bool,
+    text: &'p [u8],
+    named: bool,
+    was_named: bool,
+    before: Option<String>,
+}
+
+impl Marker<'_> {
+    /// records in `state` what writing the marker did, and in `told` whether a person hears of it.
+    /// says whether the state's record of it changed.
+    fn settle(
+        self,
+        state: &mut State,
+        put: io::Result<Put>,
+        told: &mut Vec<(String, bool)>,
+    ) -> bool {
+        let folder = self.folder;
+        match put {
+            Ok(Put::Written) => {
+                if !self.there || self.named != self.was_named {
+                    told.push((folder.clone(), self.named));
+                }
+                note(state, folder, self.text);
+            }
+            Ok(Put::Held) => note(state, folder, self.text),
             Ok(Put::Theirs) => {
                 forget(state, folder);
             }
             Err(err) => {
                 tracing::debug!(%folder, %err, "could not write the folder's .gitignore");
                 // a marker that could not be rewritten stays fetchloom's, as it was
-                if !there {
+                if !self.there {
                     forget(state, folder);
                 }
             }
         }
-        changed |= state.markers.get(folder) != before.as_ref();
+        state.markers.get(folder) != self.before.as_ref()
     }
-    (changed, told)
 }
 
 /// what [`put`] found at a marker's path.
@@ -780,33 +872,78 @@ enum Put {
     Theirs,
 }
 
-/// writes `text` under a hidden name beside the marker of `folder` and flushes it before it takes
+/// how far [`begin`] took a marker: no further, or to its new text written under a hidden name.
+enum Begun {
+    Done(Put),
+    Unflushed(Written),
+}
+
+/// a marker's new text written under a hidden name beside it, not flushed yet.
+struct Written {
+    hidden: std::path::PathBuf,
+    file: std::fs::File,
+    marker: std::path::PathBuf,
+    there: bool,
+}
+
+impl Written {
+    /// deletes the hidden file, which never takes the marker's name, and gives back `err`.
+    fn unwritten(&self, placer: &Placer, err: io::Error) -> io::Error {
+        if let Err(err) = placer.delete_file(&self.hidden) {
+            tracing::debug!(%err, "could not delete an unfinished .gitignore");
+        }
+        err
+    }
+}
+
+/// writes `text` under a hidden name beside the marker of `folder`, to be flushed before it takes
 /// the marker's name: over nothing when fetchloom's own does not stand `there`, so a file someone
 /// made meanwhile stays, else over fetchloom's own while it holds what the state records.
-fn put(
+fn begin(
     root: &Path,
     placer: &mut Placer,
     state: &State,
     folder: &str,
     text: &[u8],
     there: bool,
-) -> io::Result<Put> {
+) -> io::Result<Begun> {
     let marker = native(root, &disk::marker(folder));
     if there {
         if holds(root, placer, folder, &digest::sha256(text).hex()) {
-            return Ok(Put::Held);
+            return Ok(Begun::Done(Put::Held));
         }
         let ours = state
             .markers
             .get(folder)
             .is_some_and(|wrote| holds(root, placer, folder, wrote));
         if !ours {
-            return Ok(Put::Theirs);
+            return Ok(Begun::Done(Put::Theirs));
         }
     } else {
         placer.check_folders(&marker, true)?;
     }
-    let hidden = written_beside(placer, &marker, text)?;
+    let (hidden, file) = written_beside(placer, &marker, text)?;
+    Ok(Begun::Unflushed(Written {
+        hidden,
+        file,
+        marker,
+        there,
+    }))
+}
+
+/// gives a marker [`begin`] wrote, flushed since, its name.
+fn finish(placer: &Placer, begun: io::Result<Begun>) -> io::Result<Put> {
+    let written = match begun? {
+        Begun::Done(put) => return Ok(put),
+        Begun::Unflushed(written) => written,
+    };
+    let Written {
+        hidden,
+        file,
+        marker,
+        there,
+    } = written;
+    drop(file);
     let named = if there {
         placer.rename_file(&hidden, &marker)
     } else {
@@ -815,21 +952,25 @@ fn put(
     if named.is_err()
         && let Err(err) = placer.delete_file(&hidden)
     {
-        tracing::debug!(%folder, %err, "could not delete an unnamed .gitignore");
+        tracing::debug!(%err, "could not delete an unnamed .gitignore");
     }
     named.map(|()| Put::Written)
 }
 
-/// `text` written and flushed in a new file under a hidden name beside `marker`, readable as the
-/// person's own files are, so git under another account reads it too.
-fn written_beside(placer: &Placer, marker: &Path, text: &[u8]) -> io::Result<std::path::PathBuf> {
+/// `text` written in a new file under a hidden name beside `marker`, readable as the person's own
+/// files are, so git under another account reads it too; the file is flushed by its caller.
+fn written_beside(
+    placer: &Placer,
+    marker: &Path,
+    text: &[u8],
+) -> io::Result<(std::path::PathBuf, std::fs::File)> {
     let hidden = marker.with_file_name(place::copy_temporary_name());
     let filled = placer.create_shared_file(&hidden).and_then(|mut file| {
         file.write_all(text)?;
-        file.sync_all()
+        Ok(file)
     });
     match filled {
-        Ok(()) => Ok(hidden),
+        Ok(file) => Ok((hidden, file)),
         Err(err) => {
             if let Err(err) = placer.delete_file(&hidden) {
                 tracing::debug!(%err, "could not delete an unfinished .gitignore");
@@ -1658,5 +1799,175 @@ mod tests {
             found(taken_back, "data/iris", false),
             Some((1, "/data/*".to_owned()))
         );
+    }
+
+    /// a rewrite of fetchloom's own marker is checked to be fetchloom's just before its own flush
+    /// and name, after the new markers waiting are named: a person's edit of the second marker
+    /// while the first one flushes stays theirs, and its record goes.
+    #[test]
+    fn a_marker_edited_while_another_flushes_stays_the_persons() {
+        use std::collections::BTreeMap;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::{Content, note, write};
+        use crate::threads::Threads;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let folders = ["data/d0".to_owned(), "data/d1".to_owned()];
+        let mut state = State::default();
+        for folder in &folders {
+            std::fs::create_dir_all(root.join(folder)).unwrap();
+            std::fs::write(root.join(folder).join(".gitignore"), TEXT).unwrap();
+            note(&mut state, folder, TEXT);
+        }
+        let edited = root.join(&folders[1]).join(".gitignore");
+        let editing = edited.clone();
+        let flushed = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&flushed);
+        let mut placer = Placer::new(&root.join("data"))
+            .with_threads(Threads::default().at_most(1))
+            .observing_flushes(move |_| {
+                if counted.fetch_add(1, Ordering::SeqCst) == 0 {
+                    std::fs::write(&editing, b"mine\n").unwrap();
+                }
+            });
+        let newer = named_for(TEXT.to_vec(), Some("0123abcd"));
+        let planned: Vec<(String, bool)> = folders
+            .iter()
+            .map(|folder| (folder.clone(), true))
+            .collect();
+        let contents: BTreeMap<String, Content> = folders
+            .iter()
+            .map(|folder| (folder.clone(), Content::Text(newer.clone())))
+            .collect();
+        let (changed, told) = write(root, &mut placer, &mut state, &planned, &contents);
+        assert!(changed);
+        assert_eq!(told, Vec::<(String, bool)>::new());
+        assert_eq!(
+            std::fs::read(root.join(&folders[0]).join(".gitignore")).unwrap(),
+            newer
+        );
+        assert_eq!(std::fs::read(&edited).unwrap(), b"mine\n");
+        assert_eq!(flushed.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            state.markers.get(&folders[0]),
+            Some(&digest::sha256(&newer).hex())
+        );
+        assert!(!state.markers.contains_key(&folders[1]));
+        for folder in &folders {
+            let names: Vec<_> = std::fs::read_dir(root.join(folder))
+                .unwrap()
+                .map(|entry| entry.unwrap().file_name())
+                .collect();
+            assert_eq!(names, [".gitignore"], "{folder}");
+        }
+    }
+
+    /// on linux the new markers of many folders flush on a few threads at once, each while it still
+    /// has its hidden name and before any of the up to 64 written with it takes its own: a person's
+    /// file where a marker would go is kept, a file in a folder's place refused, the rest named
+    /// and recorded, and no hidden file left.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_markers_flush_together_before_their_names() {
+        use std::collections::BTreeMap;
+        use std::os::fd::AsRawFd;
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use super::{Content, TOGETHER, write};
+
+        for count in [1, 3, 20, 50, 65] {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().to_path_buf();
+            std::fs::create_dir(root.join("data")).unwrap();
+            let folders: Vec<String> = (0..count).map(|at| format!("data/d{at:03}")).collect();
+            let markers: Vec<std::path::PathBuf> = folders
+                .iter()
+                .map(|folder| root.join(folder).join(".gitignore"))
+                .collect();
+            let flushed = Arc::new(AtomicUsize::new(0));
+            let counted = Arc::clone(&flushed);
+            let named_then = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let seen = Arc::clone(&named_then);
+            let watched = markers.clone();
+            let mut placer = Placer::new(&root.join("data")).observing_flushes(move |file| {
+                let at = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()));
+                let at = at.unwrap();
+                let name = at.file_name().unwrap().to_str().unwrap();
+                assert!(crate::place::is_copy_temporary(name), "{at:?}");
+                let named = watched
+                    .iter()
+                    .filter(|marker| std::fs::read(marker).is_ok_and(|held| held == TEXT))
+                    .count();
+                seen.lock().unwrap().push(named);
+                counted.fetch_add(1, Ordering::SeqCst);
+            });
+            // the person's own .gitignore where the second marker goes, and a file where the
+            // third folder goes: both stay as they are
+            if count > 1 {
+                std::fs::create_dir(root.join(&folders[1])).unwrap();
+                std::fs::write(&markers[1], "build/\n").unwrap();
+            }
+            if count > 2 {
+                std::fs::write(root.join(&folders[2]), "in the way\n").unwrap();
+            }
+            let planned: Vec<(String, bool)> = folders
+                .iter()
+                .map(|folder| (folder.clone(), false))
+                .collect();
+            let contents: BTreeMap<String, Content> = folders
+                .iter()
+                .map(|folder| (folder.clone(), Content::Text(TEXT.to_vec())))
+                .collect();
+            let mut state = State::default();
+            let (changed, told) = write(&root, &mut placer, &mut state, &planned, &contents);
+            assert!(changed);
+            // the second marker is written and flushed, then refused its name
+            let made = count - usize::from(count > 2);
+            assert_eq!(flushed.load(Ordering::SeqCst), made, "{count}");
+            // the markers of the first 64 folders all flush before any of them is named
+            let first = count.min(TOGETHER) - usize::from(count > 2);
+            let named_then = named_then.lock().unwrap();
+            assert!(
+                named_then[..first].iter().all(|named| *named == 0),
+                "{count}: {named_then:?}"
+            );
+            let written: Vec<&String> = folders
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| *at != 1 && *at != 2)
+                .map(|(_, folder)| folder)
+                .collect();
+            assert_eq!(
+                told,
+                written
+                    .iter()
+                    .map(|folder| ((*folder).clone(), false))
+                    .collect::<Vec<_>>()
+            );
+            let recorded: BTreeMap<String, String> = written
+                .iter()
+                .map(|folder| ((*folder).clone(), digest::sha256(TEXT).hex()))
+                .collect();
+            assert_eq!(state.markers, recorded);
+            for (at, folder) in folders.iter().enumerate() {
+                let folder = root.join(folder);
+                match at {
+                    1 => assert_eq!(std::fs::read(&markers[1]).unwrap(), b"build/\n"),
+                    2 => assert_eq!(std::fs::read(&folder).unwrap(), b"in the way\n"),
+                    _ => assert_eq!(std::fs::read(&markers[at]).unwrap(), TEXT),
+                }
+                if folder.is_dir() {
+                    let names: Vec<_> = std::fs::read_dir(&folder)
+                        .unwrap()
+                        .map(|entry| entry.unwrap().file_name())
+                        .collect();
+                    assert_eq!(names, [".gitignore"], "{}", folder.display());
+                }
+            }
+        }
     }
 }

@@ -37,6 +37,10 @@ const THREADS: usize = 8;
 /// the fewest items worth a thread of their own, since starting one costs more than a few calls.
 const PER_THREAD: usize = 64;
 
+/// the most flushes that wait on the disk at once on linux, for files flushed one at a time: two
+/// flushed 60 copies a quarter faster than one, and more threads cost a small run about 1 MiB each.
+const FLUSHERS: usize = 2;
+
 /// the most threads a sync's placement into btrfs takes, placing files or naming those that waited
 /// for its flush: each create, clone and rename there updates the same trees, and past a few
 /// threads placing took longer and more cpu.
@@ -120,6 +124,9 @@ pub(crate) struct Placer {
     /// what every clone does instead of asking the filesystem, as a disk that clones would.
     #[cfg(all(test, target_os = "linux"))]
     clone_with: Option<fn(&File, &File) -> io::Result<()>>,
+    /// what a test sees of each new file [`Placer::flush_new`] flushes, just before the flush.
+    #[cfg(test)]
+    flushing: Option<Box<Flushing>>,
     /// on linux 5.8 and later, the root's filesystem, opened before the first copy so one syncfs
     /// flushes every copy and reports a write-back that failed since. a flush per copy cost 33
     /// times the placing of 10,000 small copies.
@@ -133,6 +140,9 @@ pub(crate) struct Placer {
 
 #[cfg(test)]
 type Observation = dyn Fn(&Metadata) + Send + Sync;
+
+#[cfg(test)]
+type Flushing = dyn Fn(&File) + Send + Sync;
 
 #[cfg(test)]
 type Swap = Box<dyn FnOnce(&Path)>;
@@ -343,6 +353,8 @@ impl Placer {
             link_refusal: None,
             #[cfg(all(test, target_os = "linux"))]
             clone_with: None,
+            #[cfg(test)]
+            flushing: None,
             threads: Threads::default(),
             stop: Arc::default(),
             root,
@@ -371,7 +383,8 @@ impl Placer {
     }
 
     /// places with the thread counts measured for sync's placement, the one caller that asks: at
-    /// most [`BTRFS_THREADS`] on btrfs.
+    /// most [`BTRFS_THREADS`] on btrfs, and on linux a run of files that each flush on their own on
+    /// up to [`FLUSHERS`] threads.
     pub(crate) fn with_sync_threads(mut self) -> Placer {
         self.sync_threads = true;
         self
@@ -384,6 +397,37 @@ impl Placer {
     ) -> Self {
         self.observed = Some(Box::new(observed));
         self
+    }
+
+    /// the most threads the run lets this placer's work take.
+    pub(crate) fn threads(&self) -> Threads {
+        self.threads
+    }
+
+    /// sees each new file [`Placer::flush_new`] flushes, as the flush begins.
+    #[cfg(test)]
+    pub(crate) fn observing_flushes(
+        mut self,
+        seen: impl Fn(&File) + Send + Sync + 'static,
+    ) -> Self {
+        self.flushing = Some(Box::new(seen));
+        self
+    }
+
+    /// flushes `file`, a new file written under a hidden name, before it takes its own.
+    #[cfg_attr(
+        not(test),
+        expect(
+            clippy::unused_self,
+            reason = "tests see each flush through the placer"
+        )
+    )]
+    pub(crate) fn flush_new(&self, file: &File) -> io::Result<()> {
+        #[cfg(test)]
+        if let Some(seen) = &self.flushing {
+            seen(file);
+        }
+        file.sync_all()
     }
 
     pub(crate) fn with_stop(mut self, stop: Arc<Stop>) -> Placer {
@@ -511,8 +555,21 @@ impl Placer {
                     "placed the first file, the rest try the same methods"
                 );
             }
+            // on linux a put that flushes on its own waits on the disk far longer than a thread
+            // takes to start
+            let flushing = cfg!(target_os = "linux")
+                && this.sync_threads
+                && !batch
+                && placed
+                    .1
+                    .as_ref()
+                    .is_ok_and(|placed| flushes_alone(placed.method()));
             done.push(placed);
-            done.extend(run_all(rest, threads, put));
+            done.extend(if flushing {
+                run_flushing(rest, threads, put)
+            } else {
+                run_all(rest, threads, put)
+            });
         }
         let mut waiting = Vec::new();
         for (index, placed) in done {
@@ -1321,6 +1378,43 @@ pub(crate) fn run_all<T: Sync, R: Send>(
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
     run_work(items, workers(items.len(), cap), None, job)
+}
+
+/// runs `job` on every item as [`run_all`] does, for jobs that each wait on a flush of the disk,
+/// which repay a thread of their own from the second item.
+pub(crate) fn run_flushing<T: Sync, R: Send>(
+    items: &[T],
+    cap: Threads,
+    job: impl Fn(&T) -> R + Sync,
+) -> Vec<R> {
+    run_work(items, flushers(items.len(), cap), None, job)
+}
+
+/// runs `job` on every item as [`run_flushing`] does until one fails: no item past the first failure
+/// in the items' order starts, and every item before it finishes, so that failure is among the
+/// results, as when the items run in turn, with at most a few begun past it.
+pub(crate) fn run_flushing_until_failure<T: Sync, R: Send, E: Send>(
+    items: &[T],
+    cap: Threads,
+    job: impl Fn(&T) -> Result<R, E> + Sync,
+) -> Vec<Option<Result<R, E>>> {
+    run_until_failure(items, flushers(items.len(), cap), job)
+}
+
+/// how many threads flush `items` files that each flush on their own.
+fn flushers(items: usize, cap: Threads) -> usize {
+    let threads = std::thread::available_parallelism().map_or(1, NonZero::get);
+    cap.limit(threads.min(FLUSHERS).min(items))
+}
+
+/// whether a file placed by `method` outside a batch flushed on its own: a copy does, and on linux
+/// a clone, whose blocks a crash could otherwise lose.
+fn flushes_alone(method: Method) -> bool {
+    match method {
+        Method::Copy => true,
+        Method::Reflink => cfg!(target_os = "linux"),
+        Method::Hardlink => false,
+    }
 }
 
 /// runs `job` on every item in order on up to [`THREADS`] workers, one per `per` items, for

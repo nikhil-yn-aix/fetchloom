@@ -1519,9 +1519,15 @@ fn sealed(
         imported
     };
     // files that wait for one flush take as many workers as their bytes repay, as hashing does
-    // elsewhere; none past a failure starts and every one before it finishes, so the first
-    // failure in the files' order is the one told, as when they run in turn
-    let imported = if flush_each {
+    // elsewhere, and on linux files flushed one by one take a few, since each waits on the disk;
+    // none past a failure starts and every one before it finishes, so the first failure in the
+    // files' order is the one told, as when they run in turn
+    let imported = if !flush_each {
+        let _span = tracing::debug_span!("import_by_bytes", files = found.len()).entered();
+        place::run_hashes_until_failure(found, walked.bytes(), context.threads, import)
+    } else if cfg!(target_os = "linux") {
+        place::run_flushing_until_failure(found, context.threads, import)
+    } else {
         place::run_all(found, context.threads, |file| {
             if failed.load(Ordering::Relaxed) {
                 return None;
@@ -1532,9 +1538,6 @@ fn sealed(
             }
             Some(imported)
         })
-    } else {
-        let _span = tracing::debug_span!("import_by_bytes", files = found.len()).entered();
-        place::run_hashes_until_failure(found, walked.bytes(), context.threads, import)
     };
     drop((bar, ticker));
     let mut sealed = Vec::with_capacity(found.len());

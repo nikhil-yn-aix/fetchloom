@@ -2374,15 +2374,15 @@ fn placing_into_btrfs_takes_a_few_threads() {
     }
 }
 
-/// jobs run until one fails stop as jobs run in turn do: every job before the first failure in
-/// their order runs, and it is the failure the results hold first. one worker starts no job past
-/// it; with more, those begun past it are the only extra work.
+/// jobs run until one fails, flushing or hashing, stop as jobs run in turn do: every job before the
+/// first failure in their order runs, and it is the failure the results hold first. one worker
+/// starts no job past it; with more, those begun past it are the only extra work.
 #[test]
 fn jobs_stop_at_the_first_failure_in_order() {
     use std::sync::Mutex;
 
     let items: Vec<usize> = (0..64).collect();
-    for workers in [1, 2, 8] {
+    for (workers, hashing) in [1, 2, 8].into_iter().flat_map(|n| [(n, false), (n, true)]) {
         for failing in [vec![0], vec![5], vec![5, 9], vec![9, 5], vec![63], vec![]] {
             let ran = Mutex::new(Vec::new());
             let job = |&item: &usize| {
@@ -2395,7 +2395,11 @@ fn jobs_stop_at_the_first_failure_in_order() {
             };
             let cap = Threads::default().at_most(workers);
             // so many bytes that the hashing runner takes every worker the cap allows
-            let results = run_hashes_until_failure(&items, 1 << 30, cap, job);
+            let results = if hashing {
+                run_hashes_until_failure(&items, 1 << 30, cap, job)
+            } else {
+                run_flushing_until_failure(&items, cap, job)
+            };
             let first = failing.iter().min().copied();
             let told = results.iter().find_map(|result| match result {
                 Some(Err(item)) => Some(*item),
@@ -2420,5 +2424,63 @@ fn jobs_stop_at_the_first_failure_in_order() {
                 );
             }
         }
+    }
+}
+
+/// on linux a sync's placement of a few copies, each flushed on its own, places them on several
+/// threads, each whole under its own name with no hidden copy left; a larger one, which waits for
+/// one flush of the filesystem, keeps its one thread, as does a placer that did not ask for sync's
+/// counts, as `get`'s does not.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_few_copies_flushed_alone_go_on_threads() {
+    use crate::volume::MOST_FLUSHED_ALONE;
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+
+    let (folder, object) = cache(true);
+    let processors = std::thread::available_parallelism().map_or(1, NonZero::get);
+    let runs = [true, false].into_iter().flat_map(|sync| {
+        [1, 60, MOST_FLUSHED_ALONE, MOST_FLUSHED_ALONE + 1].map(|files| (sync, files))
+    });
+    for (sync, files) in runs {
+        let root = folder.path().join(format!("data-{files}-{sync}"));
+        let workers = Arc::new(Mutex::new(HashSet::new()));
+        let seen = Arc::clone(&workers);
+        let placer = Placer::starting_at(root.clone(), Method::Copy, None).observing(move |_| {
+            seen.lock().unwrap().insert(std::thread::current().id());
+        });
+        let mut placer = if sync {
+            placer.with_sync_threads()
+        } else {
+            placer
+        };
+        let destinations: Vec<PathBuf> = (0..files)
+            .map(|index| root.join(format!("{index}.csv")))
+            .collect();
+        let results = placer.place_all(
+            files,
+            |index| Order {
+                object: object.clone(),
+                destination: destinations[index].clone(),
+                writable: false,
+                size: CONTENTS.len() as u64,
+            },
+            Metadata::len,
+        );
+        for result in results {
+            assert_eq!(result.unwrap(), (Method::Copy, CONTENTS.len() as u64));
+        }
+        for destination in &destinations {
+            assert_eq!(fs::read_to_string(destination).unwrap(), CONTENTS);
+        }
+        assert_eq!(
+            fs::read_dir(&root).unwrap().count(),
+            files,
+            "a hidden copy was left"
+        );
+        let used = workers.lock().unwrap().len();
+        let spread = sync && processors > 1 && files > 1 && files <= MOST_FLUSHED_ALONE;
+        assert_eq!(used > 1, spread, "{files} {sync}: {used}");
     }
 }
