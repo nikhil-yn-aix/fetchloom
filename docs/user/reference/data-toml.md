@@ -94,7 +94,13 @@ error: datasets test and train would both place data/splits/README
   help: give datasets.test or datasets.train another path in data.toml
 ```
 
-sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced. a clash between a file the source lists beside an archive and a file inside it is resolved by leaving the one beside it out with the dataset's `exclude`, or the one inside with the archive's [members table](#files-inside-archives) while the archive keeps another file, or by keeping the archive packed with `extract = false`; two files of one archive that a disk ignoring case sees as one take the members table or `extract = false`. an add that meets such a clash is undone, so its help names `--exclude` and `--no-extract` instead.
+sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced. a clash between a file the source lists beside an archive and a file inside it is resolved by leaving the one beside it out with the dataset's `exclude`, or the one inside with the archive's [members table](#files-inside-archives) while the archive keeps another file, or by keeping the archive packed with `extract = false`; an add that meets such a clash is undone, so its help names `--exclude` and `--no-extract` instead. two files of one archive that a disk ignoring case sees as one, or that differ only in how their unicode is composed, stop the archive from unpacking at all, before a members table could leave one out, so only `extract = false`, or `--no-extract` for an add, keeps such an archive, packed:
+
+```text
+error: the archive holds "Data.csv" and "data.csv", which are one name on disks that ignore case
+  in case/case.zip
+  help: keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract
+```
 
 each placed file belongs to one dataset, so `remove` and sync delete only that dataset's unchanged files from a shared folder and leave the other datasets' files and your own.
 
