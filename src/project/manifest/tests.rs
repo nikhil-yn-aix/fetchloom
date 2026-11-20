@@ -1731,7 +1731,7 @@ fn cited_lines_read_as_a_map_of_them() {
     }
 }
 
-/// [`read_plain`] reads a data.toml only as [`Manifest::parse`] reads it: the data folder and each
+/// [`read_plain`] reads a data.toml only as the parser reads it: the data folder and each
 /// dataset's name and ref. tables `add` writes, some lines swapped for near misses, check it; what
 /// it declines goes to the parser.
 #[test]
@@ -1776,7 +1776,7 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
         if text.contains("required_version") {
             required_plain += 1;
         }
-        let whole = Manifest::parse(&text)
+        let whole = Manifest::parse_tree(text.strip_prefix('\u{feff}').unwrap_or(&text))
             .unwrap_or_else(|error| panic!("{text:?} read plain, but {}", error.message));
         assert_eq!(plain.data_dir, whole.data_dir, "{text:?}");
         let names = |manifest: &Manifest| manifest.datasets.keys().cloned().collect::<Vec<_>>();
@@ -1822,6 +1822,102 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     .unwrap();
     let plain = read_plain(&added).unwrap_or_else(|| panic!("{added:?} is not read plain"));
     assert_eq!(plain.datasets.keys().collect::<Vec<_>>(), ["iris", "paper"]);
+}
+
+/// refs whose links imply a select, besides [`PLAIN_LINES`], and lines of the kinds `add` writes
+/// but for a space no TOML parser reads as one, or a carriage return alone.
+const LIGHT_LINES: [&str; 3] = [
+    "ref = \"https://huggingface.co/datasets/HuggingFaceFW/fineweb/tree/main/sample/10BT\"",
+    "ref = \"https://huggingface.co/datasets/org/name/blob/main/data[1].csv\"",
+    "ref = \"https://dandiarchive.org/dandiset/000027/draft/files?location=sub-RAT123%2F\"",
+];
+const LIGHT_MISSES: [&str; 9] = [
+    "\u{a0}ref = \"zenodo:1\"",
+    "ref = \"zenodo:1\"\u{3000}",
+    "ref\u{a0}= \"zenodo:1\"",
+    "[datasets.iris]\u{2003}",
+    "\u{feff}",
+    "\u{2028}",
+    "ref = \"zenodo:1\"\rref = \"zenodo:2\"",
+    "# a note\r# another",
+    "ref = \"zenodo:1\"\r",
+];
+
+/// [`read_light`] reads a data.toml only into the manifest the parser gives, every field
+/// of every entry alike, the line each cites and the select its link implies included, and makes
+/// none of any other text: near misses, spaces of other kinds, lone carriage returns, a name
+/// twice, and a long text whose last line is of another kind, which the parser reads.
+#[test]
+fn a_light_read_is_the_parsers_read() {
+    let mut rng = fastrand::Rng::with_seed(5);
+    let (mut light, mut implied, mut declined) = (0, 0, 0);
+    let lines: Vec<&str> = PLAIN_LINES.into_iter().chain(LIGHT_LINES).collect();
+    let misses: Vec<&str> = NEAR_MISSES.into_iter().chain(LIGHT_MISSES).collect();
+    for round in 0..4_000 {
+        let mut text_lines: Vec<String> = Vec::new();
+        for _ in 0..rng.usize(0..5) {
+            text_lines.push(format!(
+                "[datasets.{}]",
+                PLAIN_NAMES[rng.usize(..PLAIN_NAMES.len())]
+            ));
+            for _ in 0..rng.usize(0..3) {
+                text_lines.push(lines[rng.usize(..lines.len())].to_owned());
+            }
+        }
+        if !text_lines.is_empty() && rng.bool() {
+            let at = rng.usize(..text_lines.len());
+            text_lines[at] = misses[rng.usize(..misses.len())].to_owned();
+        }
+        if round % 3 == 0 {
+            text_lines.insert(
+                0,
+                PLAIN_REQUIRED[rng.usize(..PLAIN_REQUIRED.len())].to_owned(),
+            );
+        }
+        let mut text = text_lines.join(if round % 2 == 0 { "\n" } else { "\r\n" });
+        if rng.bool() {
+            text.push('\n');
+        }
+        if round % 7 == 0 {
+            text.insert(0, '\u{feff}');
+        }
+        let stripped = text.strip_prefix('\u{feff}').unwrap_or(&text);
+        let whole = Manifest::parse_tree(stripped);
+        let Some(read) = read_light(stripped) else {
+            declined += usize::from(whole.is_ok());
+            continue;
+        };
+        let whole =
+            whole.unwrap_or_else(|error| panic!("{text:?} read light, but {}", error.message));
+        assert_eq!(format!("{read:#?}"), format!("{whole:#?}"), "{text:?}");
+        light += 1;
+        implied += read
+            .datasets
+            .values()
+            .filter(|entry| !entry.source.select.is_empty())
+            .count();
+    }
+    // a run that read nothing light, or declined only what the parser refuses, would prove less
+    assert!(light > 300, "only {light} texts read light");
+    assert!(implied > 30, "only {implied} implied selects");
+    assert!(declined > 100, "only {declined} parsed texts declined");
+    let long = (0..300).fold(String::new(), |mut long, at| {
+        let _ = write!(long, "[datasets.d{at:03}]\nref = \"zenodo:{at}\"\n\n");
+        long
+    });
+    assert!(read_light(&long).is_some());
+    for last in [
+        "select = [\"*.csv\"]\n",
+        "copy = true\n",
+        "[project]\ndata_dir = \"raw\"\n",
+        "# a note with a \u{85}\n",
+        "[datasets.d000]\nref = \"zenodo:0\"\n",
+    ] {
+        let text = format!("{long}{last}");
+        assert!(read_light(&text).is_none(), "{last:?}");
+        let parsed = Manifest::parse_tree(&text);
+        assert_eq!(parsed.is_ok(), !last.contains("d000"), "{last:?}");
+    }
 }
 
 /// an output's `at` names a folder from the project's top, as a pipeline writes it, and an output

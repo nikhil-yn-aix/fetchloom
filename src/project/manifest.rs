@@ -330,10 +330,20 @@ impl Manifest {
         })
     }
 
+    /// data.toml's `text` read: line by line, as [`read_light`] reads it, when it holds only what
+    /// `add` writes, else by the parser.
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
         #[cfg(test)]
         tests::reading();
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        if let Some(manifest) = read_light(text) {
+            return Ok(manifest);
+        }
+        Manifest::parse_tree(text)
+    }
+
+    /// data.toml's `text`, with no byte-order mark, read by the parser into its tree first.
+    fn parse_tree(text: &str) -> Result<Manifest, Error> {
         let document = Document::parse(text).map_err(|err| not_toml(text, &err))?;
         let root = document.as_table();
         let reader = Reader {
@@ -406,64 +416,31 @@ pub(crate) fn read_plain(text: &str) -> Option<Manifest> {
     let mut datasets = BTreeMap::new();
     let mut open: Option<(String, Option<String>)> = None;
     let mut required = false;
-    for line in text.split_inclusive('\n') {
-        // a carriage return ends a line only before a line feed
-        let line = line
-            .strip_suffix('\n')
-            .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line));
-        let line = line.trim_matches([' ', '\t']);
-        if line.is_empty() {
-            continue;
-        }
-        if line.starts_with('#') {
-            if line.contains(|c: char| c.is_control() && c != '\t') {
-                return None;
+    for line in plain_lines(text) {
+        match plain_line(line)? {
+            Plain::Nothing => {}
+            Plain::Table(name) => {
+                put_plain(&mut datasets, open.take())?;
+                if datasets.contains_key(name) {
+                    return None;
+                }
+                open = Some((name.to_owned(), None));
             }
-            continue;
-        }
-        if let Some(name) = line
-            .strip_prefix("[datasets.")
-            .and_then(|rest| rest.strip_suffix(']'))
-        {
-            put_plain(&mut datasets, open.take())?;
-            // a bare key of valid name characters, so no quote, dot or space can nest a table
-            let bare = name
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
-            if !bare || name::dataset_name_problem(name).is_some() || datasets.contains_key(name) {
-                return None;
+            Plain::Ref(value) => {
+                let (_, reference) = open.as_mut()?;
+                if reference.is_some() {
+                    return None;
+                }
+                *reference = Some(value.to_owned());
             }
-            open = Some((name.to_owned(), None));
-            continue;
-        }
-        let Some((_, reference)) = open.as_mut() else {
             // above the tables, only a range the parser lets this fetchloom through
-            let value = line
-                .strip_prefix(required::KEY)
-                .and_then(|rest| rest.strip_prefix(" = \""))
-                .and_then(|rest| rest.strip_suffix('"'))?;
-            if required || value.contains(['"', '\\']) || value.contains(char::is_control) {
-                return None;
+            Plain::Required(range) => {
+                if open.is_some() || required || !allowed(range) {
+                    return None;
+                }
+                required = true;
             }
-            let range = required::Range::parse(value).ok()?;
-            if range.verdict(required::RUNNING) != required::Verdict::Allowed {
-                return None;
-            }
-            required = true;
-            continue;
-        };
-        let value = line
-            .strip_prefix("ref = \"")
-            .and_then(|rest| rest.strip_suffix('"'))?;
-        // no escape or quote, so the string is its text
-        if reference.is_some() || value.contains(['"', '\\']) || value.contains(char::is_control) {
-            return None;
         }
-        let value = value.trim();
-        if value.is_empty() {
-            return None;
-        }
-        *reference = Some(value.to_owned());
     }
     put_plain(&mut datasets, open)?;
     Some(Manifest {
@@ -502,6 +479,181 @@ fn put_plain(
         },
     );
     Some(())
+}
+
+/// one line of data.toml of a kind `add` writes, as [`plain_line`] reads it.
+enum Plain<'t> {
+    /// a blank line or a comment.
+    Nothing,
+    /// `[datasets.<name>]`, of a bare name that is a valid dataset name.
+    Table(&'t str),
+    /// `ref = "<reference>"`, a string with no escape, quote or control character, trimmed.
+    Ref(&'t str),
+    /// `required_version = "<range>"`, a string of the same kind, untrimmed.
+    Required(&'t str),
+}
+
+/// the lines of data.toml's `text` without their endings: a carriage return ends a line only
+/// before a line feed, as the parser reads it.
+fn plain_lines(text: &str) -> impl Iterator<Item = &str> {
+    text.split_inclusive('\n').map(|line| {
+        line.strip_suffix('\n')
+            .map_or(line, |line| line.strip_suffix('\r').unwrap_or(line))
+    })
+}
+
+/// `line` as one of the kinds `add` writes, which the parser reads alike; none for any other.
+fn plain_line(line: &str) -> Option<Plain<'_>> {
+    let line = line.trim_matches([' ', '\t']);
+    if line.is_empty() {
+        return Some(Plain::Nothing);
+    }
+    if line.starts_with('#') {
+        return (!line.contains(|c: char| c.is_control() && c != '\t')).then_some(Plain::Nothing);
+    }
+    if let Some(name) = line
+        .strip_prefix("[datasets.")
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        // a bare key of valid name characters, so no quote, dot or space can nest a table
+        let bare = name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-');
+        return (bare && name::dataset_name_problem(name).is_none()).then_some(Plain::Table(name));
+    }
+    if let Some(reference) = plain_string(line, "ref") {
+        let reference = reference.trim();
+        return (!reference.is_empty()).then_some(Plain::Ref(reference));
+    }
+    plain_string(line, required::KEY).map(Plain::Required)
+}
+
+/// whether `range`, a `required_version`, is a range of versions this fetchloom is in.
+fn allowed(range: &str) -> bool {
+    required::Range::parse(range)
+        .is_ok_and(|range| range.verdict(required::RUNNING) == required::Verdict::Allowed)
+}
+
+/// the text of `line` when it is `key = "<text>"`, a string with no escape, quote or control
+/// character, which is its own text.
+fn plain_string<'t>(line: &'t str, key: &str) -> Option<&'t str> {
+    let value = line
+        .strip_prefix(key)?
+        .strip_prefix(" = \"")?
+        .strip_suffix('"')?;
+    (!value.contains(['"', '\\']) && !value.contains(char::is_control)).then_some(value)
+}
+
+/// how many datasets data.toml's `text` holds when every line is one [`plain_line`] reads, in
+/// the order `add` writes them: a `required_version` this fetchloom is in above the tables, once
+/// at most, and a ref in each table, once, no name twice. none for any other text.
+fn plain_count(text: &str) -> Option<usize> {
+    let mut count = 0;
+    let mut open = false;
+    let mut required = false;
+    let mut last: Option<&str> = None;
+    let mut ascending = true;
+    for line in plain_lines(text) {
+        match plain_line(line)? {
+            Plain::Nothing => {}
+            Plain::Table(name) => {
+                if open {
+                    return None;
+                }
+                ascending &= last.is_none_or(|last| last < name);
+                last = Some(name);
+                count += 1;
+                open = true;
+            }
+            Plain::Ref(_) if open => open = false,
+            Plain::Ref(_) => return None,
+            Plain::Required(range) => {
+                if count > 0 || required || !allowed(range) {
+                    return None;
+                }
+                required = true;
+            }
+        }
+    }
+    if open {
+        return None;
+    }
+    // names out of order are sorted to find one written twice, which only the parser refuses
+    if !ascending {
+        let mut names: Vec<&str> = plain_lines(text)
+            .filter_map(|line| match plain_line(line) {
+                Some(Plain::Table(name)) => Some(name),
+                _ => None,
+            })
+            .collect();
+        names.sort_unstable();
+        if names.windows(2).any(|pair| pair[0] == pair[1]) {
+            return None;
+        }
+    }
+    Some(count)
+}
+
+/// [`Manifest::parse`] of data.toml's `text`, with no byte-order mark, when it holds only what
+/// `add` writes, as [`plain_count`] reads it: the same manifest, each entry with the select its
+/// link implies and its ref's line cited, read line by line with no TOML tree. none for any
+/// other text, of which no entry is made: every line is checked before any is kept.
+pub(crate) fn read_light(text: &str) -> Option<Manifest> {
+    let count = plain_count(text)?;
+    let mut read = Vec::with_capacity(count);
+    let mut open = None;
+    for (at, line) in plain_lines(text).enumerate() {
+        match plain_line(line) {
+            Some(Plain::Table(name)) => open = Some(name),
+            Some(Plain::Ref(reference)) => {
+                let name: &str = open.take()?;
+                read.push((name.to_owned(), light_entry(reference, at + 1)));
+            }
+            _ => {}
+        }
+    }
+    Some(Manifest {
+        data_dir: DATA_DIR.to_owned(),
+        // made from the whole list, its nodes are full, not half full as one by one in order
+        datasets: read.into_iter().collect(),
+    })
+}
+
+/// the entry of a dataset whose table holds only its `reference`, on line `line` of data.toml,
+/// as the parser reads it.
+fn light_entry(reference: &str, line: usize) -> Entry {
+    let mut lines = Lines::default();
+    // a ref's line may hold a key, so it is cited by its number alone
+    lines.insert("ref", format!("{FILE}:{line}"));
+    Entry {
+        source: Source {
+            reference: reference.to_owned(),
+            select: implied(reference),
+            exclude: Vec::new(),
+            extract: true,
+            decompress: false,
+            members: Members::new(),
+            web_page: false,
+        },
+        copy: false,
+        path: None,
+        at: None,
+        place: true,
+        lines,
+    }
+}
+
+/// the select patterns a link to one file or folder implies, as `add` writes it: that file, or
+/// every file in that folder.
+fn implied(reference: &str) -> Vec<Glob> {
+    let Ok(parsed) = crate::source::Reference::parse(reference) else {
+        return Vec::new();
+    };
+    parsed
+        .select()
+        .iter()
+        .filter_map(|pattern| Glob::new(pattern).ok())
+        .collect()
 }
 
 /// where data.toml may hold a secret, sorted and merged: each ref, whose query can carry a key.
@@ -717,15 +869,8 @@ impl Reader<'_> {
         let mut select = self.patterns(table.get("select"), "select")?;
         // a link to one file or folder means that file or folder, as `add` writes it, unless
         // select says otherwise
-        if select.is_empty()
-            && let Ok(parsed) = crate::source::Reference::parse(&reference)
-        {
-            select.extend(
-                parsed
-                    .select()
-                    .iter()
-                    .filter_map(|pattern| Glob::new(pattern).ok()),
-            );
+        if select.is_empty() {
+            select = implied(&reference);
         }
         let extract = self.boolean(table.get("extract"), "extract", true)?;
         Ok(Source {
