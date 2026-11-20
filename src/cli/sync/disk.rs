@@ -631,11 +631,30 @@ impl Survey {
 
     /// windows listings keep a hardlink's size, time and read-only flag as this name last saw
     /// them, hiding an edit through another link, so each file placed as a hardlink is opened,
-    /// once, which also tells whether it still has another name.
+    /// once, and asked with one information call, which gives its look, its read-only flag and
+    /// whether it still has another name at once. a reparse point, and a file where that call
+    /// fails, take the look and the flag from std's `metadata`, which asks a reparse point for its
+    /// tag too, and keep the listing's where that fails; a file whose call failed counts as having
+    /// another name.
     #[cfg(windows)]
     fn look_through_links(&mut self, root: &Path) {
+        self.look_through_links_asking(root, Facts::of, fs::File::metadata);
+    }
+
+    /// [`Survey::look_through_links`] with its two calls given: `ask`, one information call a
+    /// hardlink, and `read_metadata`, std's `metadata` in a run.
+    #[cfg(windows)]
+    fn look_through_links_asking(
+        &mut self,
+        root: &Path,
+        ask: impl Fn(&winapi_util::Handle) -> std::io::Result<Facts>,
+        read_metadata: impl Fn(&fs::File) -> std::io::Result<fs::Metadata>,
+    ) {
         use std::os::windows::fs::OpenOptionsExt;
         const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+        const FILE_ATTRIBUTE_READONLY: u64 = 1;
+        const FILE_ATTRIBUTE_REPARSE_POINT: u64 = 0x400;
+        tracing::debug!("looks through the hardlinks, one information call each");
         for (path, placed) in &self.state.files {
             if placed.method != Method::Hardlink {
                 continue;
@@ -652,19 +671,35 @@ impl Survey {
             else {
                 continue;
             };
-            let Ok(metadata) = file.metadata() else {
-                continue;
+            let handle = winapi_util::Handle::from_file(file);
+            let (look, read_only, alone) = match ask(&handle) {
+                Ok(facts) if facts.attributes & FILE_ATTRIBUTE_REPARSE_POINT == 0 => (
+                    Look {
+                        size: facts.size,
+                        modified: since_1970(facts.written),
+                    },
+                    facts.attributes & FILE_ATTRIBUTE_READONLY != 0,
+                    facts.names == 1,
+                ),
+                // std's metadata also asks a reparse point for its tag, and fails where that fails
+                answer => {
+                    let Ok(metadata) = read_metadata(handle.as_file()) else {
+                        continue;
+                    };
+                    (
+                        Look::of(&metadata),
+                        metadata.permissions().readonly(),
+                        answer.is_ok_and(|facts| facts.names == 1),
+                    )
+                }
             };
-            *seen = Look::of(&metadata);
-            if metadata.permissions().readonly() {
+            *seen = look;
+            if read_only {
                 self.writable.remove(path);
             } else {
                 self.writable.insert(path.clone());
             }
-            let handle = winapi_util::Handle::from_file(file);
-            if winapi_util::file::information(&handle)
-                .is_ok_and(|information| information.number_of_links() == 1)
-            {
+            if alone {
                 push_alone(&mut self.alone, path);
             }
         }
@@ -1423,6 +1458,42 @@ struct Scanned {
 fn push_alone(alone: &mut String, path: &str) {
     alone.push_str(path);
     alone.push('\0');
+}
+
+/// what one information call (`GetFileInformationByHandle`) gives of a file.
+#[cfg(windows)]
+struct Facts {
+    size: u64,
+    /// its last write in 100 ns steps since 1601, none where windows gives 0
+    written: Option<u64>,
+    attributes: u64,
+    names: u64,
+}
+
+#[cfg(windows)]
+impl Facts {
+    fn of(handle: &winapi_util::Handle) -> std::io::Result<Facts> {
+        winapi_util::file::information(handle).map(|information| Facts {
+            size: information.file_size(),
+            written: information.last_write_time(),
+            attributes: information.file_attributes(),
+            names: information.number_of_links(),
+        })
+    }
+}
+
+/// nanoseconds since 1970 of a windows file time, 100 ns steps since 1601, as std's `modified`
+/// and [`nanos`] give them: none or a time before 1970 is 0, and one past u64's nanoseconds u64's
+/// most.
+#[cfg(windows)]
+fn since_1970(filetime: Option<u64>) -> u64 {
+    const STEPS_TO_1970: i64 = 116_444_736_000_000_000;
+    // std reads the 64 bits as signed, so a time past 2^63 steps lies before 1601 there
+    let steps = filetime.map_or(0, u64::cast_signed);
+    if steps < STEPS_TO_1970 {
+        return 0;
+    }
+    u64::try_from(u128::from((steps - STEPS_TO_1970).cast_unsigned()) * 100).unwrap_or(u64::MAX)
 }
 
 /// whether a file `metadata` describes is read-only with no other name. unix counts names in

@@ -7,6 +7,44 @@ use std::io::Write as _;
 use crate::mirrors::IRIS;
 use crate::support::{Result, Routes, Sandbox, delete, file, json, ok, text};
 
+/// windows looks through each placed hardlink with one information call, as `-vv` tells, and
+/// `status` reports a file edited through the cache's name for it.
+#[cfg(windows)]
+#[test]
+fn status_reports_a_hardlink_edited_through_the_caches_name() -> Result {
+    use crate::support::{edit, object, skipped};
+
+    let sandbox = Sandbox::new()?;
+    if !sandbox.links()?.hardlinks_read_only() {
+        return skipped(
+            "hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    let source = Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"i\"")),
+        ("/files/notes.txt".to_owned(), file(b"notes\n", "\"n\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    for name in ["iris.csv", "notes.txt"] {
+        ok(&sandbox.run(&["add", &format!("{}/files/{name}", source.url)])?)?;
+    }
+    edit(
+        &object(&sandbox.cache(), b"notes\n"),
+        b"notes, edited through the cache's name\n",
+    )?;
+    let output = sandbox.command(&["-vv", "status"]).output()?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("looks through the hardlinks, one information call each"),
+        "{stderr}"
+    );
+    let stdout = text(&output.stdout)?;
+    assert!(stdout.contains("data/notes/notes.txt"), "{stdout}");
+    assert!(!stdout.contains("data/iris/iris.csv"), "{stdout}");
+    Ok(())
+}
+
 /// a file named as sync names the changed copy it keeps of a file it put back gets a row saying
 /// what it is and what to do with it; any other file of a person's in the folder is theirs, kept,
 /// with no row, and only `-v` names it.

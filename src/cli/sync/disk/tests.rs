@@ -1147,6 +1147,385 @@ fn a_changed_link_that_is_the_cached_copy_is_doubted_and_found_damaged() {
     assert_eq!(survey.elsewhere, HashSet::from(["data/theirs".to_owned()]));
 }
 
+/// the records of a project's files, by path.
+#[cfg(windows)]
+type Records = Vec<(String, crate::project::state::Placed)>;
+
+/// a project of hardlinks of every kind the look through links tells apart, with their records:
+/// two links to one cached object, one edited through another name; a lone read-only link whose
+/// other name went; a writable link with another name outside the data folder.
+#[cfg(windows)]
+fn linked_project() -> Option<(tempfile::TempDir, Project, Records)> {
+    use crate::cache::tests::{hardlinks, rewrite, seal, store};
+
+    let dir = tempfile::tempdir().unwrap();
+    if !hardlinks(dir.path()) {
+        crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        return None;
+    }
+    let project = Project::at(dir.path().to_path_buf());
+    let data = project.root.join("data");
+    fs::create_dir_all(data.join("deeper")).unwrap();
+    let cache = Cache::open(project.root.join("cache")).unwrap();
+    let object = cache.object_path(&store(&cache, b"good").digest);
+    for name in ["edited", "deeper/kept"] {
+        fs::hard_link(&object, data.join(name)).unwrap();
+    }
+    let gone = project.root.join("gone");
+    fs::write(&gone, b"lone").unwrap();
+    fs::hard_link(&gone, data.join("lone")).unwrap();
+    fs::remove_file(&gone).unwrap();
+    seal(&data.join("lone"));
+    let open = project.root.join("open");
+    fs::write(&open, b"writable").unwrap();
+    fs::hard_link(&open, data.join("writable")).unwrap();
+    let records: Vec<_> = ["edited", "deeper/kept", "lone", "writable"]
+        .iter()
+        .map(|name| {
+            let path = format!("data/{name}");
+            let bytes = fs::read(project.root.join(&path)).unwrap();
+            let placed = record(&project.root, &path, &bytes, Method::Hardlink);
+            (path, placed)
+        })
+        .collect();
+    rewrite(&data.join("edited"), b"good, edited through a link");
+    seal(&object);
+    Some((dir, project, records))
+}
+
+/// the survey of `project` with `records` as its state's files.
+#[cfg(windows)]
+fn surveyed(project: &Project, records: &[(String, crate::project::state::Placed)]) -> Survey {
+    let mut survey = Survey::read(
+        project,
+        &Folders::data("data"),
+        Threads::default(),
+        &Stop::default(),
+    )
+    .unwrap();
+    survey.state.files.extend(records.iter().cloned());
+    survey
+}
+
+/// the look through links as it was before it asked each hardlink once: std's `metadata`, then a
+/// second information call for the name count. the oracle the one-call look is held to.
+#[cfg(windows)]
+fn looked_with_two_calls(survey: &mut Survey, root: &Path) {
+    use std::os::windows::fs::OpenOptionsExt;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    for (path, placed) in &survey.state.files {
+        if placed.method != Method::Hardlink {
+            continue;
+        }
+        let Some(seen) = survey.disk.get_mut(path) else {
+            continue;
+        };
+        let Ok(file) = fs::OpenOptions::new()
+            .access_mode(0)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(native(root, path))
+        else {
+            continue;
+        };
+        let Ok(metadata) = file.metadata() else {
+            continue;
+        };
+        *seen = Look::of(&metadata);
+        if metadata.permissions().readonly() {
+            survey.writable.remove(path);
+        } else {
+            survey.writable.insert(path.clone());
+        }
+        let handle = winapi_util::Handle::from_file(file);
+        if winapi_util::file::information(&handle)
+            .is_ok_and(|information| information.number_of_links() == 1)
+        {
+            push_alone(&mut survey.alone, path);
+        }
+    }
+}
+
+/// the look with one information call a hardlink finds what the two-call look it replaced finds:
+/// each link as it is, an edit through another name included, its read-only flag, and only the
+/// links left with no other name, a link a program holds open sharing nothing included.
+#[cfg(windows)]
+#[test]
+fn the_look_with_one_call_finds_what_the_look_with_two_finds() {
+    let Some((_dir, project, records)) = linked_project() else {
+        return;
+    };
+    let held = {
+        use std::os::windows::fs::OpenOptionsExt;
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0)
+            .open(project.root.join("data/writable"))
+            .unwrap()
+    };
+    let mut two = surveyed(&project, &records);
+    looked_with_two_calls(&mut two, &project.root);
+    let mut one = surveyed(&project, &records);
+    one.look_through_links(&project.root);
+    drop(held);
+    assert_eq!(one.disk, two.disk);
+    assert_eq!(one.writable, two.writable);
+    assert_eq!(one.alone, two.alone);
+    let now = |path: &str| Look::of(&fs::metadata(project.root.join(path)).unwrap());
+    assert_eq!(one.disk["data/deeper/kept"], now("data/deeper/kept"));
+    assert_eq!(one.disk["data/deeper/kept"].size, 27);
+    assert_eq!(one.alone, "data/lone\0");
+    assert!(one.writable.contains("data/writable"));
+    assert!(!one.writable.contains("data/deeper/kept"));
+}
+
+/// the survey of `project` with `records` as its state's files, over a listing whose looks are all
+/// 0 and whose read-only flags for `data/lone` and `data/writable` are the other way round.
+#[cfg(windows)]
+fn listed_wrongly(
+    project: &Project,
+    records: &[(String, crate::project::state::Placed)],
+) -> Survey {
+    let mut survey = surveyed(project, records);
+    for seen in survey.disk.values_mut() {
+        *seen = Look {
+            size: 0,
+            modified: 0,
+        };
+    }
+    survey.writable.insert("data/lone".to_owned());
+    survey.writable.remove("data/writable");
+    survey
+}
+
+/// where the one information call fails, the look takes each link's look and read-only flag from
+/// std's `metadata`, as the look with two calls takes them, and counts it as having another name:
+/// over a listing whose looks and flags are all wrong, every one is put right.
+#[cfg(windows)]
+#[test]
+fn the_look_with_one_call_takes_metadata_where_its_call_fails() {
+    let Some((_dir, project, records)) = linked_project() else {
+        return;
+    };
+    let mut two = listed_wrongly(&project, &records);
+    looked_with_two_calls(&mut two, &project.root);
+    let mut one = listed_wrongly(&project, &records);
+    one.look_through_links_asking(
+        &project.root,
+        |_| Err(std::io::Error::other("no information")),
+        fs::File::metadata,
+    );
+    assert_eq!(one.disk, two.disk);
+    assert_eq!(one.writable, two.writable);
+    assert_eq!(two.alone, "data/lone\0");
+    assert_eq!(one.alone, "");
+    let now = |path: &str| Look::of(&fs::metadata(project.root.join(path)).unwrap());
+    assert_eq!(one.disk["data/edited"], now("data/edited"));
+    assert!(one.writable.contains("data/writable"));
+    assert!(!one.writable.contains("data/lone"));
+}
+
+/// a reparse point's look and read-only flag come from std's `metadata`, as the look with two
+/// calls takes them, whatever the one call says, and its name count from that call: told a size,
+/// a time and a flag that are all wrong, the look keeps none of them.
+#[cfg(windows)]
+#[test]
+fn the_look_with_one_call_asks_std_of_a_reparse_point() {
+    const FILE_ATTRIBUTE_READONLY: u64 = 1;
+    const FILE_ATTRIBUTE_REPARSE_POINT: u64 = 0x400;
+    let Some((_dir, project, records)) = linked_project() else {
+        return;
+    };
+    let mut two = surveyed(&project, &records);
+    looked_with_two_calls(&mut two, &project.root);
+    let mut one = surveyed(&project, &records);
+    one.look_through_links_asking(
+        &project.root,
+        |handle| {
+            Facts::of(handle).map(|facts| Facts {
+                size: facts.size + 1,
+                written: facts.written.map(|steps| steps + 10_000_000),
+                attributes: (facts.attributes ^ FILE_ATTRIBUTE_READONLY)
+                    | FILE_ATTRIBUTE_REPARSE_POINT,
+                ..facts
+            })
+        },
+        fs::File::metadata,
+    );
+    assert_eq!(one.disk, two.disk);
+    assert_eq!(one.writable, two.writable);
+    assert_eq!(one.alone, two.alone);
+    assert_eq!(one.alone, "data/lone\0");
+}
+
+/// where std's `metadata` fails, for a reparse point whose tag it cannot read or a file whose one
+/// call failed too, the look keeps the listing's look and flag and counts the file as having
+/// another name, as the look with two calls leaves a file whose `metadata` fails. each survey is
+/// held against its own listing, which opening a link through its name can refresh.
+#[cfg(windows)]
+#[test]
+fn the_look_with_one_call_keeps_the_listing_where_metadata_fails() {
+    const FILE_ATTRIBUTE_REPARSE_POINT: u64 = 0x400;
+    fn unchanged(
+        project: &Project,
+        records: &[(String, crate::project::state::Placed)],
+        ask: impl Fn(&winapi_util::Handle) -> std::io::Result<Facts>,
+    ) {
+        let mut one = listed_wrongly(project, records);
+        let (disk, writable) = (one.disk.clone(), one.writable.clone());
+        one.look_through_links_asking(&project.root, ask, |_| Err(std::io::Error::other("no tag")));
+        assert_eq!(one.disk, disk);
+        assert_eq!(one.writable, writable);
+        assert_eq!(one.alone, "");
+    }
+    let Some((_dir, project, records)) = linked_project() else {
+        return;
+    };
+    unchanged(&project, &records, |handle| {
+        Facts::of(handle).map(|facts| Facts {
+            attributes: facts.attributes | FILE_ATTRIBUTE_REPARSE_POINT,
+            ..facts
+        })
+    });
+    unchanged(&project, &records, |_| {
+        Err(std::io::Error::other("no information"))
+    });
+}
+
+/// the look with one information call through ten thousand hardlinks keeps each file's look, flag
+/// and name count as the look with two keeps them: every seventh file edited through its other
+/// link, every eleventh writable, every thirteenth alone, with times from 1957 to 2286.
+#[cfg(windows)]
+#[test]
+#[ignore = "slow: ten thousand hardlinks"]
+fn the_look_with_one_call_through_ten_thousand_links_finds_what_two_calls_find() {
+    use crate::cache::tests::{hardlinks, rewrite, seal};
+    use std::time::{Duration, UNIX_EPOCH};
+
+    const FILES: u64 = 10_000;
+    const EDIT: &[u8] = b"edited through another link";
+    let dir = tempfile::tempdir().unwrap();
+    if !hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let project = Project::at(dir.path().to_path_buf());
+    let others = project.root.join("others");
+    fs::create_dir_all(&others).unwrap();
+    let path_of = |index: u64| format!("data/d{:03}/f{index:05}", index / 100);
+    let mut records = Vec::new();
+    let mut edited = Vec::new();
+    for index in 0..FILES {
+        let path = path_of(index);
+        let file = project.root.join(&path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let other = others.join(index.to_string());
+        let bytes = format!("file {index}").into_bytes();
+        fs::write(&other, &bytes).unwrap();
+        let time =
+            UNIX_EPOCH + Duration::from_secs(index * 997_331) - Duration::from_secs(400_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&other)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        fs::hard_link(&other, &file).unwrap();
+        if index % 13 == 0 {
+            fs::remove_file(&other).unwrap();
+        }
+        if index % 11 != 0 {
+            seal(&file);
+        }
+        records.push((
+            path.clone(),
+            record(&project.root, &path, &bytes, Method::Hardlink),
+        ));
+        if index % 7 == 0 && index % 13 != 0 {
+            edited.push((index, other));
+        }
+    }
+    for (index, other) in &edited {
+        rewrite(other, EDIT);
+        if index % 11 != 0 {
+            seal(other);
+        }
+    }
+    let mut two = surveyed(&project, &records);
+    looked_with_two_calls(&mut two, &project.root);
+    let mut one = surveyed(&project, &records);
+    one.look_through_links(&project.root);
+    assert_eq!(one.disk.len() as u64, FILES);
+    assert_eq!(one.disk, two.disk);
+    assert_eq!(one.writable, two.writable);
+    assert_eq!(one.alone, two.alone);
+    let alone: String = (0..FILES)
+        .filter(|index| index % 13 == 0)
+        .map(|index| path_of(index) + "\0")
+        .collect();
+    assert_eq!(one.alone, alone);
+    let writable: Vec<String> = (0..FILES)
+        .filter(|index| index % 11 == 0)
+        .map(path_of)
+        .collect();
+    assert_eq!(one.writable.len(), writable.len());
+    assert!(writable.iter().all(|path| one.writable.contains(path)));
+    for (index, _) in &edited {
+        assert_eq!(one.disk[&path_of(*index)].size, EDIT.len() as u64);
+    }
+}
+
+/// a windows file time reads as the nanoseconds since 1970 std's `modified` gives, a time
+/// before 1970 or none as 0.
+#[cfg(windows)]
+#[test]
+fn a_file_time_reads_as_std_reads_it() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    assert_eq!(since_1970(None), 0);
+    assert_eq!(since_1970(Some(0)), 0);
+    // std reads a time's 64 bits as signed: past 2^63 steps it lies before 1601, so before 1970
+    assert_eq!(since_1970(Some(u64::MAX)), 0);
+    let steps_to_1970 = 116_444_736_000_000_000_u64;
+    assert_eq!(since_1970(Some(steps_to_1970 - 1)), 0);
+    assert_eq!(since_1970(Some(steps_to_1970)), 0);
+    assert_eq!(since_1970(Some(steps_to_1970 + 1)), 100);
+    // nanoseconds past u64's most saturate, as `units::nanos` does
+    assert_eq!(since_1970(Some(i64::MAX.cast_unsigned())), u64::MAX);
+    let dir = tempfile::tempdir().unwrap();
+    // the look reads a time only through a hardlink, and fat and exfat, which make none, keep no
+    // time before 1980 or finer than 10 ms
+    if !crate::cache::tests::hardlinks(dir.path()) {
+        return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+    }
+    let path = dir.path().join("dated");
+    fs::write(&path, b"x").unwrap();
+    for (time, nanos) in [
+        (UNIX_EPOCH - Duration::from_hours(24), 0),
+        (UNIX_EPOCH, 0),
+        (UNIX_EPOCH + Duration::from_nanos(100), 100),
+        (
+            UNIX_EPOCH + Duration::new(1_700_000_000, 123_456_700),
+            1_700_000_000_123_456_700,
+        ),
+        (
+            UNIX_EPOCH + Duration::from_hours(4_645_896),
+            16_725_225_600_000_000_000,
+        ),
+    ] {
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(time)
+            .unwrap();
+        let information =
+            winapi_util::file::information(winapi_util::Handle::from_path_any(&path).unwrap())
+                .unwrap();
+        let modified = since_1970(information.last_write_time());
+        assert_eq!(modified, nanos, "{time:?}");
+        assert_eq!(modified, Look::of(&fs::metadata(&path).unwrap()).modified);
+    }
+}
+
 /// a repair replaces a changed object. its mark must still reach a link to the old copy that
 /// was checked before the change was found, while a link to the new copy stays trusted.
 #[test]
