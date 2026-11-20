@@ -822,10 +822,20 @@ mod tests {
 
     /// a key file or index that does not read leaves every key in it unfound, so it is named, by
     /// where it stops reading and never by what it holds, which may be a key; one that is not
-    /// there yet is no problem.
+    /// there yet is no problem. its folder's own name holds the keys, as any path may, so what a
+    /// message says beside the path is what must not.
     #[test]
     fn a_key_file_that_does_not_read_is_named_without_what_it_holds() {
-        let home = tempfile::tempdir().unwrap();
+        let home = tempfile::Builder::new()
+            .prefix("secret-123-")
+            .tempdir()
+            .unwrap();
+        // the message with the file's path, as either message writes it, taken out
+        let beside = |message: &str, path: &Path| {
+            message
+                .replace(&crate::units::path(path), "<path>")
+                .replace(&path.display().to_string(), "<path>")
+        };
         let root = home.path().as_os_str().to_owned();
         let var = |name: &str| -> Option<OsString> {
             match name {
@@ -845,7 +855,7 @@ mod tests {
             ),
             "{message}"
         );
-        assert!(!message.contains("secret"), "{message}");
+        assert!(!beside(&message, &index).contains("secret"), "{message}");
         fs::write(&index, "{}").unwrap();
         let keys = folder.join("credentials.json");
         for (text, value) in [(r#""secret""#, "secret"), (r#"{"k": 123}"#, "123")] {
@@ -855,9 +865,12 @@ mod tests {
                 message.contains("credentials.json is not valid JSON ("),
                 "{message}"
             );
-            assert!(!message.contains(value), "{message}");
-            let refused = load::<BTreeMap<String, String>>(&keys).unwrap_err();
-            assert!(!refused.to_string().contains(value), "{refused}");
+            assert!(keys.display().to_string().contains(value));
+            assert!(!beside(&message, &keys).contains(value), "{message}");
+            let refused = load::<BTreeMap<String, String>>(&keys)
+                .unwrap_err()
+                .to_string();
+            assert!(!beside(&refused, &keys).contains(value), "{refused}");
         }
     }
 
