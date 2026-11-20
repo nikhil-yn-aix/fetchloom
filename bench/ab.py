@@ -50,15 +50,26 @@ def quantile(values, q):
     return values[lower] + (values[upper] - values[lower]) * (position - lower)
 
 
-def bootstrap(values, seed, resamples):
-    """a seeded 95% percentile interval for the median of values; None for no values."""
+def bootstrap(values, seed, resamples, level=.95):
+    """a seeded percentile interval at this level for the median of values; None for no values."""
     if not values:
         return None
     if min(values) == max(values):
         return [values[0], values[0]]
     rng = random.Random(seed)
     samples = sorted(median(rng.choices(values, k=len(values))) for _ in range(resamples))
-    return [quantile(samples, .025), quantile(samples, .975)]
+    return [quantile(samples, (1 - level) / 2), quantile(samples, (1 + level) / 2)]
+
+
+def paired(base, other, key="wall_seconds", *, level=.95, seed, resamples=RESAMPLES):
+    """other's runs over base's, rounds matched by number and both passed: how many pairs, the median
+    ratio and its paired percentile bootstrap interval at this level, None without a positive pair."""
+    pairs = [(value(base[n], key), value(other[n], key)) for n in sorted(base.keys() & other.keys())
+             if base[n].get("status") == other[n].get("status") == "passed"]
+    logs = [math.log(b) - math.log(a) for a, b in pairs if a is not None and b is not None and a > 0 and b > 0]
+    interval = bootstrap(logs, seed, resamples, level)
+    return dict(pairs=len(logs), level=level, seed=seed, median_ratio=exponent(median(logs)) if logs else None,
+                interval=[exponent(bound) for bound in interval] if interval else None)
 
 
 def summarize(pairs, metric, *, seed, resamples, threshold, min_pairs, complete, failed):

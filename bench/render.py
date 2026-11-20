@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from statistics import median
 
+import ab
+
 # what each network profile stands for, in words a reader knows from their own connection, in the
 # order the results lead with: the links most people have before the lab's own
 LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network"}
@@ -108,15 +110,6 @@ def size(value):
         value /= 1024
 
 
-def ratio(value, base):
-    """value over base, such as 1.23x, even (<5%) within 5% either way, or n/a without a value
-    and a positive base."""
-    if value is None or base is None or base <= 0:
-        return "n/a"
-    result = value / base
-    return "even (<5%)" if abs(result - 1) < .05 else f"{result:.2f}x"
-
-
 # the site's serif, the latin subset @fontsource-variable/source-serif-4 5.3.1 publishes, with its OFL
 # in fonts/. each svg carries it inline, since github shows svgs as images that load nothing else
 FONTS = Path(__file__).with_name("fonts")
@@ -183,17 +176,106 @@ def ordered(summaries):
                                                        pair[1]["median"] or float("inf"), pair[0]))
 
 
-def verdict(summaries):
-    """two or three words for a hero card: fetchloom against the fastest other tool."""
-    own = summaries.get("fetchloom", {})
-    rivals = [s["median"] for name, s in summaries.items()
-              if name != "fetchloom" and s["median"] is not None and not s["failures"]]
-    if own.get("failures") or own.get("median") is None or not rivals:
-        return None
-    result = min(rivals) / own["median"]
-    if abs(result - 1) < .05:
+# the analysis plan, fixed before any data: a ratio is another tool's time over fetchloom's in the same
+# round, and its interval decides. even means the whole interval sits inside EVEN
+EVEN = (.95, 1.05)
+# fetchloom against itself, never a rival; on lan and home its interval must sit inside AA_GATE, or the
+# machine was too noisy for a verdict. on the lossy link its width is the network's own
+AA = "fetchloom+aa"
+AA_GATE = (.97, 1.03)
+GATED = ("lan", "home")
+# the only cases a claim comes from, each fetchloom against the fastest other tool: six comparisons
+# sharing a 5% error, so 99.2% intervals each
+HEADLINE = (("ext4", "home", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"), ("ext4", "lan", "s5"),
+            ("ext4", "home", "s7"), ("ext4", "home", "s10"))
+FAMILY = 1 - .05 / len(HEADLINE)
+SEED = 1729
+
+
+def word(interval, rival):
+    """what an interval of a rival's time over fetchloom's says: fetchloom faster, the rival faster,
+    even, or inconclusive."""
+    low, high = interval
+    if low > EVEN[1]:
+        return "fetchloom faster"
+    if high < EVEN[0]:
+        return f"{rival} faster"
+    if EVEN[0] <= low and high <= EVEN[1]:
         return "even"
-    return f"{times(result)} faster" if result > 1 else f"{times(1 / result)} slower"
+    return "inconclusive"
+
+
+def judge(case, runs):
+    """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
+    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict against
+    the fastest other tool that passed every run, or the reason there is none."""
+    key = (case["filesystem"], case["profile"], case["scenario"])
+    headline = key in HEADLINE
+    level = FAMILY if headline else .95
+    rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
+    base = rounds.get(ab.BASE, {})
+    comparisons = {}
+    for tool, measured in rounds.items():
+        if tool == ab.BASE:
+            continue
+        comparison = ab.paired(base, measured, level=.95 if tool == AA else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
+        failed = sum(row.get("status") != "passed" for row in measured.values())
+        decided = not failed and comparison["pairs"] >= ab.MIN_PAIRS and comparison["interval"] and None not in comparison["interval"]
+        comparisons[tool] = dict(comparison, failed=failed, rounds=len(measured),
+                                 word=word(comparison["interval"], tool) if decided else None)
+    aa = comparisons.get(AA)
+    own_failed = sum(row.get("status") != "passed" for row in base.values())
+    summaries = case["summaries"]
+    rivals = [tool for tool, comparison in comparisons.items()
+              if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
+    rival = min(rivals, key=lambda tool: (summaries[tool]["median"], tool)) if rivals else None
+    if not base:
+        reason = "fetchloom did not run"
+    elif own_failed:
+        reason = f"fetchloom failed {own_failed} of {len(base)} runs"
+    elif case["profile"] in GATED and (aa is None or aa["interval"] is None):
+        reason = "no a/a arm measured this machine's noise"
+    elif case["profile"] in GATED and not (AA_GATE[0] <= aa["interval"][0] and aa["interval"][1] <= AA_GATE[1]):
+        reason = f"the a/a arm's 95% interval, {bounds(aa)}, is not inside {AA_GATE[0]} to {AA_GATE[1]}, so the machine was too noisy"
+    elif rival is None:
+        reason = "no other tool passed every run"
+    elif comparisons[rival]["word"] is None:
+        reason = f"{comparisons[rival]['pairs']} rounds paired with {rival}, fewer than {ab.MIN_PAIRS}"
+    else:
+        reason = None
+    return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason,
+                rival=rival if reason is None else None)
+
+
+def bounds(comparison):
+    """an interval as the page says it, such as 0.98 to 1.04."""
+    low, high = comparison["interval"]
+    return f"{low:.2f} to {high:.2f}"
+
+
+def percent(level):
+    """a confidence level as the page says it, such as 95% or 99.2%."""
+    return f"{100 * level:.1f}".removesuffix(".0") + "%"
+
+
+def hero(case):
+    """a headline case's verdict on a card, the seconds first: the label and the title, or None when
+    the case has no verdict or an inconclusive one."""
+    judged = case["judged"]
+    rival = judged["rival"]
+    if not judged["headline"] or rival is None:
+        return None
+    comparison = judged["comparisons"][rival]
+    said = comparison["word"]
+    if said == "inconclusive":
+        return None
+    summaries = case["summaries"]
+    label = (f"{TITLES[case['scenario']]}, {link(case['profile'])}: {seconds(summaries[ab.BASE]['median'])} against "
+             f"{seconds(summaries[rival]['median'])} for {rival}")
+    if said == "even":
+        return label, "even"
+    result = comparison["median_ratio"]
+    return label, f"{times(result)} faster" if said == "fetchloom faster" else f"{times(1 / result)} slower"
 
 def story(scenario, count, file_size):
     """what a scenario does in words, with its file count and size."""
@@ -346,8 +428,9 @@ def group(rows, metas):
     cases = []
     for scenario, profile, fs in sorted(lab, key=lambda key: (lead(key[1]), key)):
         _, count, file_size = conditions[scenario, profile, fs]
-        cases.append(dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
-                          link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs])))
+        case = dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
+                    link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]))
+        cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs])))
     # a dropped link's cost is set against the same tool's s1, the same file on the same link
     for case in cases:
         if case["scenario"] == "s10" and conditions.get(("s1", case["profile"], case["filesystem"]), ())[1:] == (
@@ -397,35 +480,36 @@ def network_profiles(metas):
 
 def draw(charts, cases, services):
     """every card, light and dark, in place of an earlier render's: one per case and live service, and
-    a hero from each scenario and filesystem's first case on the page when it has a verdict."""
+    a hero for each headline case with a verdict that is not inconclusive."""
     charts.mkdir(parents=True, exist_ok=True)
     # every card here is generated, so a card the new results do not produce, such as a hero
     # without a verdict, must not survive from an earlier render
     for old in charts.glob("*.svg"):
         old.unlink()
-    led = set()
     for case in cases:
-        title = TITLES[case["scenario"]]
-        first = (case["scenario"], case["filesystem"]) not in led
-        led.add((case["scenario"], case["filesystem"]))
-        # a hero never falls back to another link, which would pick the link that flatters
-        hero = verdict(case["summaries"]) if first else None
+        claimed = hero(case)
         for suffix, dark in (("", False), ("-dark", True)):
-            chart(charts / f"{card_name(case)}{suffix}.svg", title, subtitle(case), case["summaries"], dark)
-            if hero:
-                chart(charts / f"hero-{case['scenario']}-{case['filesystem']}{suffix}.svg", hero, "",
-                      case["summaries"], dark, label=f"{title}, {link(case['profile'])}")
+            chart(charts / f"{card_name(case)}{suffix}.svg", TITLES[case["scenario"]], subtitle(case), case["summaries"], dark)
+            if claimed:
+                label, said = claimed
+                chart(charts / f"hero-{card_name(case)}{suffix}.svg", said, "", case["summaries"], dark, label=label)
     for service, measured in services.items():
         for suffix, dark in (("", False), ("-dark", True)):
             chart(charts / f"live-{service}{suffix}.svg", service,
                   f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
 
 
+# what each tool checks when nothing changed, which differs, so a no-op's times are never a win at
+# equal checking
+NOOP = ("s6", "s9")
+NOOP_CHECKS = ("each tool checks something else when nothing changed: fetchloom trusts each file's size and modification "
+               "time, hashing a file whose time is too recent to trust, DVC trusts its own record of each file, datalad "
+               "that each file is in its store, curl asks the server with `-z`, and aria2c and pooch hash every file again.")
 # what s7 and s10 count of a download asked for again
 REFETCH = "server body bytes / dataset size"
 # the clock of a library timed around its calls, as tools.py names it
 WARM_CALL = "call inside a warm interpreter"
-METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
+METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. each other tool's time is set over fetchloom's round by round, and the table gives the median of those ratios with a paired percentile bootstrap interval, 20,000 resamples from seed 1729: 99.2% in the six headline cases, s1, s2r and s7 at home, s2r on the poor link, s5 and s10, whose comparisons share a 5% error, and 95% elsewhere, where a result describes and claims nothing. a verdict sets fetchloom against the fastest other tool that passed every run, from at least 10 paired rounds: fetchloom faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. fetchloom again, the a/a arm, is never a rival: on lan and home its 95% interval must sit inside 0.97 to 1.03, or the machine was too noisy and the case has no verdict; on the poor link its width is the network's own. a case where fetchloom failed a run has no verdict. `hero-*` cards repeat the headline verdicts that are not inconclusive, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -511,15 +595,16 @@ def case_section(case):
     summaries = case["summaries"]
     title = TITLES[case["scenario"]]
     rounds = max(item["rounds"] for item in summaries.values())
+    judged = case["judged"]
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
-             "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | connections | most in flight to a host | failures |",
-             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
-    own = summaries.get("fetchloom", {})
-    base = None if own.get("failures") else own.get("median")
+             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | disk | requests | connections | most in flight to a host | failures |",
+             "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
-        ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
-        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
+        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(tool, judged)} | {said(tool, judged)} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
+    lines += verdict_lines(case)
+    if case["scenario"] in NOOP:
+        lines.append(f"\n{NOOP_CHECKS}")
     for tool, entry in summaries.items():
         if entry.get("clock") == WARM_CALL:
             lines.append(f"\n{tool}'s times are its calls inside a warm interpreter, as a notebook makes them, and its CPU is "
@@ -546,6 +631,54 @@ def case_section(case):
         lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]
+
+
+def over(tool, judged):
+    """a tool's time over fetchloom's in the table: the median ratio and its interval, failed n of m
+    for a tool with a failed run, or nothing for fetchloom itself."""
+    comparison = judged["comparisons"].get(tool)
+    if comparison is None:
+        return ""
+    if comparison["failed"]:
+        return f"failed {comparison['failed']} of {comparison['rounds']}"
+    if comparison["median_ratio"] is None:
+        return "n/a"
+    interval = comparison["interval"]
+    shown_interval = f" [{interval[0]:.2f}, {interval[1]:.2f}]" if interval and None not in interval else ""
+    return f"{comparison['median_ratio']:.2f}{shown_interval}"
+
+
+def said(tool, judged):
+    """what a tool's interval says against fetchloom, in the table's verdict column."""
+    comparison = judged["comparisons"].get(tool)
+    if comparison is None or comparison["failed"]:
+        return ""
+    if tool == AA:
+        return "a/a arm, never a rival"
+    if tool.startswith(ab.BASE + "+"):
+        return "fetchloom variant, never a rival"
+    return comparison["word"] or f"fewer than {ab.MIN_PAIRS} paired rounds"
+
+
+def verdict_lines(case):
+    """the case's verdict, the seconds before the ratio, or why it has none, and what the a/a arm saw."""
+    judged = case["judged"]
+    rival = judged["rival"]
+    kind = (f"headline, {percent(judged['level'])} interval" if judged["headline"]
+            else f"descriptive, {percent(judged['level'])} interval, not a claim")
+    if rival is None:
+        lines = [f"\nno verdict: {judged['reason']}."]
+    else:
+        comparison = judged["comparisons"][rival]
+        lines = [f"\nverdict ({kind}): fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against "
+                 f"{seconds(case['summaries'][rival]['median'])} for {rival}, the fastest other tool that passed every run; "
+                 f"{rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, interval {bounds(comparison)}: "
+                 f"{comparison['word']}."]
+    aa = judged["aa"]
+    if aa is not None and aa["interval"] is not None:
+        noise = "" if case["profile"] in GATED else ", on this lossy link the network's own randomness"
+        lines.append(f"the a/a arm, fetchloom against itself, came to {aa['median_ratio']:.2f}, 95% interval {bounds(aa)}{noise}.")
+    return lines
 
 
 def live_section(service, measured):

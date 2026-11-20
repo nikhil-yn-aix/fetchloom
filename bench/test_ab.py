@@ -97,6 +97,21 @@ class PairedTests(unittest.TestCase):
         [missing] = ab.compare(rows[:-1])
         self.assertEqual(missing["metrics"]["wall"]["decision"], "incomplete")
 
+    def test_a_paired_ratio_matches_rounds_leaves_out_failures_and_widens_with_its_level(self):
+        base = {n: row("fetchloom", n, 1) for n in range(1, 13)}
+        other = {n: row("curl", n, 1 + n / 10) for n in range(1, 12)}
+        other[5] = dict(other[5], status="failed")
+        narrow = ab.paired(base, other, seed="x", resamples=2000)
+        wide = ab.paired(base, other, level=1 - .05 / 6, seed="x", resamples=2000)
+        # rounds 1 to 11 in both, less the failed fifth
+        self.assertEqual((narrow["pairs"], wide["pairs"], narrow["level"]), (10, 10, .95))
+        self.assertAlmostEqual(narrow["median_ratio"], math.sqrt(1.6 * 1.7))
+        self.assertEqual(narrow["median_ratio"], wide["median_ratio"])
+        self.assertLessEqual(wide["interval"][0], narrow["interval"][0])
+        self.assertGreaterEqual(wide["interval"][1], narrow["interval"][1])
+        self.assertLess(wide["interval"][0], wide["interval"][1])
+        self.assertEqual(ab.paired(base, {}, seed="x"), dict(pairs=0, level=.95, seed="x", median_ratio=None, interval=None))
+
     def test_comparison_parameters_are_validated(self):
         for arguments in (dict(threshold=-1), dict(threshold=1), dict(threshold=float("nan")),
                           dict(resamples=0), dict(min_pairs=1)):

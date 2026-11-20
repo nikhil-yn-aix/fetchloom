@@ -72,18 +72,16 @@ class RenderTests(Quiet):
         (root / "report" / "docs" / "dev" / "performance").mkdir(parents=True)
         charts = root / "report" / "docs" / "assets" / "bench"
         try:
-            record = dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4", tool="fetchloom",
-                          quick=True, count=1, file_size=4, status="passed", wall_seconds=1)
-            rival = dict(record, tool="curl", wall_seconds=2)
-            (root / "runs.jsonl").write_text(json.dumps(record) + "\n" + json.dumps(rival))
-            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=True)))
+            rows = headline_rows(curl=2)
+            (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False)))
             render.render(root, root / "report")
-            self.assertTrue((charts / "hero-s1-ext4.svg").exists())
-            self.assertTrue((charts / "hero-s1-ext4-dark.svg").exists())
-            failed = dict(record, status="failed")
-            (root / "runs.jsonl").write_text(json.dumps(failed) + "\n" + json.dumps(rival))
+            self.assertTrue((charts / "hero-s1-home-ext4.svg").exists())
+            self.assertTrue((charts / "hero-s1-home-ext4-dark.svg").exists())
+            rows[0] = dict(rows[0], status="failed")
+            (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
             render.render(root, root / "report")
-            self.assertTrue((charts / "s1-lan-ext4.svg").exists())
+            self.assertTrue((charts / "s1-home-ext4.svg").exists())
             self.assertEqual(sorted(path.name for path in charts.glob("hero-*")), [])
         finally:
             shutil.rmtree(root)
@@ -248,6 +246,20 @@ def lab_row(**changes):
                      count=1, file_size=4, status="passed", wall_seconds=1, round=1), **changes)
 
 
+def headline_rows(rounds=10, scenario="s1", profile="home", aa=(1,), **walls):
+    """ten full rounds of a case: fetchloom at 1 s, its a/a arm at the given walls in turn, and each
+    other tool at its own wall."""
+    rows = []
+    for number in range(1, rounds + 1):
+        rows.append(lab_row(scenario=scenario, profile=profile, quick=False, round=number))
+        if aa:
+            rows.append(lab_row(scenario=scenario, profile=profile, quick=False, round=number, tool="fetchloom+aa",
+                                wall_seconds=aa[number % len(aa)]))
+        rows += [lab_row(scenario=scenario, profile=profile, quick=False, round=number, tool=tool, wall_seconds=wall)
+                 for tool, wall in walls.items()]
+    return rows
+
+
 class LoadResultsTests(Quiet):
     def campaign(self, root, rows, meta):
         root.mkdir(parents=True, exist_ok=True)
@@ -341,13 +353,12 @@ class PageTests(Quiet):
         svg = "{http://www.w3.org/2000/svg}"
         texts = [element.text for element in ET.parse(cards / "s1-home-ext4.svg").iter(svg + "text")]
         self.assertEqual(texts[1], "1 file of 4 B, home broadband, about 100 Mbit and 20 ms, ext4")
-        hero = [element.text for element in ET.parse(cards / "hero-s1-ext4.svg").iter(svg + "text")]
-        self.assertEqual(hero[:2], ["one large file, home broadband", "2\u00d7 faster"])
 
-    def test_a_hero_without_a_verdict_on_home_broadband_takes_no_other_link(self):
-        rows = [lab_row(profile="home", status="failed"), lab_row(profile="home", tool="curl", wall_seconds=2),
-                lab_row(), lab_row(tool="curl", wall_seconds=2)]
-        self.render(rows, dict(kind="lab", quick=True))
+    def test_a_hero_comes_only_from_a_headline_case_with_a_verdict(self):
+        # fetchloom failed a run of the headline case; s3 on lan is clear, but describes and claims nothing
+        rows = headline_rows(curl=2) + headline_rows(scenario="s3", profile="lan", curl=2)
+        rows[0] = dict(rows[0], status="failed")
+        self.render(rows, dict(kind="lab", quick=False))
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
 
@@ -364,11 +375,12 @@ class PageTests(Quiet):
 
     def test_cards_bars_and_ranges_have_square_ends(self):
         import xml.etree.ElementTree as ET
-        self.render([lab_row(), lab_row(round=2, wall_seconds=2), lab_row(tool="curl", wall_seconds=3)],
-                    dict(kind="lab", quick=True))
+        rows = headline_rows(curl=3)
+        rows[0] = dict(rows[0], wall_seconds=2)
+        self.render(rows, dict(kind="lab", quick=False))
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         drawn = sorted(card.name for card in cards.glob("*.svg"))
-        self.assertEqual(drawn, ["hero-s1-ext4-dark.svg", "hero-s1-ext4.svg", "s1-lan-ext4-dark.svg", "s1-lan-ext4.svg"])
+        self.assertEqual(drawn, ["hero-s1-home-ext4-dark.svg", "hero-s1-home-ext4.svg", "s1-home-ext4-dark.svg", "s1-home-ext4.svg"])
         for name in drawn:
             for element in ET.parse(cards / name).iter():
                 self.assertFalse({"rx", "ry"} & set(element.attrib), (name, element.attrib))
@@ -393,13 +405,15 @@ class PageTests(Quiet):
         """one face rides in each card, source serif 4, and a hero card names its scenario as written,
         never in capitals."""
         import xml.etree.ElementTree as ET
-        self.render([lab_row(), lab_row(tool="curl", wall_seconds=3)], dict(kind="lab", quick=True))
+        self.render(headline_rows(curl=3), dict(kind="lab", quick=False))
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         svg = "{http://www.w3.org/2000/svg}"
-        hero = ET.parse(cards / "hero-s1-ext4.svg")
+        hero = ET.parse(cards / "hero-s1-home-ext4.svg")
         self.assertEqual({element.get("font-family") for element in hero.iter(svg + "text")}, {render.SERIF})
         self.assertEqual(hero.find(svg + "style").text.count("@font-face"), 1)
-        self.assertEqual([element.text for element in hero.iter(svg + "text")][:2], ["one large file, local network", "3\u00d7 faster"])
+        # the seconds come first, then the ratio
+        self.assertEqual([element.text for element in hero.iter(svg + "text")][:2],
+                         ["one large file, home broadband: 1.00 s against 3.00 s for curl", "3\u00d7 faster"])
 
     def test_each_tool_shows_its_connections_and_the_most_requests_it_had_in_flight(self):
         rows = [lab_row(connections=2, peak_in_flight={"lab.flb": 4}, over_budget=False),
@@ -432,6 +446,20 @@ class PageTests(Quiet):
         page = self.render(rows, dict(kind="lab", quick=True))
         self.assertIn("| fetchloom | 33.00 s | n/a | n/a | 1.000x |", page)
 
+    def test_a_verdict_gives_the_seconds_before_the_ratio(self):
+        page = self.render(headline_rows(curl=2), dict(kind="lab", quick=False))
+        self.assertIn("| time over fetchloom's, 99.2% interval | verdict |", page)
+        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
+        self.assertIn("| fetchloom+aa | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | a/a arm, never a rival |", page)
+        self.assertIn("\nverdict (headline, 99.2% interval): fetchloom 1.00 s against 2.00 s for curl, the fastest other tool "
+                      "that passed every run; curl's time over fetchloom's is 2.00, interval 2.00 to 2.00: fetchloom faster.", page)
+        self.assertIn("the a/a arm, fetchloom against itself, came to 1.00, 95% interval 1.00 to 1.00.", page)
+
+    def test_a_no_op_says_what_each_tool_checks(self):
+        page = self.render([lab_row(scenario="s6"), lab_row(scenario="s6", tool="pooch", wall_seconds=3)], dict(kind="lab", quick=True))
+        self.assertIn("\neach tool checks something else when nothing changed: fetchloom trusts each file's size and modification time", page)
+        self.assertIn("and aria2c and pooch hash every file again.", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)
@@ -444,11 +472,55 @@ class PageTests(Quiet):
         rendered.assert_called_once_with(Path("results").resolve(), Path(render.__file__).resolve().parent.parent)
 
 
+class VerdictTests(unittest.TestCase):
+    def judged(self, rows, scenario="s1", profile="home", filesystem="ext4"):
+        runs = {}
+        for row in rows:
+            runs.setdefault(row["tool"], []).append(row)
+        case = dict(scenario=scenario, profile=profile, filesystem=filesystem, summaries=render.summaries(runs))
+        return render.judge(case, runs)
+
+    def test_a_headline_case_sets_fetchloom_against_the_fastest_tool_that_passed_every_run(self):
+        rows = headline_rows(curl=2, aria2c=1.5)
+        # faster still, but it failed a run
+        rows += [lab_row(profile="home", quick=False, round=n, tool="pooch", wall_seconds=1.2,
+                         status="failed" if n == 3 else "passed") for n in range(1, 11)]
+        judged = self.judged(rows)
+        self.assertEqual((judged["headline"], judged["rival"], judged["reason"]), (True, "aria2c", None))
+        self.assertAlmostEqual(judged["level"], 1 - .05 / 6)
+        aria2c = judged["comparisons"]["aria2c"]
+        self.assertEqual((aria2c["pairs"], aria2c["word"]), (10, "fetchloom faster"))
+        self.assertEqual([round(value, 9) for value in (aria2c["median_ratio"], *aria2c["interval"])], [1.5, 1.5, 1.5])
+        self.assertEqual((judged["comparisons"]["pooch"]["failed"], judged["comparisons"]["pooch"]["word"]), (1, None))
+        self.assertEqual(judged["comparisons"]["curl"]["word"], "fetchloom faster")
+
+    def test_the_aa_arm_is_never_a_rival_and_its_noise_withholds_a_verdict_on_lan_and_home(self):
+        # on the poor link fetchloom against itself may spread as the network does, and is still no rival
+        judged = self.judged(headline_rows(scenario="s2r", profile="poor", aa=(.5,), curl=2), scenario="s2r", profile="poor")
+        self.assertEqual((judged["headline"], judged["rival"], judged["reason"]), (True, "curl", None))
+        noisy = self.judged(headline_rows(aa=(.8, 1.25), curl=2))
+        self.assertIsNone(noisy["rival"])
+        self.assertRegex(noisy["reason"], r"^the a/a arm's 95% interval, 0\.\d\d to 1\.\d\d, is not inside 0\.97 to 1\.03, so the machine was too noisy$")
+        alone = self.judged(headline_rows(scenario="s3", profile="lan", aa=(), curl=2), scenario="s3", profile="lan")
+        self.assertEqual((alone["rival"], alone["reason"]), (None, "no a/a arm measured this machine's noise"))
+
+    def test_a_verdict_needs_ten_paired_rounds_and_a_fetchloom_that_never_failed(self):
+        self.assertEqual(self.judged(headline_rows(rounds=9, curl=2))["reason"], "9 rounds paired with curl, fewer than 10")
+        rows = headline_rows(curl=2)
+        rows[0] = dict(rows[0], status="failed")
+        self.assertEqual(self.judged(rows)["reason"], "fetchloom failed 1 of 10 runs")
+
+    def test_a_case_outside_the_headline_set_is_judged_at_95_percent(self):
+        judged = self.judged(headline_rows(scenario="s3", profile="lan", curl=.5), scenario="s3", profile="lan")
+        self.assertEqual((judged["headline"], judged["level"], judged["rival"]), (False, .95, "curl"))
+        self.assertEqual(judged["comparisons"]["curl"]["word"], "curl faster")
+        self.assertIsNone(render.hero(dict(scenario="s3", profile="lan", summaries={}, judged=judged)))
+
+
 class WordingTests(unittest.TestCase):
     def test_numbers_read_as_people_say_them(self):
         self.assertEqual([render.seconds(value) for value in (None, .0042, 2.5, 90)], ["n/a", "4 ms", "2.50 s", "1.50 min"])
         self.assertEqual([render.size(value) for value in (None, 512, 1536, 3 * 1024 ** 5)], ["n/a", "512 B", "1.5 KiB", "3072 TiB"])
-        self.assertEqual([render.ratio(*pair) for pair in ((2, None), (2, 0), (1.02, 1), (3, 1.5))], ["n/a", "n/a", "even (<5%)", "2.00x"])
         self.assertEqual([render.times(value) for value in (12.4, 1.6, 3.0)], ["12\u00d7", "1.6\u00d7", "3\u00d7"])
 
     def test_a_link_reads_as_its_name_and_shaping(self):
@@ -457,21 +529,17 @@ class WordingTests(unittest.TestCase):
                          ["home broadband, about 100 Mbit and 20 ms", "poor connection, about 10 Mbit, 300 ms and 3% loss",
                           "local network, no added delay or limit", "home broadband", "cable, no rate limit and 5 ms"])
 
-    def test_a_verdict_needs_a_measured_fetchloom_and_a_rival(self):
-        def summary(median, failures=0):
-            return dict(median=median, failures=failures)
-
-        for summaries, verdict in [
-            ({"fetchloom": summary(1), "curl": summary(2)}, "2\u00d7 faster"),
-            ({"fetchloom": summary(2), "curl": summary(1)}, "2\u00d7 slower"),
-            ({"fetchloom": summary(1), "curl": summary(1.02)}, "even"),
-            ({"fetchloom": summary(1, failures=1), "curl": summary(2)}, None),
-            ({"fetchloom": summary(1), "curl": summary(2, failures=1)}, None),
-            ({"fetchloom": summary(None), "curl": summary(2)}, None),
-        ]:
-            with self.subTest(verdict=verdict, summaries=summaries):
-                self.assertEqual(render.verdict(summaries), verdict)
+    def test_even_is_an_interval_inside_five_percent_and_anything_unclear_is_inconclusive(self):
+        for interval, said in [([1.06, 1.2], "fetchloom faster"), ([.8, .94], "curl faster"), ([.95, 1.05], "even"),
+                               ([.97, 1.02], "even"), ([.96, 1.06], "inconclusive"), ([1.05, 1.3], "inconclusive"),
+                               ([.9, .95], "inconclusive"), ([.5, 2], "inconclusive")]:
+            self.assertEqual(render.word(interval, "curl"), said, interval)
         self.assertEqual(render.no_bar(dict(failures=0, timeouts=0)), "skipped")
+
+    def test_six_headline_comparisons_share_a_five_percent_error(self):
+        self.assertEqual(len(render.HEADLINE), 6)
+        self.assertAlmostEqual(render.FAMILY, 1 - .05 / 6)
+        self.assertEqual((render.percent(render.FAMILY), render.percent(.95)), ("99.2%", "95%"))
 
 
 if __name__ == "__main__":
