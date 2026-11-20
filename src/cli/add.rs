@@ -831,6 +831,9 @@ async fn add_held(
         .await
         .map_err(|error| typed(error, false))?;
     } else if args.name.is_none() && !dry_run && !patterns && !args.no_sync {
+        // these downloads run before relock, so the data folder a size their server states is
+        // weighed against is noted here
+        context.placing_into(&project.root, &manifest.data_dir);
         learn_names(
             context,
             &net,

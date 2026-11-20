@@ -96,6 +96,9 @@ struct Context {
     hashing: crate::cache::Hashing,
     /// hunt-feel's experiment switches, read once as the command starts.
     feel: crate::exp::Feel,
+    /// the data folder this run places in, once a project's run knows it, so a download whose
+    /// server states its size is checked against that disk too, before its body comes.
+    placing_in: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 /// a refusal that signing in may lift.
@@ -106,6 +109,11 @@ struct Refusal {
 }
 
 impl Context {
+    /// notes `data_dir`, a project's data folder below `root`, as where the run places, once.
+    fn placing_into(&self, root: &std::path::Path, data_dir: &str) {
+        let _ = self.placing_in.set(crate::project::native(root, data_dir));
+    }
+
     /// takes the refusal the command ended with, if signing in may lift it.
     fn refusal(&self) -> Option<Refusal> {
         self.needed
@@ -138,6 +146,7 @@ impl Context {
             projectless: false,
             hashing: crate::cache::Hashing::default(),
             feel: crate::exp::Feel::default(),
+            placing_in: std::sync::OnceLock::new(),
         }
     }
 

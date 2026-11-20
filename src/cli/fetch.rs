@@ -513,6 +513,45 @@ struct Approval {
     by_variable: bool,
     /// whether the run has no project, as `get`, so the budget's help names no dataset.
     projectless: bool,
+    /// the data folder the run places in, whose disk a stated size is checked against too.
+    data: Option<DataDisk>,
+}
+
+/// the disk of the data folder a run places in, as a download whose server states its size sees
+/// it: one that takes no file past a size, as FAT32, refuses a larger one, and one placing copies
+/// to needs room for the whole file.
+struct DataDisk {
+    folder: std::path::PathBuf,
+    /// the nearest folder of `folder` that is there, whose disk is the data folder's.
+    at: std::path::PathBuf,
+    largest: Option<u64>,
+    /// whether placing copies files there, as onto FAT, exFAT or another disk than the cache's,
+    /// rather than linking or cloning them.
+    copies: bool,
+    /// whether the cache is on that disk too, so a download and its copy both take room there.
+    beside_cache: bool,
+}
+
+impl DataDisk {
+    /// the disk of `folder`, a data folder, beside the cache at `cache`; none when no folder of
+    /// its path is there.
+    fn of(folder: &std::path::Path, cache: &std::path::Path) -> Option<DataDisk> {
+        let at = folder.ancestors().find(|path| path.is_dir())?.to_path_buf();
+        let filesystem = crate::space::Filesystem::of(&at);
+        let beside_cache = crate::space::same_disk(&at, cache) != Some(false);
+        Some(DataDisk {
+            folder: folder.to_path_buf(),
+            at,
+            largest: filesystem.largest_file(),
+            copies: filesystem.serializes() || !beside_cache,
+            beside_cache,
+        })
+    }
+
+    /// how a message names the data folder.
+    fn place(&self) -> String {
+        format!("the data folder at {}", units::path(&self.folder))
+    }
 }
 
 impl Approval {
@@ -529,6 +568,7 @@ impl Approval {
             budget: None,
             by_variable: false,
             projectless: false,
+            data: None,
         }
     }
 
@@ -1011,6 +1051,46 @@ impl<'a> Watch<'a> {
         }
     }
 
+    /// checks a download whose server states its size, `total`, against the data folder's disk
+    /// before its body comes, as one the cache's disk could take: refused where the disk takes no
+    /// file that large, and asked about, as a question about room is, where placing copies it to
+    /// a disk without the room. later checks before placing ask too, so `--yes` lets this one by.
+    fn check_data_disk(&self, total: u64) -> Result<(), Error> {
+        let Some(data) = &self.approval.data else {
+            return Ok(());
+        };
+        if data.largest.is_some_and(|largest| total > largest) {
+            return Err(Error::new(
+                Kind::LocalIo,
+                crate::space::too_large(data.place(), &self.job.label, total),
+            )
+            .help("use a data folder on a disk formatted as exFAT, NTFS, APFS or ext4"));
+        }
+        let free = data
+            .copies
+            .then(|| (self.approval.free)(&data.at))
+            .flatten();
+        let needed = if data.beside_cache {
+            total.saturating_mul(2)
+        } else {
+            total
+        };
+        if self.yes || crate::space::short(needed, free).is_none() {
+            return Ok(());
+        }
+        let doing = format!("placing {}", self.job.label);
+        let room = (needed, free.unwrap_or_default());
+        self.approve(Question::Room, || {
+            super::ask_room_on(
+                self.output,
+                &doing,
+                room,
+                &data.place(),
+                "free space on that disk, then run the same command again. add --yes to go on anyway, as on a disk that compresses what it stores",
+            )
+        })
+    }
+
     /// a download that began at `resumed` of `total`: checks the disk has room for it, asks
     /// first where its size calls for it, then shows its bar from there.
     fn started(&self, total: Option<u64>, resumed: u64, resumable: Resumable) -> Result<(), Error> {
@@ -1025,6 +1105,9 @@ impl<'a> Watch<'a> {
         }
         let left = total.map_or(0, |total| total.saturating_sub(resumed));
         let unknown = self.job.fetch.expect.size.is_none();
+        if unknown && let Some(total) = total {
+            self.check_data_disk(total)?;
+        }
         // the size a listing rounds was asked about before the downloads, as a known one is
         let asked = matches!(self.job.fetch.listed, Listed::About(_));
         let free = self.approval.cache.as_deref().map(self.approval.free);
@@ -1706,6 +1789,10 @@ async fn run_each(
     // unknown source sizes share one answer, once headers or received bytes show a large file
     let mut approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
     approval.projectless = context.projectless;
+    approval.data = context
+        .placing_in
+        .get()
+        .and_then(|folder| DataDisk::of(folder, cache.root()));
     let approval = Arc::new(budgeted(context, cache, approval, overall.sizes.1 > 0).await);
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
@@ -2717,6 +2804,83 @@ mod tests {
             stopped.message,
             "downloading big.bin took the 1.5 KiB the disk holding the cache at /cache had free, and its server never said its size"
         );
+    }
+
+    /// a stated size is weighed against the data folder's disk too, before the body comes: refused
+    /// where the disk takes no file that large, as FAT32, whatever the answers, and asked about
+    /// where placing copies it to a disk without the room, the download's too when the cache is
+    /// there, which no one can answer here. `--yes` leaves that to the checks before placing, and a
+    /// disk placing links to needs no room.
+    #[test]
+    fn a_stated_size_is_weighed_against_the_data_folders_disk() {
+        let output = Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        );
+        let job = Job {
+            fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
+            label: "big/big.bin".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let overall = overall();
+        let held = Held::default();
+        let started = |total| Event::Started {
+            total: Some(total),
+            resumed: 0,
+            resumable: Resumable::No,
+        };
+        let approval = |largest: Option<u64>, copies: bool, beside_cache: bool| {
+            let mut approval = Approval::new(crate::settings::ASK_ABOVE);
+            approval.free = |_| Some(1000);
+            approval.data = Some(DataDisk {
+                folder: std::path::PathBuf::from("/p/data"),
+                at: std::path::PathBuf::from("/p"),
+                largest,
+                copies,
+                beside_cache,
+            });
+            approval
+        };
+        let fat = approval(Some(4096), true, false);
+        for yes in [false, true] {
+            let watch = Watch::new(&job, &output, &overall, &fat, yes, &held);
+            let refused = watch.on(&started(5000)).unwrap_err();
+            assert_eq!(refused.kind, Kind::LocalIo);
+            assert_eq!(
+                refused.message,
+                "the data folder at /p/data is on a FAT32 disk, which holds no file of 4 GiB or more, and big/big.bin is 4.9 KiB"
+            );
+        }
+        let short = approval(None, true, false);
+        let watch = Watch::new(&job, &output, &overall, &short, false, &held);
+        let refused = watch.on(&started(2000)).unwrap_err();
+        assert_eq!(refused.kind, Kind::Unconfirmed);
+        assert_eq!(
+            refused.message,
+            "placing big/big.bin needs at least 2.0 KiB on the disk holding the data folder at /p/data, which has 1000 B free"
+        );
+        let told = Watch::new(&job, &output, &overall, &short, true, &held);
+        told.on(&started(2000)).unwrap();
+        let beside = approval(None, true, true);
+        let watch = Watch::new(&job, &output, &overall, &beside, false, &held);
+        let refused = watch.on(&started(600)).unwrap_err();
+        assert_eq!(
+            refused.message,
+            "placing big/big.bin needs at least 1.2 KiB on the disk holding the data folder at /p/data, which has 1000 B free"
+        );
+        let linked = approval(None, false, true);
+        let watch = Watch::new(&job, &output, &overall, &linked, false, &held);
+        watch.on(&started(2000)).unwrap();
     }
 
     /// downloads of no stated size at once share the room the budget or the disk leaves, rather
