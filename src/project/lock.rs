@@ -872,6 +872,20 @@ impl Lock {
         Lock::read_waiting_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
     }
 
+    /// [`Lock::read_waiting`] of every dataset with no list's rows read: a dataset whose files are
+    /// kept in a list has none here. the text is parsed, checked and weighed as a whole read does,
+    /// and each list by what data.lock says of it, for a settled status, which needs no listed
+    /// file once [`lists_whole`] found every list there and whole, so none waits.
+    pub(crate) fn read_unlisted(text: &str, root: &Path) -> Result<Lock, Error> {
+        let memory = ROOM.get().copied().unwrap_or(u64::MAX);
+        let parsed = parse_within(text, &|_| true, memory)?;
+        if parsed.iter().any(|entry| entry.written().is_some()) {
+            lists::folder(root)?;
+        }
+        let mut budget = Budget::of(&parsed, memory)?;
+        resolve_from(parsed, Some(lists::Parts::Unread), &mut budget)
+    }
+
     /// [`Lock::read_waiting`] with its text held to `memory`, the room a container leaves.
     fn read_waiting_within(
         text: &str,

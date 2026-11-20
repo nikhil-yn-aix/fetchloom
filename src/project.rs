@@ -438,9 +438,28 @@ impl Project {
         read: impl Fn(&str) -> Result<Lock, Error>,
     ) -> Result<Option<(Lock, String)>, Error> {
         let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
-        let Some(mut text) = self.lock_text()? else {
+        let Some(text) = self.lock_text()? else {
             return Ok(None);
         };
+        self.lock_of(text, read, &span).map(Some)
+    }
+
+    /// [`Project::lock_and_text`] of data.lock's `text`, read already.
+    pub(crate) fn lock_from(&self, text: String) -> Result<(Lock, String), Error> {
+        let span = tracing::debug_span!("read_lock", bytes = tracing::field::Empty).entered();
+        self.lock_of(
+            text,
+            |text| Lock::read_waiting(text, &self.root, &|_| true),
+            &span,
+        )
+    }
+
+    fn lock_of(
+        &self,
+        mut text: String,
+        read: impl Fn(&str) -> Result<Lock, Error>,
+        span: &tracing::span::EnteredSpan,
+    ) -> Result<(Lock, String), Error> {
         #[cfg(debug_assertions)]
         crate::stop::hold("FETCHLOOM_TEST_HOLD_LOCK_READ");
         let mut lock = read(&text);
@@ -457,7 +476,7 @@ impl Project {
         }
         span.record("bytes", text.len());
         let lock = lock.map_err(|error| unmerged(lock::FILE, &text).unwrap_or(error))?;
-        Ok(Some((lock, text)))
+        Ok((lock, text))
     }
 
     /// data.lock's text, or none when the project has none. it is opened once, without waiting

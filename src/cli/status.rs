@@ -383,7 +383,9 @@ pub(super) fn brief(context: &Context, project: &Project) -> Result<Status, Erro
 /// warns of the files a commit would leave out that a clone needs, the lists data.lock names,
 /// and of lists data.lock no longer names, which a commit should not take.
 fn warn_git(output: &Output, project: &Project, lock: Option<&str>) {
-    warn_untracked(output, project);
+    if let Some(text) = lock {
+        warn_untracked(output, project, text);
+    }
     warn_unnamed(output, project, lock);
 }
 
@@ -467,13 +469,10 @@ fn warn_unnamed(output: &Output, project: &Project, lock: Option<&str>) {
     }
 }
 
-/// warns of the lists data.lock names that git does not have, so a clone could not read data.lock;
-/// `-v` names each. without git or a repository, nothing is said.
-fn warn_untracked(output: &Output, project: &Project) {
-    let Ok(text) = std::fs::read_to_string(project.root.join(crate::project::lock::FILE)) else {
-        return;
-    };
-    let parts = crate::project::lock::parts(&text);
+/// warns of the lists data.lock's `text` names that git does not have, so a clone could not read
+/// data.lock; `-v` names each. without git or a repository, nothing is said.
+fn warn_untracked(output: &Output, project: &Project, text: &str) {
+    let parts = crate::project::lock::parts(text);
     let missing = super::project::untracked(&project.root, parts.iter().map(String::as_str));
     let said = match missing.as_slice() {
         [] => return,
@@ -664,9 +663,10 @@ fn check(
     mirrored: bool,
 ) -> Result<(Status, Manifest, Option<String>), Error> {
     let (text, manifest) = project.manifest()?;
-    let (read, lock_text) = project.lock_and_text()?.unzip();
+    let read_manifest = digest::sha256(text.as_bytes());
+    let (read, lock_text, whole) = lock_first(project, (&manifest, read_manifest))?;
     let seen = place::Seen {
-        manifest: digest::sha256(text.as_bytes()),
+        manifest: read_manifest,
         lock: lock_text
             .as_ref()
             .map(|text| digest::sha256(text.as_bytes())),
@@ -674,7 +674,7 @@ fn check(
     let lockless = read.is_none();
     // a sync carries a pin over to the name data.toml gives it now, so status reads data.lock
     // as that sync would leave it, and names what it renames
-    let (lock, carried) = super::sync::rename::forecast(&manifest, read.unwrap_or_default());
+    let (mut lock, carried) = super::sync::rename::forecast(&manifest, read.unwrap_or_default());
     let renamed: BTreeMap<String, String> = carried
         .into_iter()
         .map(|rename| (rename.new, rename.old))
@@ -728,6 +728,7 @@ fn check(
         settled_extra(&mut status, &survey, &manifest);
         return Ok((status, manifest, lock_text));
     }
+    lock_whole(project, &mut lock, whole.as_ref(), lock_text.as_deref())?;
     let planned = planned(
         &mut status,
         project,
@@ -765,6 +766,58 @@ fn check(
     status.hashed_only.retain(|path| listed.contains(path));
     drop(planned);
     Ok((status, manifest, lock_text))
+}
+
+/// what [`lock_first`] reads: data.lock, its text and a copy of data.toml for a whole read later.
+type LockFirst = (Option<Lock>, Option<String>, Option<Manifest>);
+
+/// data.lock and its text as status reads them first, and, when its lists were left unread, a
+/// copy of data.toml's `manifest` for the plan should they be wanted after all: when the state
+/// records a complete sync of `manifest`, by its SHA-256, and of this data.lock, in this
+/// fetchloom's format, every list it names whole, its datasets without the files of their lists,
+/// which a settled status needs none of; else, or when that read fails, the whole read of the same
+/// text.
+fn lock_first(
+    project: &Project,
+    (manifest, read): (&Manifest, digest::Sha256),
+) -> Result<LockFirst, Error> {
+    let Some(text) = project.lock_text()? else {
+        return Ok((None, None, None));
+    };
+    // a lock of inline files alone has no list to leave unread
+    if text.contains("files_in")
+        && project.synced().is_some_and(|synced| {
+            synced.complete
+                && synced.manifest == read
+                && synced.lock == digest::sha256(text.as_bytes())
+        })
+        && crate::project::lock::opens_this_format(&text)
+        && crate::project::lock::lists_whole(&text, &project.root)
+        && let Ok(lock) = Lock::read_unlisted(&text, &project.root)
+    {
+        tracing::debug!(
+            "data.lock is read without its lists' rows, which the last complete sync read"
+        );
+        return Ok((Some(lock), Some(text), Some(manifest.clone())));
+    }
+    let (lock, text) = project.lock_from(text)?;
+    Ok((Some(lock), Some(text), None))
+}
+
+/// makes `lock` data.lock read whole from its `text`, when [`lock_first`] read it without its
+/// lists' rows and kept data.toml's `manifest` for it, as a sync would take it under the names
+/// `manifest` gives: the same datasets with their files, for a project not settled after all.
+fn lock_whole(
+    project: &Project,
+    lock: &mut Lock,
+    manifest: Option<&Manifest>,
+    text: Option<&str>,
+) -> Result<(), Error> {
+    if let (Some(manifest), Some(text)) = (manifest, text) {
+        let (whole, _) = project.lock_from(text.to_owned())?;
+        *lock = super::sync::rename::forecast(manifest, whole).0;
+    }
+    Ok(())
 }
 
 /// the files of `untracked` in outputs' folders that git tracks: one git run for each such folder,

@@ -2,6 +2,7 @@
 //! put back, and none for the files an operating system makes there.
 
 use std::fs;
+use std::io::Write as _;
 
 use crate::mirrors::IRIS;
 use crate::support::{Result, Routes, Sandbox, delete, file, json, ok, text};
@@ -178,6 +179,186 @@ fn a_settled_status_answers_alike_with_only_its_recorded_files() -> Result {
         found(&missing, "missing")?,
         serde_json::json!(["data/b/b.csv"])
     );
+    Ok(())
+}
+
+/// a settled status reads data.lock without its lists' rows, which the state's record of the last
+/// complete sync of the same data.toml and data.lock vouches for, and answers as when data.lock
+/// ends with a blank line no sync recorded, which has it read them: settled, with a file gone, a
+/// list changed or gone, data.toml changed, a dataset dropped, a placed file changed through its
+/// link to the cache, and data.lock of another format.
+#[test]
+fn a_settled_status_answers_as_a_whole_read_without_reading_the_lists() -> Result {
+    let sandbox = Sandbox::new()?;
+    for name in ["a", "b"] {
+        let folder = sandbox.folder(name)?;
+        for row in 1..=3 {
+            fs::write(
+                folder.join(format!("f{row}.csv")),
+                format!("{name} {row}\n"),
+            )?;
+        }
+    }
+    let run = |args: &[&str]| listed(&sandbox, args);
+    for name in ["a", "b"] {
+        ok(&run(&["add", &format!("../{name}")])?)?;
+    }
+    ok(&run(&["sync"])?)?;
+    let work = sandbox.work();
+    let parts: Vec<std::path::PathBuf> = fs::read_dir(work.join("data.lock.d"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<std::io::Result<_>>()?;
+    assert!(parts.len() >= 2, "{parts:?}");
+    let both = |case: &str, unlisted: bool| as_a_whole_read(&sandbox, case, unlisted);
+    both("settled", true)?;
+    delete(&work.join("data/a/f1.csv"))?;
+    both("a file gone", true)?;
+    ok(&run(&["sync"])?)?;
+    both("settled again", true)?;
+    let part = fs::read(&parts[0])?;
+    let mut changed = part.clone();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    fs::write(&parts[0], &changed)?;
+    both("a list changed", false)?;
+    delete(&parts[0])?;
+    both("a list gone", false)?;
+    fs::write(&parts[0], &part)?;
+    both("the list back", true)?;
+    let toml = fs::read_to_string(work.join("data.toml"))?;
+    fs::write(
+        work.join("data.toml"),
+        toml.replace("[datasets.b]", "[datasets.c]"),
+    )?;
+    both("a dataset renamed in data.toml", false)?;
+    fs::write(work.join("data.toml"), &toml)?;
+    both("data.toml back", true)?;
+    let mirror = sandbox.folder("mirror")?.to_string_lossy().into_owned();
+    ok(&run(&["--yes", "push", "--to", &mirror])?)?;
+    ok(&run(&["--mirror", &mirror, "drop", "b"])?)?;
+    both("a dataset dropped", false)?;
+    ok(&run(&["--mirror", &mirror, "sync", "b"])?)?;
+    both("the dataset back by a sync of it alone", false)?;
+    ok(&run(&["sync"])?)?;
+    both("settled by a whole sync", true)?;
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    fs::write(
+        work.join("data.lock"),
+        lock.replacen("version = 1", "version = 99", 1),
+    )?;
+    both("data.lock of another format", false)?;
+    fs::write(work.join("data.lock"), &lock)?;
+    both("data.lock back", true)?;
+    let placed = work.join("data/a/f2.csv");
+    let mut permissions = fs::metadata(&placed)?.permissions();
+    #[allow(
+        clippy::permissions_set_readonly_false,
+        reason = "a person's edit in place"
+    )]
+    permissions.set_readonly(false);
+    fs::set_permissions(&placed, permissions)?;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&placed)?
+        .write_all(b"more\n")?;
+    both("a placed file changed through its link", true)?;
+    Ok(())
+}
+
+/// a settled status leaves data.lock's list rows unread, so it is not charged for them and
+/// answers in a container whose room a read of those rows overruns, though not in one too small
+/// for the files data.lock counts; a project that is not settled reads the rows and is refused.
+#[test]
+fn a_settled_status_answers_in_a_room_its_unread_rows_would_overrun() -> Result {
+    let sandbox = Sandbox::new()?;
+    // rows of 748-byte paths, past the 650 bytes a pinned file is counted at, each takes twice
+    // its excess more; each name stays short enough for any disk, and the whole path for macos
+    let deep = ["a", "b", "c"].map(|part| part.repeat(200)).join("/");
+    let name = |row: u32| format!("{}{row}.csv", "d".repeat(140));
+    let folder = sandbox.folder(&format!("long/{deep}"))?;
+    for row in 1..=3 {
+        fs::write(folder.join(name(row)), format!("{row}\n"))?;
+    }
+    let run = |args: &[&str], room: Option<u64>| {
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_TEST_INLINE", "0");
+        if let Some(room) = room {
+            command.env("FETCHLOOM_TEST_ROOM", room.to_string());
+        }
+        command.output()
+    };
+    ok(&run(&["add", "../long"], None)?)?;
+    ok(&run(&["sync"], None)?)?;
+    let base: u64 = if cfg!(target_env = "musl") {
+        20 << 20
+    } else {
+        8 << 20
+    };
+    // the three files' count fits, and the first row's excess, but not the first two rows'
+    let room = base + 3 * 650 + 300;
+    let refused = |output: &std::process::Output| -> Result {
+        let document = json(output)?;
+        assert_eq!(output.status.code(), Some(50), "{document}");
+        assert_eq!(document["errors"][0]["kind"], "local.io", "{document}");
+        Ok(())
+    };
+    let settled = run(&["--json", "status"], Some(room))?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stdout)?);
+    let answered = json(&settled)?;
+    assert_eq!(answered["status"], "ok", "{answered}");
+    assert_eq!(
+        answered["result"]["missing"],
+        serde_json::json!([]),
+        "{answered}"
+    );
+    refused(&run(&["--json", "status"], Some(base + 3 * 650 - 1))?)?;
+    delete(&sandbox.work().join(format!("data/long/{deep}/{}", name(1))))?;
+    refused(&run(&["--json", "status"], Some(room))?)?;
+    Ok(())
+}
+
+/// `args` run in `sandbox` with every dataset's files in a list.
+fn listed(sandbox: &Sandbox, args: &[&str]) -> std::io::Result<std::process::Output> {
+    sandbox
+        .command(args)
+        .env("FETCHLOOM_TEST_INLINE", "0")
+        .output()
+}
+
+/// asserts that `status` and its json say the same as when data.lock ends with one more blank
+/// line, which no sync recorded, so status reads data.lock whole, and that it left the lists'
+/// rows unread just when `unlisted`.
+fn as_a_whole_read(sandbox: &Sandbox, case: &str, unlisted: bool) -> Result {
+    let answers = || -> Result<(Vec<Shown>, bool)> {
+        let mut runs = Vec::new();
+        for args in [&["status"][..], &["--json", "status"]] {
+            let output = listed(sandbox, args)?;
+            let shown = if args.contains(&"--json") {
+                let mut document = json(&output)?;
+                document["work"]["elapsed_ms"] = serde_json::Value::Null;
+                document.to_string()
+            } else {
+                text(&output.stdout)?
+            };
+            runs.push((output.status.code(), shown, text(&output.stderr)?));
+        }
+        let traced = text(&listed(sandbox, &["-vv", "status"])?.stderr)?;
+        Ok((
+            runs,
+            traced.contains("data.lock is read without its lists' rows"),
+        ))
+    };
+    let (first, rowless) = answers()?;
+    assert_eq!(rowless, unlisted, "{case}");
+    let lock = sandbox.work().join("data.lock");
+    let bytes = fs::read(&lock)?;
+    let mut longer = bytes.clone();
+    longer.push(b'\n');
+    fs::write(&lock, &longer)?;
+    let (whole, rowless) = answers()?;
+    fs::write(&lock, &bytes)?;
+    assert!(!rowless, "{case}");
+    assert_eq!(first, whole, "{case}");
     Ok(())
 }
 

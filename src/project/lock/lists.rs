@@ -378,6 +378,9 @@ pub(crate) enum Parts<'a> {
     Folder(&'a Path),
     /// the bytes this gives for a part by its path below the project, as a git commit holds it.
     Given(&'a dyn Fn(&str) -> Result<Vec<u8>, Error>),
+    /// none read: a list is checked by what data.lock says of it, its rows left out, for a reader
+    /// that needs no listed file once [`super::lists_whole`] found every part there and whole.
+    Unread,
 }
 
 /// the rows of `name`'s list from the parts `listed` names in `parts`, checked against what
@@ -408,8 +411,12 @@ pub(crate) fn read(
         )
         .help("raise the limit with `fetchloom settings set most_files <count>` or FETCHLOOM_MOST_FILES; each listed file takes about 2 KiB of memory"));
     }
-    if let Parts::Folder(root) = parts {
-        folder(root)?;
+    match parts {
+        Parts::Folder(root) => {
+            folder(root)?;
+        }
+        Parts::Given(_) => {}
+        Parts::Unread => return Ok(Vec::new()),
     }
     let mut rows: Vec<LockedFile> = Vec::with_capacity(count.min(1 << 20));
     let mut hasher = Hasher::default();
@@ -425,6 +432,7 @@ pub(crate) fn read(
                 )
             }
             Parts::Given(given) => Box::new(std::io::Cursor::new(given(part)?)),
+            Parts::Unread => return Ok(Vec::new()),
         };
         let mut decoder = zstd::stream::read::Decoder::new(file)
             .map_err(|err| unreadable(name, part, &err, None))?;
