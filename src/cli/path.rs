@@ -389,23 +389,38 @@ fn planned_path(
         Some(file) => {
             let wanted = format!("{folder}/{file}");
             let prefix = format!("{wanted}/");
-            if !planned.targets.iter().any(|target| {
-                target.dataset == name
-                    && (target.path == wanted || target.path.starts_with(&prefix))
-            }) {
-                let prefix = format!("{folder}/");
-                let inside: Vec<&str> = planned
+            let theirs = || {
+                planned
                     .targets
                     .iter()
                     .filter(|target| target.dataset == name)
+            };
+            if theirs().any(|target| target.path == wanted || target.path.starts_with(&prefix)) {
+                wanted
+            } else if let Some(own) =
+                composed_alike(theirs().map(|target| target.path.as_str()), &wanted)
+            {
+                own
+            } else {
+                let prefix = format!("{folder}/");
+                let inside: Vec<&str> = theirs()
                     .filter_map(|target| target.path.strip_prefix(&prefix))
                     .collect();
                 return Err(not_in(name, file, &inside));
             }
-            wanted
         }
     };
     Ok(native(&project.root, &relative))
+}
+
+/// the file or folder among `paths` that `wanted` names in another unicode spelling, as `café`
+/// typed decomposed for a name an archive stored composed, in its own spelling. a mac's disk
+/// takes both for one name, and no dataset places both.
+fn composed_alike<'p>(paths: impl Iterator<Item = &'p str>, wanted: &str) -> Option<String> {
+    let depth = wanted.split('/').count();
+    paths
+        .map(|path| path.split('/').take(depth).collect::<Vec<_>>().join("/"))
+        .find(|own| crate::name::same_composed(own, wanted))
 }
 
 /// a path `fetchloom path` did not find in dataset `name`, with the paths `inside` it nearest to

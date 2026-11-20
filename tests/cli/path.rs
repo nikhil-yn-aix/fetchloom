@@ -4,7 +4,7 @@
 use std::fs;
 
 use crate::project::{IRIS, PATH, added, clone};
-use crate::support::{Result, Sandbox, Server, delete, file, json, text, ways_left_out};
+use crate::support::{Result, Sandbox, Server, delete, file, json, text, ways_left_out, zip_of};
 
 #[test]
 fn path_prints_where_a_dataset_or_file_is() -> Result {
@@ -153,6 +153,38 @@ fn path_answers_a_file_a_dataset_lacks_with_paths_it_holds() -> Result {
     let stderr = text(&unknown.stderr)?;
     assert!(!stderr.contains("fetchloom status"), "{stderr}");
     insta::assert_snapshot!(stderr);
+    Ok(())
+}
+
+/// a name typed in its other unicode spelling, as `café` decomposed the way a mac's file list or a
+/// script may give it, answers with the file the archive stored composed: a mac's disk takes both
+/// for one name, and no dataset holds both.
+#[test]
+fn path_takes_a_name_typed_in_the_other_unicode_spelling() -> Result {
+    let sandbox = Sandbox::new()?;
+    let zip = zip_of(&[("cafe\u{301}.csv", b"x\n"), ("other.csv", b"y\n")])?;
+    let server = Server::start("/nfd.zip", vec![file(&zip, "\"n1\"")])?;
+    let added = sandbox.run(&["add", &server.url, "--as", "nfd"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = sandbox
+        .work()
+        .join("data")
+        .join("nfd")
+        .join("caf\u{e9}.csv");
+    for typed in ["nfd/cafe\u{301}.csv", "nfd/caf\u{e9}.csv"] {
+        let output = sandbox.run(&["path", typed])?;
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{typed:?}: {}",
+            text(&output.stderr)?
+        );
+        assert_eq!(
+            text(&output.stdout)?,
+            format!("{}\n", placed.display()),
+            "{typed:?}"
+        );
+    }
     Ok(())
 }
 
