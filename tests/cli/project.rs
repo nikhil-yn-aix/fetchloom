@@ -3,7 +3,7 @@
 use std::fs;
 
 use crate::support::{
-    Result, Routes, Sandbox, Server, add_ok, delete, edit, file, json, reply, sha256_hex, text,
+    Result, Routes, Sandbox, Server, add_ok, delete, edit, file, json, ok, reply, sha256_hex, text,
     ways_left_out, zip_of,
 };
 #[cfg(unix)]
@@ -3916,6 +3916,97 @@ fn an_exclude_that_left_out_a_listed_file_is_never_called_one_that_missed() -> R
     }
     assert_eq!(fs::read(&train)?, b"id,y\n1,0\n");
     assert_eq!(fs::read(&test)?, b"id\n3\n", "sync put it back");
+    Ok(())
+}
+
+/// `lock --check` names the first pin, in data.lock's order, whose size is not that of its bytes:
+/// past an archive's members, beside a folder whose name starts the same, and with data.lock's
+/// rows swapped by hand.
+#[test]
+fn lock_check_names_the_first_wrong_size_in_lock_order() -> Result {
+    let sandbox = Sandbox::new()?;
+    for name in ["a", "a-b", "b"] {
+        let folder = sandbox.folder(name)?;
+        for row in 1..=3 {
+            fs::write(
+                folder.join(format!("f{row}.csv")),
+                format!("{name} {row}\n"),
+            )?;
+        }
+    }
+    let members: Vec<(String, Vec<u8>)> = (0..40)
+        .map(|member| {
+            (
+                format!("m{member:02}.txt"),
+                format!("{member}\n").into_bytes(),
+            )
+        })
+        .collect();
+    let members: Vec<(&str, &[u8])> = members
+        .iter()
+        .map(|(name, bytes)| (name.as_str(), bytes.as_slice()))
+        .collect();
+    let folder = sandbox.folder("a")?;
+    fs::write(folder.join("pack.zip"), zip_of(&members)?)?;
+    fs::write(folder.join("q.csv"), "past the members\n")?;
+    for name in ["a", "a-b", "b"] {
+        ok(&sandbox.run(&["add", &format!("../{name}")])?)?;
+    }
+    let lock = sandbox.work().join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let row = |dataset: &str, file: &str| -> Result<String> {
+        let at = pinned
+            .find(&format!("name = \"{dataset}\"\n"))
+            .ok_or("no dataset")?;
+        let line = pinned[at..]
+            .lines()
+            .find(|line| line.contains(&format!("path = \"{file}\"")))
+            .ok_or("no file")?;
+        Ok(line.to_owned())
+    };
+    let sized = |line: &str, size: usize, to: usize| {
+        line.replace(&format!("size = {size},"), &format!("size = {to},"))
+    };
+    let check = |edited: &str| -> Result<(Option<i32>, String)> {
+        fs::write(&lock, edited)?;
+        let output = sandbox.run(&["lock", "--check"])?;
+        Ok((output.status.code(), text(&output.stderr)?))
+    };
+    let (q, a_b, b) = (
+        row("a", "q.csv")?,
+        row("a-b", "f3.csv")?,
+        row("b", "f2.csv")?,
+    );
+    let wrong = pinned
+        .replace(&q, &sized(&q, 17, 18))
+        .replace(&a_b, &sized(&a_b, 6, 5))
+        .replace(&b, &sized(&b, 4, 5));
+    let (code, said) = check(&wrong)?;
+    assert_eq!(code, Some(50), "{said}");
+    assert!(
+        said.contains("data.lock pins a/q.csv at 18 bytes, but its SHA-256 is that of 17 bytes"),
+        "{said}"
+    );
+    let (code, said) = check(&wrong.replace(&sized(&q, 17, 18), &q))?;
+    assert_eq!(code, Some(50), "{said}");
+    assert!(
+        said.contains("data.lock pins a-b/f3.csv at 5 bytes, but its SHA-256 is that of 6 bytes"),
+        "{said}"
+    );
+    let b1 = row("b", "f1.csv")?;
+    let swapped = pinned
+        .replace(&b1, "\u{0}")
+        .replace(&b, &b1)
+        .replace('\u{0}', &b)
+        .replace(&b1, &sized(&b1, 4, 5));
+    let (code, said) = check(&swapped)?;
+    assert_eq!(code, Some(50), "{said}");
+    assert!(
+        said.contains("data.lock pins b/f1.csv at 5 bytes"),
+        "{said}"
+    );
+    let (code, said) = check(&pinned)?;
+    assert_eq!(code, Some(0), "{said}");
     Ok(())
 }
 

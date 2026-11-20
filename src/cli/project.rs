@@ -4,7 +4,9 @@
 
 mod conflicts;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet, btree_map};
+use std::iter::Peekable;
+use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -25,7 +27,7 @@ use crate::plan;
 use crate::project::lock::merge;
 use crate::project::lock::{self, Drift, Lock};
 use crate::project::manifest::{self, Manifest};
-use crate::project::state::Synced;
+use crate::project::state::{State, Synced};
 use crate::project::{Held, Hold, Project, git, native};
 use crate::source::{Listing, local};
 pub(crate) use crate::suggested::command;
@@ -1370,23 +1372,128 @@ fn mispinned(project: &Project, manifest: &Manifest, lock: &Lock, scope: &Scope)
         .filter(|locked| scope.includes(&locked.name))
     {
         let folder = plan::folder(manifest, &locked.name);
-        for file in locked.files.iter().filter(|file| file.unpacks_to.is_none()) {
-            let path = format!("{folder}/{}", file.path);
-            let Some(placed) = state.files.get(&path) else {
-                continue;
-            };
-            if let Some(actual) = place::placed_other_size(
-                &native(&project.root, &path),
-                placed,
-                &file.sha256,
-                file.size,
-            ) {
-                let label = format!("{}/{}", locked.name, file.path);
-                return Some(place::mispinned(&label, file.size, actual));
-            }
+        // a dataset of one file is found as fast by its path alone
+        let found = if locked.files.len() > 1 {
+            mispinned_beside(project, &state, &folder, locked)
+        } else {
+            mispinned_in(project, &state, &folder, locked)
+        };
+        if found.is_some() {
+            return found;
         }
     }
     None
+}
+
+/// the first file of `locked`, in `folder`, whose size the state's record of it says is not the
+/// size of its SHA-256's bytes, as [`mispinned`] finds one.
+fn mispinned_in(
+    project: &Project,
+    state: &State,
+    folder: &str,
+    locked: &lock::Locked,
+) -> Option<Error> {
+    for file in locked.files.iter().filter(|file| file.unpacks_to.is_none()) {
+        let path = format!("{folder}/{}", file.path);
+        let Some(placed) = state.files.get(&path) else {
+            continue;
+        };
+        if let Some(actual) = place::placed_other_size(
+            &native(&project.root, &path),
+            placed,
+            &file.sha256,
+            file.size,
+        ) {
+            let label = format!("{}/{}", locked.name, file.path);
+            return Some(place::mispinned(&label, file.size, actual));
+        }
+    }
+    None
+}
+
+/// [`mispinned_in`], walking the state's records below `folder` beside the files of `locked`,
+/// both in path order, rather than making each file's path and looking it up.
+fn mispinned_beside(
+    project: &Project,
+    state: &State,
+    folder: &str,
+    locked: &lock::Locked,
+) -> Option<Error> {
+    let mut below = Below::new(&state.files, folder);
+    for file in locked.files.iter().filter(|file| file.unpacks_to.is_none()) {
+        let Some((record, placed)) = below.find(&file.path) else {
+            continue;
+        };
+        // what `placed_other_size` asks first, without the path it needs only to read the file
+        if placed.sha256 != file.sha256 || placed.look.size == file.size {
+            continue;
+        }
+        if let Some(actual) = place::placed_other_size(
+            &native(&project.root, record),
+            placed,
+            &file.sha256,
+            file.size,
+        ) {
+            let label = format!("{}/{}", locked.name, file.path);
+            return Some(place::mispinned(&label, file.size, actual));
+        }
+    }
+    None
+}
+
+/// the entries of a map keyed by path below one folder, found for names asked in path order by
+/// walking the map beside them: a name asked out of order, or far past the last one, is looked up.
+struct Below<'a, 'w, V> {
+    map: &'a BTreeMap<String, V>,
+    /// the folder and a `/`, then the last name looked up.
+    path: String,
+    folder: usize,
+    entries: Peekable<btree_map::Range<'a, String, V>>,
+    last: Option<&'w str>,
+}
+
+impl<'a, 'w, V> Below<'a, 'w, V> {
+    /// the most entries passed over to reach a name before it is looked up instead.
+    const PASSED_MOST: usize = 16;
+
+    fn new(map: &'a BTreeMap<String, V>, folder: &str) -> Self {
+        let path = format!("{folder}/");
+        Below {
+            map,
+            folder: path.len(),
+            entries: Self::from(map, &path),
+            path,
+            last: None,
+        }
+    }
+
+    fn from(map: &'a BTreeMap<String, V>, path: &str) -> Peekable<btree_map::Range<'a, String, V>> {
+        map.range::<str, _>((Bound::Included(path), Bound::Unbounded))
+            .peekable()
+    }
+
+    /// the entry for `name` in the folder, if the map has one.
+    fn find(&mut self, name: &'w str) -> Option<(&'a String, &'a V)> {
+        let folder = &self.path.as_bytes()[..self.folder];
+        let inside = |key: &String| key.as_bytes().starts_with(folder);
+        let before = |(key, _): &(&String, &V)| inside(key) && key[folder.len()..] < *name;
+        let mut seek = self.last.is_some_and(|last| last >= name);
+        let mut passed = 0;
+        while !seek && self.entries.next_if(before).is_some() {
+            passed += 1;
+            seek = passed == Self::PASSED_MOST && self.entries.peek().is_some_and(before);
+        }
+        self.last = Some(name);
+        if seek {
+            self.path.truncate(self.folder);
+            self.path.push_str(name);
+            self.entries = Self::from(self.map, &self.path);
+        }
+        let folder = self.folder;
+        self.entries.next_if(|(key, _)| {
+            key.as_bytes().starts_with(&self.path.as_bytes()[..folder]) && key[folder..] == *name
+        })
+    }
 }
 
 /// data.toml and data.lock as a run read them, which the state records as the run leaves them.
@@ -2028,6 +2135,42 @@ pub(crate) mod tests {
     use crate::project::manifest;
     use crate::source::Reference;
     use crate::source::recorded::block_on;
+
+    /// a walk beside a map's keys below a folder finds what a lookup of each name finds: in
+    /// order, out of order, again, past many keys between two names, and never a key in a
+    /// folder whose name starts the same.
+    #[test]
+    fn a_walk_below_a_folder_finds_what_a_lookup_finds() {
+        let mut map = BTreeMap::new();
+        for key in [
+            "data/a-b/f1",
+            "data/a.x/f1",
+            "data/a/f1",
+            "data/a/f1/x",
+            "data/a/f2",
+            "data/a/q",
+            "data/b/f1",
+        ] {
+            map.insert(key.to_owned(), 0);
+        }
+        for member in 1..=40 {
+            map.insert(format!("data/a/pack/m{member:02}"), member);
+        }
+        for names in [
+            &["f1", "f2", "q"][..],
+            &["q", "f1", "f2"],
+            &[
+                "f0", "f1", "f1", "pack/m05", "pack/m30", "pack/m31", "zz", "f2",
+            ],
+            &["-b/f1", ".x/f1", "f1/x", "pack", "pack/m40"],
+        ] {
+            let mut below = Below::new(&map, "data/a");
+            for name in names {
+                let looked_up = map.get_key_value(&format!("data/a/{name}"));
+                assert_eq!(below.find(name), looked_up, "{names:?}: {name}");
+            }
+        }
+    }
 
     pub(crate) fn waiting_project() -> (tempfile::TempDir, Project, Context) {
         let dir = tempfile::tempdir().unwrap();
