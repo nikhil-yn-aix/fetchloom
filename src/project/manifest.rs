@@ -1736,18 +1736,23 @@ fn narrowed_one_at_a_time(text: &str, changes: &[Narrowing<'_>]) -> Result<Strin
     Ok(text)
 }
 
-/// data.toml's text without the datasets `names`, read and written once however many there are.
-/// `between` runs before each name with its index, and an error from it ends the edit, so a stop
-/// it reports leaves nothing half written.
+/// data.toml's text without the datasets `names`, read and written once however many there are,
+/// each name's table blanked where it stands, so no later dataset shifts once per name. `between`
+/// runs before each name with its index, and an error from it ends the edit, so a stop it reports
+/// leaves nothing half written.
 pub(crate) fn without_datasets(
     text: &str,
     names: &[String],
     mut between: impl FnMut(usize) -> Result<(), Error>,
 ) -> Result<String, Error> {
     let mut document = editable(text)?;
+    let mut left = document
+        .get("datasets")
+        .and_then(Item::as_table_like)
+        .map_or(0, TableLike::len);
     for (at, name) in names.iter().enumerate() {
         between(at)?;
-        remove(&mut document, name);
+        blank(&mut document, name, &mut left);
     }
     Ok(document.to_string().trim_start_matches('\n').to_owned())
 }
@@ -1760,7 +1765,40 @@ fn remove(document: &mut DocumentMut, name: &str) {
     else {
         return;
     };
-    let removed = datasets.get(name).and_then(Item::as_table).map(|table| {
+    let removed = note(datasets, name);
+    datasets.remove(name);
+    if datasets.is_empty() {
+        document.remove("datasets");
+    }
+    carry(document, removed);
+}
+
+/// [`remove`], leaving `Item::None` where the table was, which TOML text and every lookup skip,
+/// with `left` counting the datasets not yet blanked in place of asking the table for its length.
+fn blank(document: &mut DocumentMut, name: &str, left: &mut usize) {
+    let Some(datasets) = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_like_mut)
+    else {
+        return;
+    };
+    let removed = note(datasets, name);
+    if let Some(item) = datasets.get_mut(name)
+        && !item.is_none()
+    {
+        *item = Item::None;
+        *left -= 1;
+    }
+    if *left == 0 {
+        document.remove("datasets");
+    }
+    carry(document, removed);
+}
+
+/// the position of the table of dataset `name` and the note above it that stays when the table
+/// goes: the comments a blank line above its header.
+fn note(datasets: &dyn TableLike, name: &str) -> Option<(Option<isize>, String)> {
+    datasets.get(name).and_then(Item::as_table).map(|table| {
         let prefix = table
             .decor()
             .prefix()
@@ -1771,11 +1809,11 @@ fn remove(document: &mut DocumentMut, name: &str) {
             .map_or("", |at| &prefix[..at + 2])
             .to_owned();
         (table.position(), kept)
-    });
-    datasets.remove(name);
-    if datasets.is_empty() {
-        document.remove("datasets");
-    }
+    })
+}
+
+/// puts the note [`note`] found for a removed table above the next table, or at the end.
+fn carry(document: &mut DocumentMut, removed: Option<(Option<isize>, String)>) {
     if let Some((Some(position), kept)) = removed
         && !kept.trim().is_empty()
     {

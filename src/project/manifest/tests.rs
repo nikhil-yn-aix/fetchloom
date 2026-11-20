@@ -793,6 +793,98 @@ fn removing_many_reads_once_as_removing_each_would() {
     }
 }
 
+/// removing tables at once, each blanked where it stands, leaves the text that taking each out of
+/// the document in turn leaves: notes above, beside and below tables, members tables, a `[datasets]`
+/// header, inline and dotted datasets, other tables around them, and names in any order, given
+/// twice or not there.
+#[test]
+fn blanking_removed_tables_leaves_the_text_taking_them_out_leaves() {
+    const NOTES: [&str; 9] = [
+        "",
+        "\n",
+        "# touching\n",
+        "\n# above\n\n",
+        "# one\n\n# two\n",
+        "  \n\n# after spaces\n",
+        "\n\n\n",
+        "# kept\n\n",
+        "\t\n",
+    ];
+    let mut rng = fastrand::Rng::with_seed(11);
+    let mut carried = 0;
+    for round in 0..3_000 {
+        let count = rng.usize(1..7);
+        let names: Vec<String> = (0..count).map(|at| format!("d{at}")).collect();
+        let note = |rng: &mut fastrand::Rng| NOTES[rng.usize(..NOTES.len())];
+        let mut text = note(&mut rng).to_owned();
+        if round % 5 == 0 {
+            let inline: Vec<String> = names
+                .iter()
+                .map(|name| format!("{name} = {{ ref = \"zenodo:1\" }}"))
+                .collect();
+            let _ = writeln!(text, "datasets = {{ {} }}", inline.join(", "));
+        }
+        if rng.usize(..4) == 0 {
+            text.push_str("[project]\ndata_dir = \"data\"\n");
+        }
+        match round % 5 {
+            0 => {}
+            1 => {
+                text.push_str("[datasets]\n");
+                for name in &names {
+                    let _ = writeln!(text, "{}{name}.ref = \"zenodo:1\"", note(&mut rng));
+                }
+            }
+            form => {
+                if form == 2 {
+                    let _ = writeln!(text, "{}[datasets]", note(&mut rng));
+                }
+                for name in &names {
+                    let _ = write!(
+                        text,
+                        "{}[datasets.{name}]\nref = \"zenodo:1\"\n",
+                        note(&mut rng)
+                    );
+                    if rng.usize(..3) == 0 {
+                        let _ = write!(
+                            text,
+                            "{}[datasets.{name}.members.\"a.zip\"]\nselect = \"*.csv\"\n",
+                            note(&mut rng)
+                        );
+                    }
+                }
+            }
+        }
+        text.push_str(note(&mut rng));
+        if rng.usize(..4) == 0 {
+            let _ = write!(text, "[tools]\nx = 1\n{}", note(&mut rng));
+        }
+        let mut going = names.clone();
+        rng.shuffle(&mut going);
+        going.truncate(rng.usize(1..=count));
+        if rng.usize(..6) == 0 {
+            going.push(going[0].clone());
+        }
+        if rng.usize(..6) == 0 {
+            going.push("absent".to_owned());
+        }
+        let mut document = editable(&text).unwrap();
+        for name in &going {
+            remove(&mut document, name);
+        }
+        let taken = document.to_string().trim_start_matches('\n').to_owned();
+        let blanked = without_datasets(&text, &going, |_| Ok(())).unwrap();
+        assert_eq!(blanked, taken, "{text:?} without {going:?}");
+        carried += usize::from(going.iter().any(|name| {
+            ["# kept\n\n", "# above\n\n", "# one\n\n# two\n"]
+                .iter()
+                .any(|note| text.contains(&format!("{note}[datasets.{name}]")))
+        }));
+    }
+    // a run in which no note moved would not test the carrying
+    assert!(carried > 100, "only {carried} notes moved");
+}
+
 /// an error between names, as a stop gives, ends the edit at that name with no text.
 #[test]
 fn a_stop_between_names_ends_the_edit_there() {

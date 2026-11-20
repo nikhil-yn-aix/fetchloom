@@ -448,3 +448,36 @@ fn remove_takes_several_names() -> Result {
     );
     Ok(())
 }
+
+/// a note a blank line above a removed dataset stays, at the end once no table follows it.
+#[test]
+fn a_note_above_removed_datasets_stays() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut servers = Vec::new();
+    for path in ["/a.csv", "/b.csv", "/c.csv"] {
+        let server = Server::start(path, vec![file(path.as_bytes(), "\"v\"")])?;
+        added(&sandbox, &server)?;
+        servers.push(server);
+    }
+    let work = sandbox.work();
+    let manifest = work.join("data.toml");
+    let noted =
+        fs::read_to_string(&manifest)?.replace("[datasets.b]", "# raw data\n\n[datasets.b]");
+    fs::write(&manifest, noted)?;
+    let output = sandbox.run(&["remove", "c", "b"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        fs::read_to_string(&manifest)?,
+        format!("[datasets.a]\nref = \"{}\"\n\n# raw data\n", servers[0].url)
+    );
+    let lock = fs::read_to_string(work.join("data.lock"))?;
+    assert!(
+        lock.contains("name = \"a\"")
+            && !lock.contains("name = \"b\"")
+            && !lock.contains("name = \"c\""),
+        "{lock}"
+    );
+    assert_eq!(fs::read(work.join("data/a/a.csv"))?, b"/a.csv");
+    assert!(!work.join("data/b").exists() && !work.join("data/c").exists());
+    Ok(())
+}
