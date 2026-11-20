@@ -2343,83 +2343,98 @@ fn rewrite_records(
     Ok(())
 }
 
-/// a record that names other bytes than its blob's never places them: a damaged one is no
-/// record, and the bytes a foreign one names, which the cache holds, do not have the blob's id.
-/// so the notes, moved where data.lock pins nothing, and the file of the foreign record download
-/// and are pinned by their own bytes, while the rest come from the cache.
+/// a damaged record is no record, so the notes, moved where data.lock pins nothing, download and
+/// are pinned by their own bytes. a record naming other bytes the cache holds stands for its blob
+/// unread in a cache only this user writes, as a url record does there, so a relock pins those
+/// bytes; in one others may write, those bytes do not have the blob's id, so the file downloads
+/// and is pinned by its own. the rest come from the cache.
 #[test]
-fn a_damaged_or_foreign_record_never_places_other_bytes() -> Result {
-    let sandbox = Sandbox::new()?;
+fn a_foreign_record_stands_only_in_a_cache_this_user_alone_writes() -> Result {
     let big = large();
     let other: Vec<u8> = big.iter().map(|byte| byte ^ 1).collect();
-    let held = [
-        ("data/rows.csv", Held::File(ROWS)),
-        ("data/notes.txt", Held::File(NOTES)),
-        ("data/big.bin", Held::File(&big)),
-        ("data/other.bin", Held::File(&other)),
-    ];
-    let routes = Routes::start(github("main", FIRST, &held)?)?;
-    ok(&run(
-        &sandbox,
-        &routes,
-        &[
-            "add",
-            "https://github.com/lab/survey/tree/main/data",
-            "--as",
-            "survey",
-        ],
-    )?)?;
-    let cache = sandbox.cache();
-    let (big_hex, other_hex) = (sha256_hex(&big), sha256_hex(&other));
-    rewrite_records(
-        &cache,
-        &big,
-        |json| json.replace(&big_hex, &other_hex),
-        true,
-    )?;
-    let notes_hex = sha256_hex(NOTES);
-    let flipped = format!(
-        "{}{}",
-        &notes_hex[..63],
-        if notes_hex.ends_with('0') { '1' } else { '0' }
-    );
-    rewrite_records(
-        &cache,
-        NOTES,
-        |json| json.replace(&notes_hex, &flipped),
-        false,
-    )?;
+    for shared in [false, true] {
+        let sandbox = Sandbox::new()?;
+        #[cfg(unix)]
+        if shared && !crate::folders::shared_cache(&sandbox)? {
+            continue;
+        }
+        #[cfg(not(unix))]
+        if shared {
+            continue;
+        }
+        let held = [
+            ("data/rows.csv", Held::File(ROWS)),
+            ("data/notes.txt", Held::File(NOTES)),
+            ("data/big.bin", Held::File(&big)),
+            ("data/other.bin", Held::File(&other)),
+        ];
+        let routes = Routes::start(github("main", FIRST, &held)?)?;
+        ok(&run(
+            &sandbox,
+            &routes,
+            &[
+                "add",
+                "https://github.com/lab/survey/tree/main/data",
+                "--as",
+                "survey",
+            ],
+        )?)?;
+        let cache = sandbox.cache();
+        let (big_hex, other_hex) = (sha256_hex(&big), sha256_hex(&other));
+        rewrite_records(
+            &cache,
+            &big,
+            |json| json.replace(&big_hex, &other_hex),
+            true,
+        )?;
+        let notes_hex = sha256_hex(NOTES);
+        let flipped = format!(
+            "{}{}",
+            &notes_hex[..63],
+            if notes_hex.ends_with('0') { '1' } else { '0' }
+        );
+        rewrite_records(
+            &cache,
+            NOTES,
+            |json| json.replace(&notes_hex, &flipped),
+            false,
+        )?;
 
-    // the notes move, so no pin of data.lock stands for them at the new commit
-    let moved = [
-        ("data/rows.csv", Held::File(ROWS)),
-        ("data/moved.txt", Held::File(NOTES)),
-        ("data/big.bin", Held::File(&big)),
-        ("data/other.bin", Held::File(&other)),
-    ];
-    routes.change(github("main", SECOND, &moved)?);
-    let before = routes.targets().len();
-    ok(&run(&sandbox, &routes, &["lock", "--upgrade"])?)?;
-    let mut expected = vec![
-        format!("{GITHUB_API}/commits/main"),
-        format!("{GITHUB_API}/git/trees/{SECOND}?recursive=1"),
-    ];
-    expected.extend(served_from(SECOND, "moved.txt", true));
-    expected.extend(served_from(SECOND, "big.bin", false));
-    expected.sort();
-    assert_eq!(asked_since(&routes, before), expected);
-    let work = sandbox.work();
-    assert_eq!(
-        pins(&work, "survey")?,
-        pinned_as(&[
-            ("rows.csv", ROWS),
-            ("moved.txt", NOTES),
-            ("big.bin", &big),
-            ("other.bin", &other),
-        ])
-    );
-    ok(&run(&sandbox, &routes, &["sync"])?)?;
-    assert_eq!(fs::read(work.join("data/survey/big.bin"))?, big);
-    assert_eq!(fs::read(work.join("data/survey/other.bin"))?, other);
+        // the notes move, so no pin of data.lock stands for them at the new commit
+        let moved = [
+            ("data/rows.csv", Held::File(ROWS)),
+            ("data/moved.txt", Held::File(NOTES)),
+            ("data/big.bin", Held::File(&big)),
+            ("data/other.bin", Held::File(&other)),
+        ];
+        routes.change(github("main", SECOND, &moved)?);
+        let before = routes.targets().len();
+        ok(&run(&sandbox, &routes, &["lock", "--upgrade"])?)?;
+        let mut expected = vec![
+            format!("{GITHUB_API}/commits/main"),
+            format!("{GITHUB_API}/git/trees/{SECOND}?recursive=1"),
+        ];
+        expected.extend(served_from(SECOND, "moved.txt", true));
+        if shared {
+            expected.extend(served_from(SECOND, "big.bin", false));
+        }
+        expected.sort();
+        assert_eq!(asked_since(&routes, before), expected, "{shared}");
+        let work = sandbox.work();
+        let placed_as: &[u8] = if shared { &big } else { &other };
+        assert_eq!(
+            pins(&work, "survey")?,
+            pinned_as(&[
+                ("rows.csv", ROWS),
+                ("moved.txt", NOTES),
+                ("big.bin", placed_as),
+                ("other.bin", &other),
+            ]),
+            "{shared}"
+        );
+        ok(&run(&sandbox, &routes, &["sync"])?)?;
+        assert_eq!(fs::read(work.join("data/survey/big.bin"))?, placed_as);
+        assert_eq!(fs::read(work.join("data/survey/other.bin"))?, other);
+    }
     Ok(())
 }

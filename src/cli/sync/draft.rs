@@ -227,10 +227,12 @@ impl Draft {
     /// knows each file of a git repository whose blob a download here brought before, without a
     /// download: the cache's record of the blob names the object, else `previous`, data.lock's pin
     /// of the same file at its commit then, does, as a sync of data.lock brought its bytes, and the
-    /// object's bytes must still be that blob. a pin whose link names the blob itself, as a
-    /// private repository's at github's api does, is the same file at any commit. the records are looked up first, then the bytes
-    /// they name checked at once; a pin's bytes found to be the blob are recorded when `recording`,
-    /// as a download's are, so a later commit that moves the file finds them.
+    /// object's bytes must still be that blob, which a cache only this user writes takes from its
+    /// own record unread while no doubt touches the object. a pin whose link names the blob
+    /// itself, as a private repository's at github's api does, is the same file at any commit. the
+    /// records are looked up first, then the bytes they name checked at once; a pin's bytes found
+    /// to be the blob are recorded when `recording`, as a download's are, so a later commit that
+    /// moves the file finds them.
     pub(super) fn recall_blobs(
         &mut self,
         cache: &Cache,
@@ -239,7 +241,7 @@ impl Draft {
         stop: &Stop,
     ) -> Result<(), Error> {
         let mut pins: Option<HashMap<String, &LockedFile>> = None;
-        let recorded: Vec<(usize, &Blob, Sha256, u64, bool)> = self
+        let recorded: Vec<Proof<'_>> = self
             .files
             .iter()
             .enumerate()
@@ -265,22 +267,7 @@ impl Draft {
                 sized.then_some((index, blob, sha256, size, pinned))
             })
             .collect();
-        let bytes = recorded
-            .iter()
-            .fold(0_u64, |sum, (.., size, _)| sum.saturating_add(*size));
-        let held = crate::place::run_hashes(
-            &recorded,
-            bytes,
-            threads,
-            None,
-            |(_, blob, sha256, size, pinned)| {
-                if *pinned && recording {
-                    cache.remember_blob(&blob.repository, &blob.id, *sha256, *size, stop)
-                } else {
-                    cache.holds_blob(&blob.id, sha256, *size, stop)
-                }
-            },
-        );
+        let held = prove_blobs(cache, &recorded, recording, threads, stop);
         let recorded: Vec<(usize, Sha256, u64)> = recorded
             .into_iter()
             .map(|(index, _, sha256, size, _)| (index, sha256, size))
@@ -1205,6 +1192,66 @@ fn stated_ahead<'r>(
             !matches!((remote.sha256, remote.size), (Some(_), Some(_))) && earlier.is_none()
         })
         .filter_map(|remote| Some((remote.md5?, remote.url.as_str())))
+        .collect()
+}
+
+/// a blob a relock checks the cache for: the file's index, the blob, the object the cache's record
+/// or data.lock's pin names for it, the object's size, and whether data.lock's pin named it.
+type Proof<'a> = (usize, &'a Blob, Sha256, u64, bool);
+
+/// the bytes a pass over `proofs` reads, which size the workers it runs on: every object's, but
+/// only the pins' when `marks` lets the cache's own records stand unread, since a look tells
+/// those apart without reading them.
+fn read_bytes(proofs: &[Proof<'_>], marks: Option<&HashMap<Sha256, u64>>) -> u64 {
+    proofs
+        .iter()
+        .filter(|(.., pinned)| *pinned || marks.is_none())
+        .fold(0_u64, |sum, (.., size, _)| sum.saturating_add(*size))
+}
+
+/// whether the cache holds each blob of `proofs` in the object named for it, in order. the pins
+/// are read, and recorded when `recording`; the cache's own records are looked at where
+/// [`Cache::blob_marks`] lets them stand unread, and those a look finds in doubt are read in a
+/// second pass, so each pass's workers are sized by the bytes it reads.
+fn prove_blobs(
+    cache: &Cache,
+    proofs: &[Proof<'_>],
+    recording: bool,
+    threads: Threads,
+    stop: &Stop,
+) -> Vec<io::Result<bool>> {
+    let read = |(_, blob, sha256, size, pinned): &Proof<'_>| {
+        if *pinned && recording {
+            cache.remember_blob(&blob.repository, &blob.id, *sha256, *size, stop)
+        } else {
+            cache.holds_blob(&blob.id, sha256, *size, stop)
+        }
+    };
+    let marks = cache.blob_marks();
+    let first = crate::place::run_hashes(
+        proofs,
+        read_bytes(proofs, marks.as_ref()),
+        threads,
+        None,
+        |proof| {
+            let (.., sha256, size, pinned) = *proof;
+            match marks.as_ref().filter(|_| !pinned) {
+                Some(marks) => cache.recorded_blob_stands(&sha256, size, marks).map(Ok),
+                None => Some(read(proof)),
+            }
+        },
+    );
+    let doubted: Vec<Proof<'_>> = proofs
+        .iter()
+        .zip(&first)
+        .filter_map(|(proof, first)| first.is_none().then_some(*proof))
+        .collect();
+    let mut second =
+        crate::place::run_hashes(&doubted, read_bytes(&doubted, None), threads, None, read)
+            .into_iter();
+    first
+        .into_iter()
+        .map(|first| first.unwrap_or_else(|| second.next().unwrap_or(Ok(false))))
         .collect()
 }
 
@@ -2359,6 +2406,141 @@ mod tests {
         expected.sort_unstable();
         assert_eq!(known, expected);
         std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// the workers that read blob objects are sized by the bytes they read, as main sized them:
+    /// every record's in a cache others may write, where none stands unread, and where the
+    /// cache's doubts cannot be read; in a cache only this user writes, at first only the pins',
+    /// since a look tells the cache's own records apart without reading them.
+    #[cfg(unix)]
+    #[test]
+    fn blob_proofs_are_sized_by_the_bytes_they_read() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &std::path::Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("cache");
+        let private = Cache::open(root.clone()).unwrap();
+        let blob = Blob {
+            repository: std::sync::Arc::from("https://github.com/lab/survey"),
+            id: crate::digest::BlobId::of_bytes(b"rows"),
+        };
+        let proofs: Vec<Proof<'_>> = (0_u8..16)
+            .map(|n| {
+                let digest = crate::digest::sha256(&[n]);
+                (usize::from(n), &blob, digest, 8 << 20, n < 2)
+            })
+            .collect();
+        let every = 16 * (8 << 20);
+        assert_eq!(
+            read_bytes(&proofs, private.blob_marks().as_ref()),
+            2 * (8 << 20)
+        );
+        mode(&root, 0o770);
+        let shared = Cache::open(root.clone()).unwrap();
+        assert_eq!(read_bytes(&proofs, shared.blob_marks().as_ref()), every);
+        mode(&root, 0o700);
+        let changed = root.join("changed");
+        std::fs::create_dir_all(&changed).unwrap();
+        mode(&changed, 0o000);
+        if private.doubts().is_ok() {
+            mode(&changed, 0o700);
+            return crate::test_skips::skip("unreadable files", "this user reads any folder");
+        }
+        assert_eq!(read_bytes(&proofs, private.blob_marks().as_ref()), every);
+        mode(&changed, 0o700);
+    }
+
+    /// a relock looks at the cache's own blob records before it reads any: an intact object
+    /// stands for its blob unread, even one no one may read, while one a look finds in doubt, as
+    /// one made writable, is read, so it is known only while its bytes are still the blob.
+    #[cfg(unix)]
+    #[test]
+    fn a_relock_reads_only_the_blob_records_a_look_leaves_in_doubt() {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |path: &std::path::Path, mode| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let repository: std::sync::Arc<str> = std::sync::Arc::from("https://github.com/lab/survey");
+        let stop = Stop::default();
+        let files: [(&str, &[u8]); 3] = [
+            ("intact.csv", b"intact,1\n"),
+            ("doubted.csv", b"doubted,2\n"),
+            ("changed.csv", b"changed,3\n"),
+        ];
+        let mut remotes = Vec::new();
+        for (name, bytes) in files {
+            let stored = store(&cache, bytes);
+            let id = crate::digest::BlobId::of_bytes(bytes);
+            let remembered =
+                cache.remember_blob(&repository, &id, stored.digest, stored.size, &stop);
+            assert!(remembered.unwrap(), "{name}");
+            let object = cache.object_path(&stored.digest);
+            match name {
+                "intact.csv" => mode(&object, 0o000),
+                "doubted.csv" => mode(&object, 0o644),
+                _ => {
+                    mode(&object, 0o644);
+                    std::fs::write(&object, b"CHANGED,3\n").unwrap();
+                }
+            }
+            remotes.push(Remote {
+                path: name.to_owned(),
+                size: Some(stored.size),
+                sha256: None,
+                md5: None,
+                url: Url::parse(&format!(
+                    "https://raw.githubusercontent.com/lab/survey/main/{name}"
+                ))
+                .unwrap(),
+                named_by_server: false,
+                etag: None,
+                blob: Some(Blob {
+                    repository: std::sync::Arc::clone(&repository),
+                    id,
+                }),
+            });
+        }
+        let manifest =
+            Manifest::parse("[datasets.d]\nref = \"https://github.com/lab/survey/tree/main\"\n")
+                .unwrap();
+        let entry = &manifest.datasets["d"];
+        let listing = Listing {
+            within: Vec::new(),
+            access: Access::Public,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            resolved: Reference::Url(
+                Url::parse("https://github.com/lab/survey/tree/main").unwrap(),
+            ),
+            title: None,
+            license: None,
+            doi: None,
+            files: remotes,
+            rounded: None,
+        };
+        let mut draft =
+            Draft::new("d", entry, &entry.source, listing, None, false, &cache).unwrap();
+        draft
+            .recall_blobs(&cache, (None, false), Threads::default(), &stop)
+            .unwrap();
+        let mut known: Vec<(&str, bool)> = draft
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.known.is_some()))
+            .collect();
+        known.sort_unstable();
+        assert_eq!(
+            known,
+            [
+                ("changed.csv", false),
+                ("doubted.csv", true),
+                ("intact.csv", true)
+            ]
+        );
     }
 
     #[test]
