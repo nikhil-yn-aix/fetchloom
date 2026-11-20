@@ -78,7 +78,7 @@ fn bait(folder: &Path, tool: &str, ran: &Path) -> Result {
 }
 
 /// the tools that ran, by the marks their baits left.
-fn ran(marks: &Path) -> Result<Vec<String>> {
+pub(crate) fn ran(marks: &Path) -> Result<Vec<String>> {
     let mut names: Vec<String> = fs::read_dir(marks)?
         .map(|entry| Ok(entry?.file_name().to_string_lossy().into_owned()))
         .collect::<std::io::Result<_>>()?;
@@ -157,7 +157,7 @@ impl Planted {
 
 /// what a repository's own config may tell git to run, each a bait; git reads `.git/config`
 /// from the clone itself, as a project shared as a folder or an archive brings it.
-fn hostile_git_config(work: &Path, marks: &Path) -> Result {
+pub(crate) fn hostile_git_config(work: &Path, marks: &Path) -> Result {
     let hooks = work.join(".git").join("hooks-bait");
     fs::create_dir_all(&hooks)?;
     let program = |name: &str| -> Result<String> {

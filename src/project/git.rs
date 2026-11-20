@@ -4,11 +4,13 @@
 //! failure means no answer.
 
 use std::collections::{BTreeMap, HashSet};
-use std::io::Read as _;
+use std::io::{self, BufRead, Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
+
+use crate::digest::Sha256;
 
 /// the most a read may hold. data.lock lists at most 50,000 files a dataset in itself.
 const LARGEST: u64 = 256 << 20;
@@ -318,6 +320,170 @@ pub(crate) fn staged(git: &Path, root: &Path, paths: &[&str]) -> Option<BTreeMap
 /// the bytes of the blob `object`, from this repository alone.
 pub(crate) fn blob(git: &Path, root: &Path, object: &str) -> Option<Vec<u8>> {
     read_objects(git, root, &["cat-file", "blob", "--end-of-options", object])
+}
+
+/// the size and SHA-256 of each blob of `objects`, in their order, from this repository alone, read
+/// by one `git cat-file --batch` that is asked for each object once the last one is answered, each
+/// object held to the bounds one [`blob`] is: a blob git lacks is none. none for all when git or
+/// its answer fails, as for a blob of another kind or over [`LARGEST`] bytes, which [`blob`] then
+/// reads alone.
+pub(crate) fn blobs_hashed(
+    git: &Path,
+    root: &Path,
+    objects: &[&str],
+) -> Option<Vec<Option<(u64, Sha256)>>> {
+    // no blob to read starts no git, as reading them one at a time starts none
+    if objects.is_empty() {
+        return Some(Vec::new());
+    }
+    if !objects.iter().all(|object| is_object(object)) {
+        return None;
+    }
+    let found = match batch(git, root, objects, true) {
+        // git refuses an option it does not know with 129, as git 2.43 refuses this one
+        Err(Some(129)) => batch(git, root, objects, false).ok(),
+        found => found.ok(),
+    }?;
+    tracing::debug!(blobs = objects.len(), "read the blobs from git in one run");
+    Some(found)
+}
+
+/// one blob's answer in a batch: the name it answers for, and its size and SHA-256, none when git
+/// lacks it.
+struct Answer {
+    name: String,
+    hashed: Option<(u64, Sha256)>,
+}
+
+/// [`blobs_hashed`] through one run of git, with `--no-lazy-fetch` when `unfetched`.
+fn batch(
+    git: &Path,
+    root: &Path,
+    objects: &[&str],
+    unfetched: bool,
+) -> Result<Vec<Option<(u64, Sha256)>>, Option<i32>> {
+    tracing::debug!(
+        blobs = objects.len(),
+        "starts git cat-file --batch for the blobs"
+    );
+    let mut command = Command::new(git);
+    for name in REPOSITORY_VARIABLES {
+        command.env_remove(name);
+    }
+    command.args(["-c", "core.fsmonitor=false", "-C"]).arg(root);
+    if unfetched {
+        command.arg("--no-lazy-fetch");
+    }
+    let mut child = command
+        .args(["cat-file", "--batch"])
+        // started outside the project, so windows never loads a library the project holds
+        .current_dir(git.parent().ok_or(None)?)
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        // no protocol is allowed, so a git that would fetch a missing object cannot
+        .env("GIT_ALLOW_PROTOCOL", "")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| None)?;
+    let (Some(mut asked), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err(None);
+    };
+    let count = objects.len();
+    let (sender, answers) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = io::BufReader::new(stdout);
+        for _ in 0..count {
+            let answer = read_answer(&mut reader);
+            let failed = answer.is_err();
+            if sender.send(answer).is_err() || failed {
+                return;
+            }
+        }
+    });
+    let mut found = Vec::with_capacity(count);
+    for object in objects {
+        let answered = writeln!(asked, "{object}")
+            .and_then(|()| asked.flush())
+            .ok()
+            .and_then(|()| answers.recv_timeout(PATIENCE).ok())
+            .and_then(Result::ok)
+            .filter(|answer| answer.name == *object);
+        match answered {
+            Some(answer) => found.push(answer.hashed),
+            None => break,
+        }
+    }
+    drop(asked);
+    let whole = found.len() == count;
+    if !whole {
+        let _ = child.kill();
+    }
+    let finished = child.wait().map_err(|_| None)?;
+    match finished.code() {
+        Some(0) if whole => Ok(found),
+        code if whole => Err(code),
+        _ if finished.code() == Some(129) => Err(Some(129)),
+        _ => Err(None),
+    }
+}
+
+/// reads one object's answer from `git cat-file --batch`: `<name> missing`, or
+/// `<name> blob <size>`, that many bytes and a newline. anything else, a blob over [`LARGEST`]
+/// bytes or a short read is an error, after which the stream is not read on.
+fn read_answer(reader: &mut impl BufRead) -> io::Result<Answer> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "git's batch answer is malformed",
+        )
+    };
+    let mut header = Vec::new();
+    // a header holds a name of at most 64 digits, a kind and a size
+    reader.by_ref().take(256).read_until(b'\n', &mut header)?;
+    let header = std::str::from_utf8(&header)
+        .ok()
+        .and_then(|header| header.strip_suffix('\n'))
+        .ok_or_else(invalid)?;
+    let fields: Vec<&str> = header.split(' ').collect();
+    let (name, hashed) = match fields[..] {
+        [name, "missing"] => (name, None),
+        [name, "blob", size] => {
+            let size: u64 = size.parse().map_err(|_| invalid())?;
+            if size > LARGEST {
+                return Err(invalid());
+            }
+            let mut hasher = crate::digest::Hasher::default();
+            let mut left = size;
+            let mut block = vec![0; 1 << 16];
+            while left > 0 {
+                let want = usize::try_from(left).map_or(block.len(), |left| left.min(block.len()));
+                let read = reader.read(&mut block[..want])?;
+                if read == 0 {
+                    return Err(io::ErrorKind::UnexpectedEof.into());
+                }
+                hasher.update(&block[..read]);
+                left -= read as u64;
+            }
+            let mut end = [0];
+            reader.read_exact(&mut end)?;
+            if end != *b"\n" {
+                return Err(invalid());
+            }
+            (name, Some((size, hasher.finish().0)))
+        }
+        _ => return Err(invalid()),
+    };
+    if !is_object(name) {
+        return Err(invalid());
+    }
+    Ok(Answer {
+        name: name.to_owned(),
+        hashed,
+    })
 }
 
 /// whether `name` is an object's full name: 40 hex digits, or 64 in a SHA-256 repository.
@@ -880,5 +1046,103 @@ mod tests {
             "the blob was there to fetch: {}",
             String::from_utf8_lossy(&fetched.stderr)
         );
+    }
+
+    /// a batch answers each blob with the size and SHA-256 that reading it alone gives, in the
+    /// order asked, asked twice or not; a blob git lacks is none, and the rest still answer. a
+    /// SHA-256 repository answers alike, where this git makes one.
+    #[test]
+    fn a_batch_reads_each_blob_as_reading_it_alone_does() {
+        let Some(git) = git() else {
+            return;
+        };
+        for format in ["sha1", "sha256"] {
+            let folder = tempfile::tempdir().unwrap();
+            let at = folder.path();
+            let made = plain(&git, at)
+                .args(["init", "-q", &format!("--object-format={format}")])
+                .current_dir(at)
+                .status()
+                .unwrap();
+            if !made.success() {
+                continue;
+            }
+            let large: Vec<u8> = (0..70_000_u32).map(|at| (at * 31 % 251) as u8).collect();
+            let files: [(&str, &[u8]); 4] = [
+                ("a.csv", b"a,b\n1,2\n"),
+                ("empty.csv", b""),
+                ("crlf.csv", b"a,b\r\n1,2\r\n"),
+                ("large.bin", &large),
+            ];
+            for (name, bytes) in files {
+                std::fs::write(at.join(name), bytes).unwrap();
+            }
+            git_in(&git, at, &["-c", "core.autocrlf=false", "add", "."]);
+            if !trusted(&git, at) {
+                return;
+            }
+            let names: Vec<&str> = files.iter().map(|(name, _)| *name).collect();
+            let staged = staged(&git, at, &names).unwrap();
+            let lacking = "e".repeat(staged["a.csv"].len());
+            let mut objects: Vec<&str> = names.iter().map(|name| staged[*name].as_str()).collect();
+            objects.push(&lacking);
+            objects.push(staged["a.csv"].as_str());
+            let alone: Vec<Option<(u64, Sha256)>> = objects
+                .iter()
+                .map(|object| {
+                    blob(&git, at, object)
+                        .map(|bytes| (bytes.len() as u64, crate::digest::sha256(&bytes)))
+                })
+                .collect();
+            assert_eq!(
+                blobs_hashed(&git, at, &objects),
+                Some(alone.clone()),
+                "{format}"
+            );
+            assert_eq!(alone[4], None);
+            assert_eq!(
+                alone[3],
+                Some((large.len() as u64, crate::digest::sha256(&large)))
+            );
+        }
+    }
+
+    /// an answer is read only when framed as git writes it, so a malformed or cut one can never
+    /// pass for a blob: a short or long name, another kind, a size past the bound, bytes cut
+    /// short or no newline after them all fail.
+    #[test]
+    fn a_batch_answer_is_read_only_when_whole() {
+        let name = "a".repeat(40);
+        let read = |answer: &[u8]| {
+            read_answer(&mut std::io::BufReader::new(answer))
+                .map(|answer| (answer.name, answer.hashed))
+        };
+        let whole = format!("{name} blob 3\nabc\n");
+        assert_eq!(
+            read(whole.as_bytes()).unwrap(),
+            (name.clone(), Some((3, crate::digest::sha256(b"abc"))))
+        );
+        let lacking = format!("{name} missing\n");
+        assert_eq!(read(lacking.as_bytes()).unwrap(), (name.clone(), None));
+        for broken in [
+            format!("{name} blob 3\nab"),
+            format!("{name} blob 3\nabcd"),
+            format!("{name} blob 3\nabc"),
+            format!("{name} tree 3\nabc\n"),
+            format!("{name} blob 3 extra\nabc\n"),
+            format!("{name} blob x\nabc\n"),
+            format!("{} blob 3\nabc\n", "a".repeat(39)),
+            format!("{name} blob 3"),
+            String::new(),
+        ] {
+            assert!(read(broken.as_bytes()).is_err(), "{broken:?}");
+        }
+        // a whole blob past the bound, whose bytes are all there, is refused all the same
+        let header = format!("{name} blob {}\n", LARGEST + 1);
+        let huge = header
+            .as_bytes()
+            .chain(std::io::repeat(b'x').take(LARGEST + 1))
+            .chain(&b"\n"[..]);
+        assert!(read_answer(&mut std::io::BufReader::new(huge)).is_err());
     }
 }

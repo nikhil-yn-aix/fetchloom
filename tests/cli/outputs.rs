@@ -3357,6 +3357,137 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     Ok(())
 }
 
+/// the line-ends check reads the blobs git keeps for its files with one git run, as `-vv` tells,
+/// tells each file and the one checkout that writes them all, and runs nothing the repository's own
+/// config names.
+#[test]
+fn line_ends_are_told_with_one_git_run() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    for name in ["a", "b", "c"] {
+        fs::write(
+            author.join(format!("results/{name}.csv")),
+            format!("{name},b\n1,2\n"),
+        )?;
+    }
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+    fs::create_dir_all(work.join("results"))?;
+    for name in ["a", "b", "c"] {
+        let path = work.join(format!("results/{name}.csv"));
+        fs::write(&path, format!("{name},b\r\n1,2\r\n"))?;
+        aged(&path)?;
+    }
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    let marks = sandbox.folder("marks")?;
+    crate::untrusted::hostile_git_config(&work, &marks)?;
+    let output = sandbox.command(&["-vv", "status"]).output()?;
+    let stderr = text(&output.stderr)?;
+    let stdout = text(&output.stdout)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("read the blobs from git in one run blobs=3"),
+        "{stderr}"
+    );
+    let started = stderr
+        .matches("starts git cat-file --batch for the blobs blobs=3")
+        .count();
+    // a git that refuses `--no-lazy-fetch` is asked once more without it
+    assert!((1..=2).contains(&started), "{stderr}");
+    assert!(
+        stderr.contains("`git checkout HEAD -- results/a.csv results/b.csv results/c.csv`"),
+        "{stderr}"
+    );
+    for name in ["a", "b", "c"] {
+        assert!(
+            stdout.contains(&format!(
+                "Committed results/{name}.csv · git's copy differs from the pinned bytes only in its line ends"
+            )),
+            "{stdout}"
+        );
+    }
+    assert_eq!(crate::untrusted::ran(&marks)?, Vec::<String>::new());
+    Ok(())
+}
+
+/// the line-ends check starts no git for blobs where it has none to read, and tells what it finds:
+/// a file git tracks that holds other bytes than its pin, not only other line ends, is not told as
+/// line ends, and a file that differs only in its line ends but whose staged blob is not the
+/// committed one is told so, with no checkout offered.
+#[test]
+fn line_ends_with_no_blob_to_read_run_no_git_batch() -> Result {
+    for restaged in [false, true] {
+        let sandbox = Sandbox::new()?;
+        if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+            return Ok(());
+        }
+        let work = sandbox.work();
+        let author = sandbox.folder("author")?;
+        fs::create_dir_all(author.join("results"))?;
+        fs::write(author.join("results/a.csv"), b"a,b\n1,2\n")?;
+        ok(&sandbox
+            .command_in(&author, &["add", "results", "--as", "results"])
+            .output()?)?;
+        for file in ["data.toml", "data.lock"] {
+            fs::copy(author.join(file), work.join(file))?;
+        }
+        crate::merge::ok(&sandbox, &["config", "core.autocrlf", "true"])?;
+        let file = work.join("results/a.csv");
+        fs::create_dir_all(work.join("results"))?;
+        fs::write(&file, b"a,b\r\n1,2\r\n")?;
+        aged(&file)?;
+        crate::merge::ok(&sandbox, &["add", "results"])?;
+        crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+        if restaged {
+            // another blob staged, then the pinned bytes back with CRLF, unstaged
+            fs::write(&file, b"a,b\r\n9,9\r\n")?;
+            crate::merge::ok(&sandbox, &["add", "results"])?;
+            fs::write(&file, b"a,b\r\n1,2\r\n")?;
+        } else {
+            fs::write(&file, b"a,b\r\n7,7\r\n")?;
+        }
+        aged(&file)?;
+        let output = sandbox.command(&["-vv", "status"]).output()?;
+        let stderr = text(&output.stderr)?;
+        let stdout = text(&output.stdout)?;
+        assert_eq!(output.status.code(), Some(0), "{restaged}: {stderr}");
+        assert!(
+            stdout.contains("results/a.csv") || stderr.contains("results/a.csv"),
+            "{restaged}: {stdout}{stderr}"
+        );
+        assert!(
+            !stderr.contains("starts git cat-file --batch"),
+            "{restaged}: {stderr}"
+        );
+        assert!(
+            !stderr.contains("read the blobs from git in one run"),
+            "{restaged}: {stderr}"
+        );
+        let told = "results/a.csv differs from the pin only in its line ends, made CRLF by git's checkout, but git's staged or committed copy is not the pinned one, so no checkout brings the pin back";
+        assert_eq!(stderr.contains(told), restaged, "{restaged}: {stderr}");
+        assert_eq!(
+            stderr.contains("differs from the pin only in its line ends"),
+            restaged,
+            "{restaged}: {stderr}"
+        );
+        if restaged {
+            assert!(!stderr.contains("git checkout"), "{stderr}");
+        }
+    }
+    Ok(())
+}
+
 /// line ends are decided file by file: beside a rerun of a file git tracks, a file that differs
 /// from the pin only in the line ends git's checkout gave it is told so, with the fresh checkout
 /// of it alone, never as other bytes, and with no doubt about `at`. the re-pin comes after that
