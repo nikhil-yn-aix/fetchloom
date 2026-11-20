@@ -410,6 +410,14 @@ class PageTests(Quiet):
         self.assertIn("| n/a | 1 | 6, over the budget in 1 of 1 runs | 0/1 |", page)
         self.assertIn("- politeness budget: at most 4 requests in flight to one host, for every tool", page)
 
+    def test_a_library_timed_inside_a_warm_interpreter_says_so_with_its_import_beside(self):
+        rows = [lab_row(), lab_row(tool="pooch", wall_seconds=2, clock="call inside a warm interpreter", import_seconds=.42,
+                                   process=dict(wall_seconds=3.1, user_seconds=1, sys_seconds=0))]
+        page = self.render(rows, dict(kind="lab", quick=True))
+        self.assertIn("\npooch's times are its calls inside a warm interpreter, as a notebook makes them, and its CPU is theirs: "
+                      "importing it took 420 ms more, and its whole process 3.10 s.", page)
+        self.assertNotIn("fetchloom's times are", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)

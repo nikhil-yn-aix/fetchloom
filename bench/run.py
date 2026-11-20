@@ -417,12 +417,13 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
         before = settled_free_bytes(workdir)
         row["free_before_bytes"] = before
         if case["id"] == "s7":
-            first = measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10, cpus=cpus)
+            first = tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10,
+                                       cpus=cpus), workdir)
             row["first_attempt"] = first
             argv = tool.command(case, workdir)
             row["resume_command"] = exact_command(argv, workdir)
             row["resume_command"]["cwd"] = str(tool.cwd(workdir))
-        row.update(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus))
+        row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus), workdir))
         if case["id"] == "s7":
             row["user_seconds"] += first["user_seconds"]
             row["sys_seconds"] += first["sys_seconds"]

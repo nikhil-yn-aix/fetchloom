@@ -601,6 +601,44 @@ class ToolTests(unittest.TestCase):
         tools.Datalad("unused").command(dict(id="s2"), self.work)
         self.assertEqual((self.work / "command.sh").read_text().splitlines()[-1], "datalad get -J 4 data")
 
+    def test_pooch_times_its_calls_inside_an_interpreter_that_has_already_imported_it(self):
+        stub = self.work / "stub"
+        stub.mkdir()
+        # a stand-in for pooch that writes down when it was imported and what each call asked for
+        (stub / "pooch.py").write_text(
+            "import os\n"
+            "with open(os.environ['STEPS'], 'a') as steps:\n"
+            "    steps.write('imported\\n')\n"
+            "def retrieve(url, known_hash, fname, path, processor):\n"
+            "    with open(os.environ['STEPS'], 'a') as steps:\n"
+            "        steps.write(f'{url} {known_hash} {fname} {path} {processor}\\n')\n"
+            "    if fname == os.environ.get('STOP_AT'):\n"
+            "        raise KeyboardInterrupt\n")
+        tool = tools.Pooch("unused")
+        argv = tool.command(dict(id="s1", files=self.FILES, members=[]), self.work)
+        steps = self.work / "steps"
+        env = dict(os.environ, PYTHONPATH=str(stub), STEPS=str(steps), POOCH_CACHE=str(self.work / "cache"))
+        ran = subprocess.run([sys.executable, argv[1]], env=env, capture_output=True, text=True)
+        self.assertEqual(ran.returncode, 0, ran.stderr)
+        self.assertEqual(steps.read_text().splitlines(), ["imported"] + [
+            f"{item['url']} sha256:{item['sha256']} {item['name']} {self.work / 'cache'} None" for item in self.FILES])
+        calls = json.loads((self.work / "calls.json").read_text())
+        self.assertEqual(sorted(calls), ["import_seconds", "sys_seconds", "user_seconds", "wall_seconds"])
+        result = tool.timed(dict(wall_seconds=9.0, user_seconds=2.0, sys_seconds=1.0, maxrss_bytes=5), self.work)
+        self.assertEqual({key: result[key] for key in calls}, calls)
+        self.assertEqual(result["process"], dict(wall_seconds=9.0, user_seconds=2.0, sys_seconds=1.0))
+        self.assertEqual((result["clock"], result["maxrss_bytes"]), ("call inside a warm interpreter", 5))
+        self.assertFalse((self.work / "calls.json").exists())
+        # stopped in a call, as s7's first attempt is, the script still reports how long its calls ran
+        env["STOP_AT"] = self.FILES[0]["name"]
+        stopped = subprocess.run([sys.executable, argv[1]], env=env, capture_output=True, text=True)
+        self.assertNotEqual(stopped.returncode, 0)
+        self.assertEqual(sorted(json.loads((self.work / "calls.json").read_text())), sorted(calls))
+        # without a report the process's own times stand, and the row says which clock they are
+        (self.work / "calls.json").unlink()
+        self.assertEqual(tool.timed(dict(wall_seconds=9.0), self.work), dict(wall_seconds=9.0, clock="process start to exit"))
+        self.assertEqual(tools.Curl("unused").timed(dict(wall_seconds=9.0), self.work), dict(wall_seconds=9.0, clock="process start to exit"))
+
     def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
         self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])
         flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")

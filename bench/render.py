@@ -27,7 +27,10 @@ def summarize(rows):
         return median(values) if values else None
     cpu = [r.get("user_seconds", 0) + r.get("sys_seconds", 0) for r in successful]
     peaks = [max(r["peak_in_flight"].values(), default=0) for r in rows if r.get("peak_in_flight") is not None]
-    return dict(median=median(times) if times else None, low=min(times) if times else None,
+    process = [r["process"]["wall_seconds"] for r in successful if r.get("process")]
+    return dict(clock=next((r["clock"] for r in successful if r.get("clock")), None),
+                import_seconds=metric("import_seconds"), process=median(process) if process else None,
+                median=median(times) if times else None, low=min(times) if times else None,
                 high=max(times) if times else None, failures=sum(r.get("status") == "failed" for r in rows),
                 timeouts=sum(r.get("status") == "failed" and bool(r.get("timeout")) for r in rows),
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
@@ -411,7 +414,9 @@ def draw(charts, cases, services):
                   f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
 
 
-METHOD = ("the clock includes the entire command. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
+# the clock of a library timed around its calls, as tools.py names it
+WARM_CALL = "call inside a warm interpreter"
+METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -506,6 +511,11 @@ def case_section(case):
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
         ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
         lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
+    for tool, entry in summaries.items():
+        if entry.get("clock") == WARM_CALL:
+            lines.append(f"\n{tool}'s times are its calls inside a warm interpreter, as a notebook makes them, and its CPU is "
+                         f"theirs: importing it took {seconds(entry['import_seconds'])} more, and its whole process "
+                         f"{seconds(entry['process'])}.")
     if case["scenario"] == "s7":
         lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
         for tool, entry in summaries.items():

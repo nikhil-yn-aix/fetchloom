@@ -37,6 +37,8 @@ class Tool:
     this base lays out the work folder and lists the files a run must leave."""
     name = ""
     scenarios = set(fixtures.ALL_SCENARIOS)
+    # what a run's wall and cpu time cover
+    clock = "process start to exit"
 
     def __init__(self, fetchloom):
         self.fetchloom = str(fetchloom)
@@ -96,6 +98,10 @@ class Tool:
 
     def populate(self, scenario, workdir):
         (workdir / "project" / "data").mkdir(exist_ok=True)
+
+    def timed(self, result, workdir):
+        """a measured run's result, with the clock it covers."""
+        return dict(result, clock=self.clock)
 
     def outputs(self, scenario, workdir):
         """each file a run must leave, with its sha256."""
@@ -232,7 +238,12 @@ class Aria2c(Tool):
 
 
 class Pooch(Tool):
+    """pooch as a notebook uses it: retrieve calls in an interpreter that has already imported it.
+    the script times the calls itself, wall and cpu, and the import beside them."""
     name = "pooch"
+    clock = "call inside a warm interpreter"
+    # what the timed calls report, from inside the process
+    CALLS = "calls.json"
 
     def version(self):
         return subprocess.check_output([str(lab.VENV / "bin" / "python"), "-c",
@@ -244,12 +255,39 @@ class Pooch(Tool):
         processor = {"s4": "pooch.Unzip(extract_dir='unpacked')",
                      "s8": "pooch.Untar(extract_dir='unpacked')"}.get(scenario["id"], "None")
         source = workdir / "retrieve.py"
-        source.write_text("import json, os, pooch\n"
-                          f"for item in json.load(open({str(registry)!r})):\n"
-                          "    pooch.retrieve(url=item['url'], known_hash='sha256:' + item['sha256'],\n"
-                          "                   fname=item['name'], path=os.environ['POOCH_CACHE'],\n"
-                          f"                   processor={processor})\n")
+        # the report is written even when ctrl-c stops the calls, as s7's first attempt does
+        source.write_text("import json, os, resource, time\n"
+                          "started = time.perf_counter()\n"
+                          "import pooch\n"
+                          "imported = time.perf_counter()\n"
+                          f"items = json.load(open({str(registry)!r}))\n"
+                          "before, begun = resource.getrusage(resource.RUSAGE_SELF), time.perf_counter()\n"
+                          "try:\n"
+                          "    for item in items:\n"
+                          "        pooch.retrieve(url=item['url'], known_hash='sha256:' + item['sha256'],\n"
+                          "                       fname=item['name'], path=os.environ['POOCH_CACHE'],\n"
+                          f"                       processor={processor})\n"
+                          "finally:\n"
+                          "    ended, after = time.perf_counter(), resource.getrusage(resource.RUSAGE_SELF)\n"
+                          f"    with open({str(workdir / self.CALLS)!r}, 'w') as report:\n"
+                          "        json.dump(dict(import_seconds=imported - started, wall_seconds=ended - begun,\n"
+                          "                       user_seconds=after.ru_utime - before.ru_utime,\n"
+                          "                       sys_seconds=after.ru_stime - before.ru_stime), report)\n")
         return [str(lab.VENV / "bin" / "python"), str(source)]
+
+    def timed(self, result, workdir):
+        """the result with its clock moved to the calls: their wall and cpu time from the script's
+        report, the whole process's beside them and the import time; the process's alone, with its
+        clock, when the script left no report."""
+        report = workdir / self.CALLS
+        try:
+            calls = json.loads(report.read_text())
+            report.unlink()
+        except (OSError, ValueError):
+            return dict(result, clock=Tool.clock)
+        process = {key: result[key] for key in ("wall_seconds", "user_seconds", "sys_seconds")}
+        return dict(result, clock=self.clock, process=process, import_seconds=calls["import_seconds"],
+                    **{key: calls[key] for key in ("wall_seconds", "user_seconds", "sys_seconds")})
 
     def outputs(self, scenario, workdir):
         root = workdir / "cache" / "pooch"

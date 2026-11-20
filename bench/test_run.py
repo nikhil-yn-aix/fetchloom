@@ -550,6 +550,19 @@ class OneRunTests(unittest.TestCase):
                            dict(redirected, id="s5"))
         self.assertFalse([check for check in row["checks"] if check.startswith("the server log")])
 
+    def test_a_library_run_keeps_the_times_of_its_calls_and_the_process_beside_them(self):
+        class Library(tools.Pooch):
+            def command(self, scenario, workdir):
+                # what the script reports as it exits
+                (workdir / self.CALLS).write_text(json.dumps(dict(import_seconds=.4, wall_seconds=2.0, user_seconds=.5, sys_seconds=.25)))
+                return ["true"]
+
+        row = self.one_run(Library("unused"), lambda *args, **kwargs: dict(wall_seconds=3.0, user_seconds=1.0, sys_seconds=.5,
+                                                                             maxrss_bytes=7, exit_code=0, timeout=False))
+        self.assertEqual((row["clock"], row["wall_seconds"], row["user_seconds"], row["sys_seconds"], row["import_seconds"]),
+                         ("call inside a warm interpreter", 2.0, .5, .25, .4))
+        self.assertEqual((row["process"], row["maxrss_bytes"]), (dict(wall_seconds=3.0, user_seconds=1.0, sys_seconds=.5), 7))
+
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):
             name = "dvc"
