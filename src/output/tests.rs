@@ -1604,3 +1604,52 @@ fn a_slow_disk_is_named_unless_a_test_turned_timed_lines_off() {
         "81 B in 1.0 s · 81 B/s"
     );
 }
+
+/// a writer that keeps what it was given and the last byte of each write that gave it.
+#[derive(Default)]
+struct Counted {
+    bytes: Vec<u8>,
+    ends: Vec<u8>,
+}
+
+impl Write for Counted {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.ends.extend(buf.last());
+        self.bytes.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// status printed 100,001 missing files in 100,001 writes. rows written together go out a few
+/// writes for 10,000 rows, each write ending with a whole row.
+#[test]
+fn rows_written_together_go_out_in_few_writes_of_whole_rows() {
+    let output = telling(false);
+    let texts: Vec<String> = (0..10_000).map(|n| format!("data/s/f{n}.csv")).collect();
+    let mut counted = Counted::default();
+    output
+        .write_rows(&mut counted, "Missing", texts.iter().map(String::as_str))
+        .unwrap();
+    let mut expected = String::new();
+    for text in &texts {
+        expected.push_str("    Missing ");
+        expected.push_str(text);
+        expected.push('\n');
+    }
+    assert_eq!(String::from_utf8(counted.bytes).unwrap(), expected);
+    let writes = counted.ends.len();
+    assert!(
+        (2..=expected.len() / super::ROWS_AT_ONCE + 1).contains(&writes),
+        "{writes} writes for {} bytes",
+        expected.len()
+    );
+    assert!(
+        counted.ends.iter().all(|end| *end == b'\n'),
+        "{:?}",
+        counted.ends
+    );
+}

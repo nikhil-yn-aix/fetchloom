@@ -50,6 +50,57 @@ fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
     Ok(())
 }
 
+/// status writes a list's rows together, each as it wrote them one at a time: the rows, their
+/// verbs, what it tells on stderr and its exit code, plain and with -v, and --json, which writes
+/// no row, names the same files.
+#[test]
+fn status_writes_a_lists_rows_together() -> Result {
+    let sandbox = Sandbox::new()?;
+    let names = ["a", "b", "c", "d"];
+    let source = Routes::start(
+        names
+            .iter()
+            .map(|name| (format!("/files/{name}.csv"), file(name.as_bytes(), "\"v\"")))
+            .collect(),
+    )?;
+    sandbox.allow(&source.url);
+    for name in names {
+        ok(&sandbox.run(&["add", &format!("{}/files/{name}.csv", source.url)])?)?;
+    }
+    let data = sandbox.work().join("data");
+    delete(&data.join("a/a.csv"))?;
+    delete(&data.join("b/b.csv"))?;
+    delete(&data.join("c/c.csv"))?;
+    fs::write(data.join("c/c.csv"), "mine\n")?;
+    fs::write(data.join("d/notes.txt"), "mine\n")?;
+    fs::write(data.join("d/more.txt"), "mine\n")?;
+    // a person's own files in a dataset folder get no row in a plain status
+    let rows = "    Missing data/a/a.csv\n    Missing data/b/b.csv\n     Edited data/c/c.csv\n";
+    let plain = sandbox.run(&["status"])?;
+    assert_eq!(plain.status.code(), Some(0));
+    assert_eq!(text(&plain.stdout)?, rows);
+    assert_eq!(
+        text(&plain.stderr)?,
+        "      Found 3 differences from data.lock\n  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n  hint: save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock\n"
+    );
+    // -v's stderr names the resources it took, which follow the memory free at the moment
+    let verbose = sandbox.run(&["status", "-v"])?;
+    assert_eq!(verbose.status.code(), Some(0));
+    assert_eq!(text(&verbose.stdout)?, rows);
+    let document = json(&sandbox.run(&["--json", "status"])?)?;
+    let result = &document["result"];
+    assert_eq!(
+        (&result["missing"], &result["edited"], &result["yours"]),
+        (
+            &serde_json::json!(["data/a/a.csv", "data/b/b.csv"]),
+            &serde_json::json!(["data/c/c.csv"]),
+            &serde_json::json!(["data/d/more.txt", "data/d/notes.txt"])
+        ),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// the files finder, a mac on another disk and explorer make in a data folder are no difference,
 /// a person's own file there is theirs, kept, which json names, and a folder sync or remove leaves
 /// holding only the system's files goes, taking them with it.

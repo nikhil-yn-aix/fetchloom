@@ -1617,9 +1617,7 @@ fn tell_yours(output: &Output, status: &Status) {
 fn report_rows(output: &Output, verb: &str, rows: Vec<(String, u64)>, shown: Option<usize>) {
     let most = shown.unwrap_or(usize::MAX);
     let hidden: u64 = rows.iter().skip(most).map(|(_, files)| files).sum();
-    for (text, _) in rows.into_iter().take(most) {
-        output.report(verb, &text);
-    }
+    output.report_all(verb, rows.into_iter().take(most).map(|(text, _)| text));
     report_more(output, hidden, false);
 }
 

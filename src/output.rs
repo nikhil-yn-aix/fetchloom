@@ -341,6 +341,9 @@ struct WorkDone {
     elapsed_ms: u64,
 }
 
+/// how many bytes of report rows [`Output::report_all`] gathers before it writes them.
+const ROWS_AT_ONCE: usize = 64 << 10;
+
 /// the widest a list of datasets lets its reference column grow. a longer reference runs past it
 /// on its own row, so one long name does not push every other title and fact off the terminal.
 pub(crate) const REFERENCE_COLUMN: usize = 48;
@@ -1446,6 +1449,52 @@ impl Output {
             Some(bars) => bars.suspend(write),
             None => write(),
         }
+    }
+
+    /// rows of a report under `verb`, each as [`Output::report`] writes it, written together: a
+    /// write each [`ROWS_AT_ONCE`] bytes rather than a write and a flush a row.
+    pub(crate) fn report_all<T: AsRef<str>>(&self, verb: &str, texts: impl IntoIterator<Item = T>) {
+        let mut texts = texts.into_iter().peekable();
+        if !self.tells(Level::Quiet) || texts.peek().is_none() {
+            return;
+        }
+        let write = || {
+            if let Err(error) = stdout(|out| self.write_rows(out, verb, texts)) {
+                self.failed
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .get_or_insert(error);
+            }
+        };
+        match &self.bars {
+            Some(bars) => bars.suspend(write),
+            None => write(),
+        }
+    }
+
+    /// writes the rows of `texts` under `verb` to `out`, gathered into writes of at least
+    /// [`ROWS_AT_ONCE`] bytes but the last, each ending with a whole row.
+    fn write_rows<T: AsRef<str>>(
+        &self,
+        out: &mut dyn Write,
+        verb: &str,
+        texts: impl Iterator<Item = T>,
+    ) -> std::io::Result<()> {
+        let mut rows = String::new();
+        for text in texts {
+            let Some(line) = self.report_text(verb, text.as_ref()) else {
+                continue;
+            };
+            for line in self.answered(&line) {
+                rows.push_str(&line);
+                rows.push('\n');
+            }
+            if rows.len() >= ROWS_AT_ONCE {
+                out.write_all(rows.as_bytes())?;
+                rows.clear();
+            }
+        }
+        out.write_all(rows.as_bytes())
     }
 
     fn report_text(&self, verb: &str, text: &str) -> Option<String> {
