@@ -243,6 +243,10 @@ fn dataset(lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option<Parsed> {
             {
                 return None;
             }
+            // most datasets hold one file: room for one, not the four a vector's first growth gives
+            if locked.files.is_empty() {
+                locked.files.reserve_exact(1);
+            }
             locked.files.push(file);
         },
         line => listed = Some(list(line, lines)?),
@@ -267,6 +271,9 @@ fn stated(pin: Locked, lines: &mut Lines, keep: &dyn Fn(&str) -> bool) -> Option
                 || name::escapes(&file.path).is_some()
             {
                 return None;
+            }
+            if files.is_empty() {
+                files.reserve_exact(1);
             }
             files.push(file);
         },
@@ -498,6 +505,48 @@ mod tests {
 
     fn full(text: &str) -> Vec<Parsed> {
         super::super::parse_toml(text).unwrap()
+    }
+
+    /// a dataset of one file, downloaded or stated, reads into a vector of room for one, and every
+    /// dataset reads as the toml reader reads it.
+    #[test]
+    fn a_dataset_of_one_file_takes_room_for_one() {
+        let mut lock = samples().remove(2);
+        let mut one = lock.datasets[1].clone();
+        one.name = "d".to_owned();
+        one.files.truncate(1);
+        lock.datasets.push(one.clone());
+        let pin = Locked {
+            name: "e".to_owned(),
+            files: Vec::new(),
+            ..one
+        };
+        let file = StatedFile {
+            path: "a.csv".to_owned(),
+            size: 7,
+            sha256: None,
+            md5: Md5::from_hex("900150983cd24fb0d6963f7d28e17f72"),
+            url: "https://example.org/a.csv".to_owned(),
+        };
+        lock.stated.push(Stated {
+            written: Words::of(&pin),
+            pin,
+            files: vec![file],
+        });
+        let text = lock.render();
+        for comments in [false, true] {
+            let parsed = read(&text, comments).unwrap();
+            assert_eq!(parsed, full(&text), "{comments}");
+            let rooms: Vec<(usize, usize)> = parsed
+                .iter()
+                .map(|parsed| match parsed {
+                    Parsed::Source(locked, _) => (locked.files.len(), locked.files.capacity()),
+                    Parsed::Stated(stated) => (stated.files.len(), stated.files.capacity()),
+                })
+                .filter(|(files, _)| *files == 1)
+                .collect();
+            assert_eq!(rooms, [(1, 1), (1, 1)], "{comments}");
+        }
     }
 
     #[test]
