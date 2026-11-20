@@ -4246,6 +4246,37 @@ fn copies_the_data_folders_disk_cannot_hold_ask_first() -> Result {
     Ok(())
 }
 
+/// an add of a link whose server states its size weighs the copy placing makes on the data folder's
+/// disk before the body comes, as it weighs the cache's: on exFAT beside the cache, the download
+/// and its copy need twice the file, so with room for one and a half no byte moves.
+#[cfg(debug_assertions)]
+#[test]
+fn an_add_weighs_the_data_folders_disk_before_downloading() -> Result {
+    let sandbox = Sandbox::new()?;
+    let body = vec![b'x'; 2048];
+    let server = Server::start("/files/big.bin", vec![file(&body, "\"v1\"")])?;
+    let output = sandbox
+        .command(&["--json", "add", &server.url])
+        .env("FETCHLOOM_TEST_FILESYSTEM", "exfat")
+        .env("FETCHLOOM_TEST_FREE", "3072")
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    assert_eq!(document["work"]["bytes_down"], 0, "{document}");
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with("placing ")
+            && message.ends_with(&format!(
+                "big.bin needs at least 4.0 KiB on the disk holding the data folder at {}, which has 3.0 KiB free",
+                sandbox.work().join("data").display()
+            )),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a file in the way of a folder data.lock needs keeps what it blocks unplaced, and `--json`
 /// names the file in the way as `blocked_by`.
 #[test]

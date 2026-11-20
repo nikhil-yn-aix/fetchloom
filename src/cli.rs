@@ -96,6 +96,9 @@ struct Context {
     hashing: crate::cache::Hashing,
     /// hunt-feel's experiment switches, read once as the command starts.
     feel: crate::exp::Feel,
+    /// the data folder this run places in, once a project's run knows it, so a download whose
+    /// server states its size is checked against that disk too, before its body comes.
+    placing_in: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 /// a refusal that signing in may lift.
@@ -138,6 +141,7 @@ impl Context {
             projectless: false,
             hashing: crate::cache::Hashing::default(),
             feel: crate::exp::Feel::default(),
+            placing_in: std::sync::OnceLock::new(),
         }
     }
 
