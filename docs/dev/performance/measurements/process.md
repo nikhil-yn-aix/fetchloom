@@ -180,3 +180,19 @@ three arms in the same rounds, each case one batch after a warmup round, the arm
 | `help` | 150 | 1.027 [1.019, 1.034] | 1.039 [1.031, 1.049] | 11.4, 5.9, 4.6 |
 
 the cost is page faults: with 4 KiB pages the same memory faults far more often. `perf stat` over 10 runs of the shipped binary, huge pages on and then off by the variable: the no-op over 1,000 datasets 204 to 1,595 faults and 18.1 to 21.6 ms of cpu, the status of 100,000 files 707 to 15,564 faults and 673 to 735 ms. the two switches behave alike here; the build's small extra on the shortest commands is its own binary, another commit's layout. on a system set to `always`, the feature would leave the kernel's huge pages on where the variable turns them off. huge pages stay on. turning them off would not bring the two musl peaks above [the 150 MB budget](../budgets.md) under it either: placing 100,001 files, 203.6 to 169.3 MiB, and the sync of 40,000 datasets, 209.0 to 183.5 MiB.
+
+## an import's walk told as it reads, 2026-11-20
+
+`add` of a local folder walks the whole folder before it can say what it imports, and said nothing until then: 3.4 s at a terminal for a folder of a million files. the walk now goes through `Output::lasting_from_start`, so a terminal shows `Reading <folder>` once the command has lasted a second, and plain stderr a `Reading` line once the walk has lasted two. the round-2 feel window measured it with `add --dry-run` of a folder of 1,000,001 files (519.1 MiB) at a pseudo-terminal and into a pipe, and with imports of 5 and of 100,000 files, off against on in shuffled rounds on ext4: 15 for the large walk, 30 for 5 files into a pipe and 10 at a pseudo-terminal, on the musl build 9f8b27802 over main dd9fae1e3. at a pseudo-terminal, first visible output is the time to the first printable character drawn, whether erased later or not.
+
+| case | median ms, off -> on | ratio or rule |
+|---|---:|---|
+| dry run of 1,000,001 files at a terminal: first visible output | 3,376 -> 1,004 | every run by 1.1 s, the latest at 1,004 ms |
+| the same: exit | 3,557 -> 3,537 | 1.000 [0.984, 1.010] |
+| the same into a pipe: the whole run | 3,573 -> 3,557 | 1.005 [0.996, 1.015] |
+| import of 5 files into a pipe | 11.1 -> 11.1 | 1.004 [0.991, 1.016] |
+| import of 5 files, `-q` | 10.6 -> 10.6 | 1.004 [0.987, 1.016] |
+| import of 5 files at a terminal | | no frame drawn under 1 s; exit 1.000 [0.923, 1.083] |
+| import of 100,000 files at a terminal | | first bar no later than off's, or 1.1 s, in every round; exit 1.012 [0.996, 1.027] |
+
+cpu and peak memory stayed flat: 417.7 -> 417.9 MiB for the large dry run, 18.9 MiB for 5 files. the output changes only by the `Reading` line, which plain stderr gets only from a walk that lasts two seconds. kept.

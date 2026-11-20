@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anstyle::Style as Paint;
 
@@ -1329,6 +1329,26 @@ fn lasting_work_is_told_once_it_lasts() {
     let placing = terminal.lasting("Placing", "20,000 files".to_owned());
     assert!(screen.shows("Placing 20,000 files"), "no line");
     drop(placing);
+}
+
+/// work a command reaches once it has lasted its moment is told at once, however long before
+/// it the command spent elsewhere, and work reached sooner waits out the rest of that moment.
+#[test]
+fn work_reached_past_the_command_s_moment_is_told_at_once() {
+    let hour = Duration::from_secs(3600);
+    let started = Instant::now();
+    let screen = Screen::default();
+    let mut output = Output::on_screen_after(screen.clone(), hour);
+    output.started = started;
+    let reading = output.lasting_at("Reading", "./flowers".to_owned(), started + 2 * hour);
+    assert!(screen.shows("Reading ./flowers"), "{:?}", screen.records());
+    drop(reading);
+
+    let screen = Screen::default();
+    let mut output = Output::on_screen_after(screen.clone(), hour);
+    output.started = started;
+    drop(output.lasting_at("Reading", "./flowers".to_owned(), started + hour / 2));
+    assert_eq!(screen.records(), Vec::<String>::new());
 }
 
 #[test]

@@ -948,9 +948,14 @@ impl Output {
 
     /// a live line for `verb` and `what` once they last [`Output::untold`], at a terminal.
     fn untold(&self, verb: &'static str, what: String) -> Setup {
+        self.untold_for(self.untold, verb, what)
+    }
+
+    /// a live line for `verb` and `what` once they last `untold`, at a terminal.
+    fn untold_for(&self, untold: Duration, verb: &'static str, what: String) -> Setup {
         match &self.bars {
             Some(bars) => Setup::after(
-                self.untold,
+                untold,
                 bars,
                 (verb, what),
                 (self.style.color, self.style.unicode),
@@ -965,6 +970,23 @@ impl Output {
     pub(crate) fn lasting(&self, verb: &'static str, what: String) -> Lasting {
         Lasting {
             _setup: self.untold(verb, what.clone()),
+            _ticker: self.ticker(verb, what, [None]),
+        }
+    }
+
+    /// [`Output::lasting`] for work a command reaches after other steps, as an import's walk of its
+    /// folder: the live line shows once the command, not the work, has lasted [`Output::untold`],
+    /// at once when it already has, so a person hears of the work about a second after pressing
+    /// enter, whatever came before it.
+    pub(crate) fn lasting_from_start(&self, verb: &'static str, what: String) -> Lasting {
+        self.lasting_at(verb, what, Instant::now())
+    }
+
+    /// [`Output::lasting_from_start`] for work that begins at `now`.
+    fn lasting_at(&self, verb: &'static str, what: String, now: Instant) -> Lasting {
+        let left = (self.started + self.untold).saturating_duration_since(now);
+        Lasting {
+            _setup: self.untold_for(left, verb, what.clone()),
             _ticker: self.ticker(verb, what, [None]),
         }
     }

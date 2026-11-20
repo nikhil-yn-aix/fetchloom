@@ -643,13 +643,15 @@ fn walk_import(
         })
         .map(str::to_owned);
     let source = import_entry(manifest, supplied.as_deref(), args)?;
-    let walked = walk(
-        start,
-        shown,
-        &source,
-        context.settings.most_files.value,
-        &context.stop,
-    )?;
+    let walked = told_walk(&context.output, shown, || {
+        walk(
+            start,
+            shown,
+            &source,
+            context.settings.most_files.value,
+            &context.stop,
+        )
+    })?;
     let output = &context.output;
     tell_left_out(output, shown, &walked);
     if supplied.is_none()
@@ -670,6 +672,13 @@ fn walk_import(
         output.hint(&shards.hint(shown, keep, Some(dataset)));
     }
     Ok((supplied, source, walked))
+}
+
+/// what `walk` gives, told as `Reading <shown>` while it lasts once the command has lasted a
+/// moment: a folder of a million files takes seconds to walk.
+fn told_walk<T>(output: &Output, shown: &str, walk: impl FnOnce() -> T) -> T {
+    let _reading = output.lasting_from_start("Reading", shown.to_owned());
+    walk()
 }
 
 /// warns about the links and special files below `shown` that an import left out.
@@ -2138,6 +2147,67 @@ mod tests {
         .unwrap();
         into_cache(&context, &cache, &walked, &|_| Ok(())).unwrap();
         assert_eq!(screen.records(), Vec::<String>::new());
+    }
+
+    /// a context whose output draws on `screen` and tells an import's walk, its command's moment
+    /// `moment` long.
+    fn walking_on(screen: &crate::output::screen::Screen, moment: std::time::Duration) -> Context {
+        Context::new(Output::on_screen_after(screen.clone(), moment))
+    }
+
+    /// a walk still going once its command has lasted a moment says what it reads, so adding a
+    /// folder of a million files shows a line about a second after enter, not seconds of nothing.
+    #[test]
+    fn a_long_walk_says_what_it_reads() {
+        let screen = crate::output::screen::Screen::default();
+        let context = walking_on(&screen, std::time::Duration::ZERO);
+        let shown = told_walk(&context.output, "./flowers", || {
+            screen.shows("Reading ./flowers")
+        });
+        assert!(shown, "{:?}", screen.records());
+    }
+
+    /// a walk that ends within its command's moment draws nothing, then or later, since its line
+    /// ends with it.
+    #[test]
+    fn a_quick_walk_draws_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("flowers");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("iris.csv"), b"iris\n").unwrap();
+        let screen = crate::output::screen::Screen::default();
+        let context = walking_on(&screen, std::time::Duration::from_secs(3600));
+        let walked = told_walk(&context.output, "./flowers", || {
+            walk(
+                &root,
+                "./flowers",
+                &entry(&[], &[]),
+                crate::net::MOST_FILES,
+                &context.stop,
+            )
+        })
+        .unwrap();
+        assert_eq!(walked.files.len(), 1);
+        assert_eq!(screen.records(), Vec::<String>::new());
+    }
+
+    /// a walk that fails or stops clears its line before it returns, so the error that follows
+    /// stands alone.
+    #[test]
+    fn a_walk_that_fails_clears_its_line_first() {
+        let screen = crate::output::screen::Screen::default();
+        let context = walking_on(&screen, std::time::Duration::ZERO);
+        let walked: Result<Walked, Error> = told_walk(&context.output, "./flowers", || {
+            assert!(screen.shows("Reading ./flowers"), "{:?}", screen.records());
+            Err(crate::stop::Stop::stopped())
+        });
+        assert!(walked.is_err());
+        let records = screen.records();
+        let last = records
+            .iter()
+            .rposition(|record| record.contains("Reading"))
+            .unwrap();
+        assert!(records[last..].contains(&"clear".to_owned()), "{records:?}");
     }
 
     /// on windows, a folder of an import swapped for a junction once it was walked, as another
