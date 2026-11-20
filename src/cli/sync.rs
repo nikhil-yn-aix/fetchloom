@@ -1129,6 +1129,7 @@ impl<'a> Loop<'a> {
                 &self.cache,
                 self.context.threads,
             )?;
+            draft.keep_archives();
             draft.recall_blobs(
                 &self.cache,
                 (others.get(&name), download),
@@ -1191,7 +1192,8 @@ impl<'a> Loop<'a> {
                             others.push(locked);
                         }
                         Some(Drift::Unpack { .. }) => {
-                            let draft = Draft::switched(entry, source, &locked)?;
+                            let mut draft = Draft::switched(entry, source, &locked)?;
+                            draft.keep_archives();
                             drafts.push((locked.name.clone(), draft));
                             others.push(locked);
                         }

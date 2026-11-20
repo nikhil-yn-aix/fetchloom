@@ -47,6 +47,8 @@ pub(super) struct Draft {
     /// whether file links pin the object version their bytes were, as S3's do.
     versions: bool,
     files: Vec<DraftFile>,
+    /// the archives among the files, worked out once sync asks and kept while no path changes.
+    kept_archives: Option<std::sync::OnceLock<Archives>>,
 }
 
 struct DraftFile {
@@ -218,6 +220,7 @@ impl Draft {
             access: listing.access,
             versions,
             files,
+            kept_archives: None,
         };
         draft.recall_split(cache);
         draft.carry_split(previous, upgrading, cache);
@@ -383,11 +386,23 @@ impl Draft {
     /// the archives among the dataset's files, by their names, while it unpacks, and the single
     /// compressed files while it decompresses.
     fn archives(&self) -> Archives {
-        archives(
-            self.files.iter().map(|file| file.path.as_str()),
-            self.extract,
-            self.decompress,
-        )
+        let worked_out = || {
+            archives(
+                self.files.iter().map(|file| file.path.as_str()),
+                self.extract,
+                self.decompress,
+            )
+        };
+        match &self.kept_archives {
+            Some(kept) => kept.get_or_init(worked_out).clone(),
+            None => worked_out(),
+        }
+    }
+
+    /// works the archives among the files out once and keeps them until a download renames a
+    /// file, rather than at each ask.
+    pub(super) fn keep_archives(&mut self) {
+        self.kept_archives = Some(std::sync::OnceLock::new());
     }
 
     /// refuses a single compressed file the dataset decompresses whose name without its ending no
@@ -470,6 +485,7 @@ impl Draft {
             access: locked.access,
             versions: false,
             files,
+            kept_archives: None,
         };
         draft.refuse_names(&BTreeSet::new())?;
         Ok(draft)
@@ -601,6 +617,7 @@ impl Draft {
         let file = &mut self.files[index];
         file.known = Some((fetched.digest, fetched.size));
         file.version.clone_from(&fetched.version);
+        let before = self.kept_archives.is_some().then(|| file.path.clone());
         if file.remote.named_by_server
             && let Some(given) = fetched.name.as_deref().and_then(name::sanitize)
         {
@@ -608,6 +625,11 @@ impl Draft {
         }
         let path = std::mem::take(&mut file.path);
         file.path = fetch::wrapped(cache, &file.remote, path, &fetched.digest);
+        if before.is_some_and(|before| before != file.path)
+            && let Some(kept) = &mut self.kept_archives
+        {
+            kept.take();
+        }
     }
 
     /// the entry as the clash check before any download sees it, with a stand-in for each hash only
@@ -885,7 +907,7 @@ pub(super) fn stand_in_trees(locked: &mut Locked, cache: &Cache) -> Vec<String> 
 }
 
 /// the archives among a dataset's files, by name: what unpacks, and what stays packed and why.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Archives {
     pub(super) unpack: Vec<Unit>,
     /// each archive that stays packed, by the index of the file a person's tools open first.
@@ -2271,6 +2293,66 @@ mod tests {
             carried(&by_url, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
             "the bytes changed under the same link"
         );
+    }
+
+    /// a draft that keeps its archives once worked out answers as one that works them out at
+    /// each ask: before its downloads, and after one renames a file into an archive, as kaggle's
+    /// zip of train.csv does.
+    #[test]
+    fn kept_archives_answer_as_archives_worked_out_at_each_ask() {
+        use crate::source::recorded::fixture_bytes;
+
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let manifest = Manifest::parse(
+            "[datasets.titanic]\nref = \"kaggle:competitions/titanic\"\nselect = [\"t*.csv\"]\n",
+        )
+        .unwrap();
+        let entry = &manifest.datasets["titanic"];
+        let plain = store(&cache, &fixture_bytes("kaggle/test.csv"));
+        let wrapped = store(&cache, &fixture_bytes("kaggle/train.csv.zip"));
+        let asked = |kept: bool| {
+            let mut draft = Draft::new(
+                "titanic",
+                entry,
+                &entry.source,
+                titanic(),
+                None,
+                false,
+                &cache,
+            )
+            .unwrap();
+            if kept {
+                draft.keep_archives();
+            }
+            let before = draft.archives();
+            let jobs = draft.jobs(&cache);
+            for ((index, _), stored) in jobs.iter().zip([&plain, &wrapped]) {
+                let fetched = Fetched {
+                    digest: stored.digest,
+                    size: stored.size,
+                    moved: stored.size,
+                    name: None,
+                    origin: crate::net::Origin::Network,
+                    version: None,
+                    began: None,
+                    arrived: None,
+                    asked: std::time::Duration::ZERO,
+                };
+                draft.learn(index.unwrap(), &fetched, &cache);
+            }
+            let unknown: Vec<String> = draft
+                .unknown_archives(&cache)
+                .into_iter()
+                .map(|(_, unpack)| unpack.label)
+                .collect();
+            (before, draft.archives(), unknown)
+        };
+        let worked_out = asked(false);
+        assert_eq!(worked_out.0, Archives::default());
+        assert_eq!(worked_out.1.unpack, [Unit::Whole(1)]);
+        assert_eq!(worked_out.2, ["titanic/train.csv.zip"]);
+        assert_eq!(asked(true), worked_out);
     }
 
     #[cfg(unix)]
