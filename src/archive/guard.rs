@@ -177,6 +177,11 @@ impl<'a> Guard<'a> {
         self.names.add(raw, is_folder)
     }
 
+    /// refuses the archive for the files this machine cannot store, as [`Names::storable`] does.
+    pub(super) fn storable(&self) -> Result<(), Error> {
+        self.names.storable()
+    }
+
     /// the file an earlier entry named `raw`, as [`Names::earlier_file`] finds it.
     pub(super) fn earlier_file(&self, raw: &str) -> Option<String> {
         self.names.earlier_file(raw)
