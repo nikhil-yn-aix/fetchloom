@@ -353,9 +353,9 @@ class HelperTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             work = Path(folder)
             (work / "command.sh").write_text("set -eu\n")
-            (work / "urls.txt").write_text("https://lab.flb/a\n")
+            (work / "aria2.txt").write_text("https://lab.flb/a\n")
             self.assertEqual(run.exact_command(["bash", work / "command.sh"], work),
-                             {"argv": ["bash", str(work / "command.sh")], "command.sh": "set -eu\n", "urls.txt": "https://lab.flb/a\n"})
+                             {"argv": ["bash", str(work / "command.sh")], "command.sh": "set -eu\n", "aria2.txt": "https://lab.flb/a\n"})
 
     @unittest.skipUnless(Path("/proc/self/stat").is_file(), "reads process groups from /proc")
     def test_a_process_group_lists_each_of_its_processes(self):

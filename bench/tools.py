@@ -192,8 +192,10 @@ class Curl(Tool):
 
 class DurableCurl(Curl):
     """curl as above, then a flush of the filesystem it wrote, as fetchloom flushes the files it
-    places, so the cost of making bytes survive a power cut is on both sides."""
+    places, so the cost of making bytes survive a power cut is on both sides; only in the cases that
+    write data."""
     name = "curl+sync"
+    scenarios = Curl.scenarios - set(NOOP)
 
     def version(self):
         return Curl("unused").version()
@@ -204,22 +206,6 @@ class DurableCurl(Curl):
 
     def steps(self, scenario, workdir):
         return [*super().steps(scenario, workdir), shell(["sync", "-f", "data"])]
-
-
-class Wget(Tool):
-    name = "wget"
-    scenarios = Curl.scenarios
-
-    def command(self, scenario, workdir):
-        urls = workdir / "urls.txt"
-        urls.write_text("".join(item["url"] + "\n" for item in scenario["files"]))
-        argv = ["wget", "--no-config", "-i", urls, "-P", "data"]
-        if scenario["id"] in NOOP:
-            argv.append("-nc")
-        if scenario["id"] == "s7":
-            argv.append("-c")
-        return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), shell(argv),
-                                               self.checks(scenario, workdir), *self.unpack(scenario)])
 
 
 class Aria2c(Tool):
@@ -306,7 +292,7 @@ class Datalad(Tool):
         return script(workdir / "command.sh", lines)
 
 
-CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Wget, Pooch, Dvc, Datalad)
+CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Pooch, Dvc, Datalad)
 
 
 def available(fetchloom, variants=(), only=None):

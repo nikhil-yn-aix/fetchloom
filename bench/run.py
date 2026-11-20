@@ -236,7 +236,7 @@ def repo_head():
     return "unavailable"
 
 
-def native_versions(packages=("nginx", "aria2", "wget", "curl", "git-annex", "git", "iproute2",
+def native_versions(packages=("nginx", "aria2", "curl", "git-annex", "git", "iproute2",
                               "python3", "xfsprogs", "e2fsprogs", "unzip", "openssl", "time")):
     """each package with its installed debian version or not installed; a note when dpkg cannot
     answer."""
@@ -336,7 +336,7 @@ def append(path, row):
 def exact_command(argv, workdir):
     """argv with the scripts and lists it reads, so a row records exactly what ran."""
     result = {"argv": [str(x) for x in argv]}
-    for name in ("command.sh", "retrieve.py", "registry.json", "urls.txt", "aria2.txt", "SHA256SUMS"):
+    for name in ("command.sh", "retrieve.py", "registry.json", "aria2.txt", "SHA256SUMS"):
         path = workdir / name
         if path.exists():
             result[name] = path.read_text()

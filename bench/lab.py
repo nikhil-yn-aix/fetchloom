@@ -24,7 +24,7 @@ SERVER_ADDRESS = "10.77.0.2"
 HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
 INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
-                       r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|WGETRC|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
+                       r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
 # each link's round trip, loss each way, the server's rate and how long a full queue at that rate
 # holds; lan has no rate, so netem never queues there
 PROFILES = {

@@ -14,7 +14,7 @@ on Ubuntu 24.04, these are the native package pins used by the smoke test:
 apt-get update
 apt-get install -y \
   nginx=1.24.0-2ubuntu7.19 aria2=1.37.0+debian-1build3 \
-  wget=1.21.4-1ubuntu4.5 curl=8.5.0-2ubuntu10.16 \
+  curl=8.5.0-2ubuntu10.16 \
   git-annex=10.20240129-1build1 git=1:2.43.0-1ubuntu7.4 \
   iproute2=6.1.0-1ubuntu6.4 xfsprogs=6.6.0-1ubuntu2.1 \
   e2fsprogs=1.47.0-2.4~exp1ubuntu4.1 unzip=6.0-28ubuntu4.1 \
@@ -84,7 +84,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 ```
 
 - every invocation needs a new output directory. a campaign may run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice.
-- `--only-tools fetchloom,curl` narrows the lab clients and `--services zenodo,huggingface` the live services. `curl+sync` is curl followed by a flush of what it wrote, to compare with fetchloom's durable writes. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks.
+- `--only-tools fetchloom,curl` narrows the lab clients and `--services zenodo,huggingface` the live services. `curl+sync` is curl followed by a flush of what it wrote, to compare with fetchloom's durable writes, in the cases that write data: not the no-op cases s6 and s9. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks.
 - unsupported combinations are left out: s1, s2 and s7 run at home and on the poor link, s3 at home and on lan, s4 and s8 at home, and s5, s6 and s9 on lan.
 - each measured command has a 20-minute timeout by default. `--timeout` must be finite and positive, and invalid settings are refused before a client starts. interruption and timeout deadlines include process startup, and a timer that fails to start kills and reaps the started group.
 - a failed command, timeout or wrong hash is a failed record, not a short timing.
@@ -109,7 +109,7 @@ datahugger uses an explicit dataverse landing URL and an identified User-Agent b
 
 the full dataverse TSV/TAB representation difference is reported as a content mismatch; the quick shared file has identical bytes.
 
-client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc, and wget uses `--no-config`. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
+client processes do not inherit service credentials, native client configuration overrides, Git overrides or Python import/cache-location overrides. Git reads neither system nor global configuration; repository-local settings still apply. curl starts with `-q` to disable curlrc. these controls and the remaining flags are recorded. continue to use a clean dedicated environment; proxy settings for public live services remain intentional inputs.
 
 ## release recheck
 

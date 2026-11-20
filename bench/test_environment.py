@@ -12,7 +12,7 @@ import tools
 class EnvironmentTests(unittest.TestCase):
     def test_external_client_configuration_is_not_inherited(self):
         inherited = dict(PATH="/usr/bin:/bin", CURL_HOME="/foreign", CURL_CA_BUNDLE="/foreign/ca",
-                         WGETRC="/foreign/wgetrc", GIT_DIR="/foreign/git", GIT_CONFIG_COUNT="1",
+                         GIT_DIR="/foreign/git", GIT_CONFIG_COUNT="1",
                          PYTHONPATH="/foreign/modules", PYTHONHOME="/foreign/python",
                          PYTHONUSERBASE="/foreign/user", PYTHONPYCACHEPREFIX="/foreign/bytecode",
                          DATALAD_RUNTIME_MAX_ANNEX_JOBS="1", DVC_CACHE_DIR="/foreign/dvc", POOCH_CACHE="/foreign/pooch")
@@ -49,8 +49,6 @@ class EnvironmentTests(unittest.TestCase):
             case = dict(id="s1", files=[])
             tools.Curl("unused").command(case, root)
             self.assertIn("curl -q --parallel", (root / "command.sh").read_text())
-            tools.Wget("unused").command(case, root)
-            self.assertIn("wget --no-config", (root / "command.sh").read_text())
 
 
 

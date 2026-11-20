@@ -443,7 +443,7 @@ class ScenarioTests(unittest.TestCase):
                                                      url="https://lab.flb/key/members.tar.gz")])
         with tempfile.TemporaryDirectory() as folder:
             work = Path(folder)
-            for adapter in (tools.Curl, tools.Wget, tools.Aria2c):
+            for adapter in (tools.Curl, tools.Aria2c):
                 adapter("unused").command(case, work)
                 self.assertEqual((work / "command.sh").read_text().splitlines()[-1],
                                  "tar -xzf data/members.tar.gz -C data", adapter.name)
@@ -459,7 +459,7 @@ class ScenarioTests(unittest.TestCase):
         files = [dict(name="file-00000.bin", sha256="0" * 64, size=1, url="https://lab.flb/key/file-00000.bin")]
         with tempfile.TemporaryDirectory() as folder:
             work = Path(folder)
-            for adapter, flag in ((tools.Curl, "-z"), (tools.Wget, "-nc"), (tools.Aria2c, "--check-integrity=true")):
+            for adapter, flag in ((tools.Curl, "-z"), (tools.Aria2c, "--check-integrity=true")):
                 adapter("unused").command(dict(id="s9", files=files, members=[]), work)
                 self.assertIn(flag, (work / "command.sh").read_text().split(), adapter.name)
             seen = []
@@ -548,18 +548,15 @@ class ToolTests(unittest.TestCase):
         # one transfer each, one after another in a single parallel curl
         self.assertEqual(curl.count("--next"), 1)
         self.assertEqual(curl.count("--output"), 2)
-        # each continues the file the interrupted first attempt left, and only then
+        # curl continues the file the interrupted first attempt left, and only then
         resumed = self.lines(tools.Curl, "s7")[2].split()
         self.assertEqual(resumed[resumed.index("-C") + 1], "-")
-        self.assertIn("-c", self.lines(tools.Wget, "s7")[2].split())
-        for adapter, flag in [(tools.Curl, "-C"), (tools.Wget, "-c")]:
-            with self.subTest(adapter.name):
-                self.assertNotIn(flag, self.lines(adapter, "s1")[2].split())
+        self.assertNotIn("-C", self.lines(tools.Curl, "s1")[2].split())
 
     def test_the_zip_is_unpacked_and_each_member_checked_where_its_tool_puts_it(self):
         zipped = [dict(name="members.zip", sha256="0" * 64, size=1, url="https://lab.flb/key/members.zip")]
         members = [dict(name="file-00000.bin", sha256="1" * 64)]
-        for adapter in (tools.Curl, tools.Wget, tools.Aria2c):
+        for adapter in (tools.Curl, tools.Aria2c):
             with self.subTest(adapter.name):
                 self.assertEqual(self.lines(adapter, "s4", zipped, members)[-1], "unzip -q data/members.zip -d data")
         case = dict(id="s4", files=zipped, members=members)
@@ -572,6 +569,13 @@ class ToolTests(unittest.TestCase):
                          [(self.work / "cache/pooch" / item["name"], item["sha256"]) for item in self.FILES])
         self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
                          [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
+
+    def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
+        self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])
+        flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")
+        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2", "s3", "s4", "s7", "s8"])
+        # curl itself still asks the server in the no-op cases
+        self.assertTrue(all(plain.supports(dict(id=s)) for s in ("s6", "s9")))
 
     def test_a_second_project_is_set_up_after_the_untimed_first(self):
         populated = []
