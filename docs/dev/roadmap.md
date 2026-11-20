@@ -18,7 +18,7 @@ both were measured and left out of 0.1.0 for a reason other than speed.
 ## measurement work
 
 1. remeasure the historical windows warm-cache [budget miss](performance/budgets.md) on native filesystems before choosing another optimization. the [native checks](performance/native-checks.md) cover placement, durability and resource use; linux results do not establish native latency.
-2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). use the [recorded experiments](performance/measurements/README.md) and [defender study](performance/measurements/historical.md#windows-defender) to avoid repeating discarded changes without new evidence.
+2. investigate retained allocations and filesystem costs with the [profiling workflow](engineering/profiling.md). placing 100,000 cached files on musl is over the memory budget, and about a third of its peak is freed memory mimalloc keeps ([placement](performance/measurements/placement.md#placing-100000-cached-files-against-the-memory-budget-2026-11-20)). use the [recorded experiments](performance/measurements/README.md) and [defender study](performance/measurements/historical.md#windows-defender) to avoid repeating discarded changes without new evidence.
 3. run the implemented [benchmark suite](performance/benchmark-design.md) in full, retain its raw records and publish the generated results.
 
 ## publishing

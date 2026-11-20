@@ -20,7 +20,7 @@ baseline f9bbda5 used at least ten runs after three warm-ups without other work 
 | read and check a 10,000-file lock | under 30 ms | 26 ms of work in a 38 ms command; empty-program control 12 ms | 10.7 ms |
 | SHA-256 with hardware support | at least 1 GB/s on one core | 1.08 GB/s best, 0.33 GB/s median for `cache verify` of 1 GiB | 1.33 GB/s |
 | download memory | fixed buffer per running download; under 50 MB total | 17 MiB for 1 GiB | 26 MiB |
-| peak memory with 100,000 project files | under 150 MB | 108 MiB adding; 75 MiB for `status` | 136 to 142 MiB adding and 94 to 102 MiB placing at 32c6e22; baseline `status` 77 MiB |
+| peak memory with 100,000 project files | under 150 MB | 108 MiB adding; 75 MiB for `status` | 136 to 142 MiB adding and 94 to 102 MiB placing at 32c6e22; baseline `status` 77 MiB; placing 178 to 187 MiB on musl at dd9fae1e3, a [miss](measurements/placement.md#placing-100000-cached-files-against-the-memory-budget-2026-11-20) |
 | large file on a fast link | limited by link rather than hashing or disk | local 1 GiB in 5.8 s | 2.2 s; later hash-thread result is in [measurements](measurements/historical.md#storage-and-memory) |
 | unpack large members | historical relative target: within 2 times extraction-only work; no absolute time budget | 512 MiB tar.zst in 2.2 s; zip in 2.4 s | tar.zst in 1.6 s; zip in 2.3 s |
 | unpack small files | within 2 times creating, writing and flushing the same files | 10,000 random 4 KiB files in 34 to 39 s | 0.47 to 0.56 s |

@@ -298,3 +298,28 @@ a sync placing from the cache looked up every object it needs twice: once to cou
 | first sync of 1,000 zip datasets, where it steps aside | 1,839 -> 1,873 | 1.018 [0.990, 1.060] | | 0.977 |
 
 the p90s moved with the medians, 0.935 and 0.912, and no resource rose. the 10,000-file row ran beside the others as a diagnostic. kept.
+
+## placing 100,000 cached files against the memory budget, 2026-11-20
+
+placing a dataset of 100,001 cached files in a new project peaks above the [150 MB budget](../budgets.md) for 100,000 project files on musl, the static linux build. each run was `-q --yes sync` in a new folder holding only data.toml and data.lock, every object already in a warm cache, with peak RSS from GNU time, on ubuntu 24.04 over ext4 on nvme, 24 cores of an AMD EPYC 7V13, with builds running beside. the build was a musl release of an experiment branch with every switch off, so placement ran the code of dd9fae1e3; three or four runs a row, and 150 MB is 143.1 MiB:
+
+| run | peak |
+|---|---|
+| as it ships | 178.2 to 186.6 MiB |
+| `run_work`'s result vectors made at their final size, an experiment | 164.4 to 168.4 MiB |
+| `MIMALLOC_ALLOW_THP=0` | 144.6 to 152.8 MiB |
+| `MIMALLOC_PURGE_DELAY=0` | 122.8 to 124.5 MiB |
+
+heaptrack on a glibc build of the same code with frame pointers put the live heap's peak at 96.9 MB, reached while the new state is written:
+
+| live at the peak | MB |
+|---|---:|
+| the new state rendered whole into one buffer before it is written, `src/project/state.rs` | 33.5 |
+| the new state's records, one for each placed file, `src/cli/sync/place/put.rs` | 25.6 |
+| the plan's targets and their paths, `src/plan.rs` | 17.4 |
+| the dataset's rows from data.lock, `src/project/lock.rs` | 16.2 |
+| the rest | 4.2 |
+
+the rest of the musl peak is the process's base, about 18 MiB for `status` in a 3-file project, and memory mimalloc keeps for a second after it is freed, about a third of the peak: handing that back at once took the peak under the budget. both allocator settings are trades measured before. a zero [purge delay](process.md#a-shorter-purge-delay-for-lean-on-musl-2026-11-12) made the three runs it measured 6.7 to 12.5% slower, and the process can take it only from the environment it starts with. turning [huge pages](process.md#mimallocs-huge-pages-at-the-release-candidate-2026-11-13) off made placing these files 13% slower and still leaves the peak over.
+
+without those trades, the miss stays until the live heap shrinks. that takes the state written without being rendered whole, which cost 4.6 to 5.9% of the time in its first trial, placing 10,000 files and putting back one deleted file among 100,000 and 1,000,000, and the plan and the lock's rows freed before the state is written, which changes the order of the end of `sync`. making `run_work`'s result vectors at their final size lowered the peak but changed no live allocation at it and left the run over the budget, so it was dropped.
