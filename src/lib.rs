@@ -9,6 +9,7 @@ mod cache;
 mod cli;
 mod digest;
 mod error;
+mod exp;
 mod glob;
 mod machine;
 mod mirror;

@@ -94,6 +94,8 @@ struct Context {
     projectless: bool,
     /// how the run's downloads hash, read from its settings once, shared by every download.
     hashing: crate::cache::Hashing,
+    /// hunt-feel's experiment switches, read once as the command starts.
+    feel: crate::exp::Feel,
 }
 
 /// a refusal that signing in may lift.
@@ -135,6 +137,7 @@ impl Context {
             speeds: net::speeds::Speeds::default(),
             projectless: false,
             hashing: crate::cache::Hashing::default(),
+            feel: crate::exp::Feel::default(),
         }
     }
 
@@ -918,6 +921,7 @@ pub(crate) fn run() -> ExitCode {
         context.output.warn(Warning::TraceUnwritable, refused);
     }
     context.yes = global.yes;
+    context.feel = crate::exp::Feel::read(&var);
     context.projectless = matches!(args.command, Some(args::Command::Get(_)));
     context.speeds = net::speeds::Speeds::at(crate::machine::state_folder(&var));
     if args.version {
