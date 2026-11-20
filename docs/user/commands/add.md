@@ -41,7 +41,7 @@ fetchloom add [options] -i <file>
 2. resolve the reference, filter its files and choose a dataset name. a `Resolved` line names what the reference resolved to, and counts the files kept, as `1 of 4 files`, when a file link, `--select` or `--exclude` keeps fewer than the source lists. [webdataset shards](../reference/archives.md#webdataset-shards) get a hint before anything downloads.
 3. download the new dataset's files the cache lacks, with the project still as it was.
 4. write the entry in `data.toml`, pin its files in `data.lock` and place them. entries are kept in name order, so two people adding different datasets rarely change the same lines. every other dataset keeps its pin and files as they are, even one whose entry changed or whose files are not here, as in a fresh clone, so a link of another dataset that no longer answers never stops the add: `fetchloom sync` does the rest.
-5. add the data folder to `.gitignore` if needed: in a git repository, and outside one when the add begins the project, starting it or pinning the first datasets of a hand-written data.toml, so a later `git init` leaves the data out.
+5. put a `.gitignore` in the dataset's folder before its files land, which keeps them out of git, in a git repository or not, so a later `git init` leaves the data out. fetchloom never edits the project's own `.gitignore`.
 
 below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search for a project stops at a git repository, so in a repository with no `data.toml` of its own, `add` starts a project there, as [finding the project](../reference/project-folder.md#finding-the-project) explains. there is no `init` command: `fetchloom init` is a usage error, exit 2, whose help says `add` starts a project.
 
@@ -50,7 +50,6 @@ stderr for a single-file addition in a new project, from a test snapshot, where 
 ```text
  Downloaded iris.csv · 32 B in [time]
     Started a project in [sandbox]/work
-    Ignored data/ in .gitignore, since its files come from data.lock
       Added iris, its files are in data/iris
   hint: scripts can find it with `fetchloom path iris`
 ```
@@ -62,7 +61,7 @@ a typed link to this machine or your network, such as a lab server, is trusted f
   hint: scripts can find it with `fetchloom path cows`
 warning: a later run downloads from http://127.0.0.1:19450, a private address, only once allowed_origins lists it
   help: save it with `fetchloom settings set allowed_origins http://127.0.0.1:19450`, or put `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` before the command for that run alone
-  next: commit data.toml, data.lock and .gitignore; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
+  next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
 ```
 
 a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet. from a real run in an empty folder:
@@ -205,13 +204,13 @@ a first add that ends without adding anything, because it failed, was stopped or
 
 ## dry run
 
-`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `.gitignore`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition, and a link whose file only its server names is asked for that file's first byte. stderr from a git repository with no manifest yet, from a test snapshot, where `[port]` stands for the test server's port:
+`add --dry-run`, or `-n`, prints what adding would do without writing `data.toml`, `data.lock`, `data/` or the cache, or downloading files for placement. it still resolves the link, so a source may be asked what the link holds, as [kaggle](../sources/kaggle.md) is for a competition, and a link whose file only its server names is asked for that file's first byte. stderr from a git repository with no manifest yet, from a test snapshot, where `[port]` stands for the test server's port:
 
 ```text
       Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · 32 B
       Would fetch iris/iris.csv · 32 B
       Would place data/iris · 1 file
-      Would add data/ to .gitignore, since its files come from data.lock
+      Would ignore data/iris in git with data/iris/.gitignore, which also hides files you put there
       Would add iris to data.toml, its files in data/iris
          Ok dry run, nothing was changed
 ```
