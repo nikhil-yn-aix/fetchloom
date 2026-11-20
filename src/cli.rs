@@ -1020,6 +1020,10 @@ fn read_mirrors(
 fn execute(context: Context, command: Option<args::Command>, started: Instant) -> ExitCode {
     crate::threads::remember_processors();
     crate::place::remember_synced();
+    // as the md5 lanes do, a run kept to one thread, or lean, keeps each hash's reads on its own
+    if context.threads.limit(context.settings.hash_workers()) > 1 {
+        crate::digest::read_ahead();
+    }
     let name = command.as_ref().map(args::Command::name);
     let context = Arc::new(context);
     let runtime = match command_runtime(&context) {

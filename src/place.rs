@@ -1480,11 +1480,15 @@ pub(crate) fn run_hashes<T: Sync, R: Send>(
     job: impl Fn(&T) -> R + Sync,
 ) -> Vec<R> {
     let processors = crate::threads::available_parallelism().map_or(1, NonZero::get);
+    let queued = crate::digest::Queued::of(items.len());
     run_work(
         items,
         hash_workers(items.len(), bytes, processors, cap),
         ahead,
-        job,
+        |item| {
+            queued.begun();
+            job(item)
+        },
     )
 }
 

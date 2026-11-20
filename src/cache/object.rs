@@ -314,22 +314,38 @@ pub(super) fn md5_of(source: &Path, size: u64, stop: &Stop) -> io::Result<Option
 
 /// hands each block of the file at `source` to `take`, read as [`Cache::copy_in`] reads it but
 /// writing nothing: whether it is a plain file of `size` bytes, read whole.
-fn read_whole(
-    source: &Path,
+fn read_whole(source: &Path, size: u64, stop: &Stop, take: impl FnMut(&[u8])) -> io::Result<bool> {
+    let Ok(input) = opened(source, size) else {
+        return Ok(false);
+    };
+    let ahead = crate::digest::reads_ahead(size.saturating_add(1));
+    read_whole_from(input, size, stop, take, ahead)
+}
+
+/// what [`read_whole`] makes of `input`, opened as it opens a file, reading on a second thread when
+/// `ahead`. either way it reads `input` in order to its end or one byte past `size` and answers
+/// from what the reads gave, so a change the reads meet counts alike.
+fn read_whole_from(
+    mut input: impl Read + Send,
     size: u64,
     stop: &Stop,
     mut take: impl FnMut(&[u8]),
+    ahead: bool,
 ) -> io::Result<bool> {
-    let Ok(mut input) = opened(source, size) else {
-        return Ok(false);
-    };
     let mut read = 0_u64;
     let most = size.saturating_add(1);
-    let ended = each_block(&mut input, most, Block::sized(most), stop, |block| {
+    let mut each = |block: &[u8]| {
         take(block);
         read += block.len() as u64;
         Ok(())
-    });
+    };
+    let block = Block::sized(most);
+    let _hashing = crate::digest::Hashing::begin();
+    let ended = if ahead {
+        each_block_ahead(&mut input, most, block, stop, &mut each)
+    } else {
+        each_block(&mut input, most, block, stop, each)
+    };
     match ended {
         Ok(()) => Ok(read == size),
         Err(Fault::Source(_)) => Ok(false),
@@ -609,6 +625,56 @@ fn each_block(
         left -= read as u64;
     }
     Ok(())
+}
+
+/// [`each_block`] with the same reads through `block`, and one more like it once they go on a second
+/// thread a block ahead of `each`.
+fn each_block_ahead(
+    input: &mut (impl Read + Send),
+    most: u64,
+    block: Block,
+    stop: &Stop,
+    each: &mut dyn FnMut(&[u8]) -> io::Result<()>,
+) -> Result<(), Fault> {
+    if most == 0 {
+        return Ok(());
+    }
+    if let Err(err) = stop.check_io() {
+        return Err(Fault::Cache(err));
+    }
+    let (mut unread, mut left) = (most, most);
+    let taken = crate::digest::taken_ahead(
+        block,
+        &mut |buffer| loop {
+            let want = usize::try_from(unread).map_or(buffer.len(), |left| left.min(buffer.len()));
+            if want == 0 {
+                return Ok(0);
+            }
+            match input.read(&mut buffer[..want]) {
+                Ok(read) => {
+                    unread -= read as u64;
+                    return Ok(read);
+                }
+                Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+                Err(err) => return Err(err),
+            }
+        },
+        &mut |block| {
+            if let Err(err) = each(block) {
+                return std::ops::ControlFlow::Break(err);
+            }
+            left -= block.len() as u64;
+            match stop.check_io() {
+                Err(err) if left > 0 => std::ops::ControlFlow::Break(err),
+                _ => std::ops::ControlFlow::Continue(()),
+            }
+        },
+    );
+    match taken {
+        Ok(None) => Ok(()),
+        Ok(Some(err)) => Err(Fault::Cache(err)),
+        Err(err) => Err(Fault::Source(err)),
+    }
 }
 
 /// how far apart a sealed object's modification and birth times may lie: FAT and exFAT round a
@@ -972,5 +1038,157 @@ mod tests {
             file.set_len(0).unwrap();
         });
         assert!(!shrunk, "a file that shrank while read was read whole");
+    }
+
+    /// reading ahead on a second thread hands `each` the bytes reading in turn hands it, through
+    /// smaller blocks, and ends as it ends: at `most` bytes, at the end, at a failed `each`, and at
+    /// a stop asked while a block was taken, which ends the read once that block is taken unless no
+    /// byte is left. the stop and the failure come once a count of bytes is taken, as blocks of
+    /// either size reach it.
+    #[test]
+    fn each_block_ahead_takes_the_bytes_each_block_takes() {
+        let _alone = crate::digest::AloneInTests::set(true);
+        let block = crate::digest::BLOCK;
+        let bytes: Vec<u8> = (0..=250).cycle().take(3 * block + 5).collect();
+        // the bytes `each` was handed, and how it ended: the fault's side and kind
+        let run = |ahead: bool, most: u64, stop_from: Option<usize>, fail_from: Option<usize>| {
+            let stop = Stop::default();
+            let mut taken = Vec::new();
+            let mut each = |block: &[u8]| {
+                taken.extend_from_slice(block);
+                if stop_from.is_some_and(|from| taken.len() >= from) {
+                    stop.ask();
+                }
+                match fail_from {
+                    Some(from) if taken.len() >= from => Err(io::Error::other("disk full")),
+                    _ => Ok(()),
+                }
+            };
+            let mut input = &bytes[..];
+            let ended = if ahead {
+                each_block_ahead(&mut input, most, Block::sized(most), &stop, &mut each)
+            } else {
+                each_block(&mut input, most, Block::sized(most), &stop, each)
+            };
+            let ended = match ended {
+                Ok(()) => "whole".to_owned(),
+                Err(Fault::Source(err)) => format!("source {:?}", err.kind()),
+                Err(Fault::Cache(err)) => format!("cache {:?} {err}", err.kind()),
+            };
+            (taken, ended)
+        };
+        let total = bytes.len() as u64;
+        let from = 300 << 10;
+        for most in [
+            0,
+            1,
+            block as u64 - 1,
+            block as u64,
+            block as u64 + 1,
+            total,
+            total + 1,
+        ] {
+            let all = usize::try_from(most).unwrap().min(bytes.len());
+            let whole = run(false, most, None, None);
+            assert_eq!(whole, (bytes[..all].to_vec(), "whole".to_owned()), "{most}");
+            assert_eq!(run(true, most, None, None), whole, "{most}");
+            for ahead in [false, true] {
+                let (taken, ended) = run(ahead, most, None, Some(from));
+                let failed = all >= from;
+                assert_eq!(
+                    ended == "cache Other disk full",
+                    failed,
+                    "{most} {ahead} {ended}"
+                );
+                assert_eq!(taken.len() >= from, failed, "{most} {ahead}");
+                let (taken, ended) = run(ahead, most, Some(from), None);
+                let stopped = ended == "cache Interrupted stopped at your request";
+                assert_eq!(stopped, taken.len() < all, "{most} {ahead} {ended}");
+                assert!(stopped || ended == "whole", "{most} {ahead} {ended}");
+                assert!(!stopped || taken.len() >= from, "{most} {ahead}");
+            }
+        }
+    }
+
+    /// a file as reads find it: `bytes`, until the read that starts at or past `at` finds them
+    /// grown or cut first, or until the read that finds the end leaves them grown or cut after.
+    struct Changing {
+        bytes: Vec<u8>,
+        position: usize,
+        when: When,
+        change: Change,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum When {
+        Never,
+        ReadAt(usize),
+        AfterEnd,
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum Change {
+        Grow,
+        Cut(usize),
+    }
+
+    impl Changing {
+        fn apply(&mut self) {
+            match self.change {
+                Change::Grow => self.bytes.extend_from_slice(b"more"),
+                Change::Cut(len) => self.bytes.truncate(len),
+            }
+            self.when = When::Never;
+        }
+    }
+
+    impl Read for Changing {
+        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+            if matches!(self.when, When::ReadAt(at) if self.position >= at) {
+                self.apply();
+            }
+            let size = buffer
+                .len()
+                .min(self.bytes.len().saturating_sub(self.position));
+            if size > 0 {
+                buffer[..size].copy_from_slice(&self.bytes[self.position..self.position + size]);
+                self.position += size;
+            }
+            if size == 0 && matches!(self.when, When::AfterEnd) {
+                self.apply();
+            }
+            Ok(size)
+        }
+    }
+
+    /// whether the file is read whole does not hang on reading ahead: a file that grows before the
+    /// read that would find its end, or is cut short before its last bytes, is not read whole, and
+    /// one cut just at its end or changed after its end was read is, alike either way. the change
+    /// is tied to where the reads are in the file, not to a time.
+    #[test]
+    fn a_file_changed_near_its_end_is_read_whole_alike_either_way() {
+        let _alone = crate::digest::AloneInTests::set(true);
+        let size = 2 * crate::digest::BLOCK + 10;
+        let bytes = vec![7; size];
+        let stop = Stop::default();
+        for (when, change, whole) in [
+            (When::Never, Change::Grow, true),
+            (When::ReadAt(size), Change::Grow, false),
+            (When::AfterEnd, Change::Grow, true),
+            (When::ReadAt(size), Change::Cut(0), true),
+            (When::ReadAt(size / 2), Change::Cut(size / 2), false),
+            (When::ReadAt(1), Change::Grow, false),
+        ] {
+            for ahead in [false, true] {
+                let file = Changing {
+                    bytes: bytes.clone(),
+                    position: 0,
+                    when,
+                    change,
+                };
+                let read = read_whole_from(file, size as u64, &stop, |_| {}, ahead).unwrap();
+                assert_eq!(read, whole, "{when:?} {change:?} ahead {ahead}");
+            }
+        }
     }
 }

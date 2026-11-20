@@ -1116,6 +1116,39 @@ impl Write for PartialWriter {
 }
 
 fn hash_range(file: &File, hasher: &mut Hasher, start: u64, end: u64) -> io::Result<()> {
+    let ahead = crate::digest::reads_ahead(end.saturating_sub(start));
+    hash_range_ahead(file, hasher, start, end, ahead)
+}
+
+/// [`hash_range`], whose reads may go ahead on a second thread when `ahead`.
+fn hash_range_ahead(
+    file: &File,
+    hasher: &mut Hasher,
+    start: u64,
+    end: u64,
+    ahead: bool,
+) -> io::Result<()> {
+    let _hashing = crate::digest::Hashing::begin();
+    if ahead {
+        let mut next = start;
+        let taken = crate::digest::taken_ahead(
+            crate::digest::Block::sized(end.saturating_sub(start)),
+            &mut |buffer| {
+                let size =
+                    usize::try_from(end - next).map_or(buffer.len(), |left| left.min(buffer.len()));
+                if size > 0 {
+                    read_exact_at(file, next, &mut buffer[..size])?;
+                    next += size as u64;
+                }
+                Ok(size)
+            },
+            &mut |bytes| {
+                hasher.update(bytes);
+                std::ops::ControlFlow::<()>::Continue(())
+            },
+        );
+        return taken.map(|_| ());
+    }
     let mut buffer = vec![0; usize::try_from(end - start).map_or(BUFFER, |left| left.min(BUFFER))];
     let mut at = start;
     while at < end {

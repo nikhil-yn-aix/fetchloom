@@ -953,3 +953,34 @@ fn only_linux_starts_writeback_early() {
         .unwrap();
     assert_eq!(writer.writeback.is_some(), cfg!(target_os = "linux"));
 }
+
+/// a range read ahead on a second thread hashes to what reading it in turn hashes to, from the
+/// file's start or partway, and a range past the file's end fails both ways.
+#[test]
+fn a_range_read_ahead_hashes_as_a_range_read_in_turn() {
+    let _alone = crate::digest::AloneInTests::set(true);
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("part");
+    let bytes: Vec<u8> = (0..=250).cycle().take(5 * BUFFER + 9).collect();
+    fs::write(&path, &bytes).unwrap();
+    let file = File::open(&path).unwrap();
+    let size = bytes.len() as u64;
+    for (start, end) in [(0, size), (7, size), (BUFFER as u64, 4 * BUFFER as u64 + 1)] {
+        let mut digests = Vec::new();
+        for ahead in [false, true] {
+            let mut hasher = Hasher::default();
+            hash_range_ahead(&file, &mut hasher, start, end, ahead).unwrap();
+            digests.push(hasher.finish().0);
+        }
+        let range = &bytes[usize::try_from(start).unwrap()..usize::try_from(end).unwrap()];
+        assert_eq!(digests, [crate::digest::sha256(range); 2], "{start}..{end}");
+    }
+    for ahead in [false, true] {
+        let failed = hash_range_ahead(&file, &mut Hasher::default(), 0, size + 1, ahead);
+        assert_eq!(
+            failed.map_err(|err| err.kind()),
+            Err(io::ErrorKind::UnexpectedEof),
+            "{ahead}"
+        );
+    }
+}

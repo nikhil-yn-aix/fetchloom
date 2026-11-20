@@ -801,6 +801,7 @@ impl Cache {
         let path: crate::place::FilePath<'_, Object> =
             &|object| std::borrow::Cow::Borrowed(object.path.as_path());
         let ahead = crate::place::ReadAhead::when_cold(&objects, path);
+        let queued = digest::Queued::of(objects.len());
         let verify = || {
             loop {
                 let index = next.fetch_add(1, Ordering::Relaxed);
@@ -810,6 +811,7 @@ impl Cache {
                 let Some(object) = objects.get(index) else {
                     break;
                 };
+                queued.begun();
                 if stop.is_asked() {
                     break;
                 }
@@ -1030,12 +1032,43 @@ pub(super) fn on_disk(metadata: &fs::Metadata) -> u64 {
 /// reads them.
 fn hash(
     path: &Path,
-    mut block: digest::Block,
+    block: digest::Block,
     stop: &Stop,
     progress: &dyn Fn(u64),
 ) -> io::Result<Sha256> {
+    let ahead = block.reads_ahead();
+    hash_ahead(path, block, stop, progress, ahead)
+}
+
+/// [`hash`], reading on a second thread when `ahead`.
+fn hash_ahead(
+    path: &Path,
+    mut block: digest::Block,
+    stop: &Stop,
+    progress: &dyn Fn(u64),
+    ahead: bool,
+) -> io::Result<Sha256> {
     let mut file = crate::volume::read_unfollowed(path)?;
+    let _hashing = digest::Hashing::begin();
     let mut hasher = digest::Hasher::default();
+    if ahead {
+        if stop.is_asked() {
+            return Err(io::ErrorKind::Interrupted.into());
+        }
+        let taken = digest::taken_ahead(block, &mut |buffer| file.read(buffer), &mut |bytes| {
+            hasher.update(bytes);
+            progress(bytes.len() as u64);
+            if stop.is_asked() {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+        return match taken? {
+            Some(()) => Err(io::ErrorKind::Interrupted.into()),
+            None => Ok(hasher.finish().0),
+        };
+    }
     let buffer = block.get();
     loop {
         if stop.is_asked() {
@@ -2382,5 +2415,44 @@ mod tests {
             .unwrap()
             .write_all(b"BAD!")
             .unwrap();
+    }
+
+    /// an object read ahead on a second thread hashes as it does read in turn, tells its bar all its
+    /// bytes, and stops after the same count of blocks when a stop is asked.
+    #[test]
+    fn an_object_read_ahead_hashes_and_stops_as_one_read_in_turn() {
+        let _alone = crate::digest::AloneInTests::set(true);
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("object");
+        let bytes: Vec<u8> = (0..=250)
+            .cycle()
+            .take(usize::try_from(digest::AHEAD_FROM).unwrap() + 5)
+            .collect();
+        fs::write(&path, &bytes).unwrap();
+        let most = bytes.len() as u64 + 1;
+        for stop_after in [None, Some(0), Some(2)] {
+            let mut seen = Vec::new();
+            for ahead in [false, true] {
+                let stop = Stop::default();
+                let told = std::cell::RefCell::new(Vec::new());
+                let progress = |read| {
+                    told.borrow_mut().push(read);
+                    if stop_after.is_some_and(|after| told.borrow().len() >= after) {
+                        stop.ask();
+                    }
+                };
+                if stop_after == Some(0) {
+                    stop.ask();
+                }
+                let hashed = hash_ahead(&path, digest::Block::sized(most), &stop, &progress, ahead)
+                    .map_err(|err| err.kind());
+                let told = told.into_inner();
+                let whole = told.iter().sum::<u64>() == bytes.len() as u64;
+                seen.push((hashed, stop_after.map(|_| told.len()), whole));
+            }
+            assert_eq!(seen[0], seen[1], "{stop_after:?}");
+            let whole = stop_after.is_none().then(|| digest::sha256(&bytes));
+            assert_eq!(seen[0].0.ok(), whole, "{stop_after:?}");
+        }
     }
 }

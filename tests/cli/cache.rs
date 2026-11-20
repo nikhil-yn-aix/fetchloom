@@ -2270,3 +2270,76 @@ fn gc_frees_imports_over_many_fan_folders() -> Result {
     );
     Ok(())
 }
+
+/// whether this machine lets a run hash on more than one thread, as a large file's reads ahead
+/// need: one of a single processor keeps each hash's reads on its own, as a run held to one does.
+fn hashes_on_threads() -> bool {
+    std::thread::available_parallelism().is_ok_and(|processors| processors.get() > 1)
+}
+
+/// `status --verify` of a project's one large file reads it ahead on a second thread, once no
+/// other hash of its batch waits, as `-vv` tells, and says what a run held to one thread, which
+/// reads it in turn, says.
+#[test]
+fn status_verify_reads_a_lone_large_file_ahead() -> Result {
+    let sandbox = Sandbox::new()?;
+    let big = sandbox.folder("big")?;
+    let bytes: Vec<u8> = (0..5_u32 << 20).map(|at| (at * 7 % 251) as u8).collect();
+    fs::write(big.join("large.bin"), &bytes)?;
+    let added = sandbox.run(&["add", "../big"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let mut told = Vec::new();
+    for one_thread in [false, true] {
+        let mut command = sandbox.command(&["-vv", "status", "--verify"]);
+        if one_thread {
+            command.env("FETCHLOOM_THREADS", "1");
+        }
+        let output = command.output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let ahead = stderr.contains("a hash reads its file a block ahead");
+        assert_eq!(ahead, !one_thread && hashes_on_threads(), "{stderr}");
+        told.push(text(&output.stdout)?);
+    }
+    assert_eq!(told[0], told[1]);
+    Ok(())
+}
+
+/// a large object is read on a second thread while it is hashed, as `-vv` tells, and verifies as
+/// a run held to one thread, which reads it in turn, verifies it: intact, or changed once a byte in
+/// its middle differs from its name's.
+#[test]
+fn verify_reads_a_large_object_ahead() -> Result {
+    let sandbox = Sandbox::new()?;
+    let bytes: Vec<u8> = (0..5_u32 << 20).map(|at| (at * 7 % 251) as u8).collect();
+    let digest = crate::support::sha256_hex(&bytes);
+    let mut damaged = bytes.clone();
+    damaged[3 << 20] ^= 1;
+    for (held, code) in [(&bytes, 0), (&damaged, 30)] {
+        for one_thread in [false, true] {
+            let cache = sandbox.folder(&format!("cache {code} {one_thread}"))?;
+            sandbox.make_cache(&cache)?;
+            let object = cache.join("objects").join(&digest[..2]).join(&digest[2..]);
+            fs::create_dir_all(object.parent().ok_or("no fan folder")?)?;
+            fs::write(&object, held)?;
+            let mut command = sandbox.command(&["-vv", "--json", "cache", "verify"]);
+            command.env("FETCHLOOM_CACHE", &cache);
+            if one_thread {
+                command.env("FETCHLOOM_THREADS", "1");
+            }
+            let output = command.output()?;
+            let document = json(&output)?;
+            assert_eq!(output.status.code(), Some(code), "{document}");
+            let changed = if code == 0 {
+                vec![]
+            } else {
+                vec![digest.clone()]
+            };
+            assert_eq!(document["result"]["changed"], serde_json::json!(changed));
+            let stderr = text(&output.stderr)?;
+            let told = stderr.contains("a hash reads its file a block ahead");
+            assert_eq!(told, !one_thread && hashes_on_threads(), "{stderr}");
+        }
+    }
+    Ok(())
+}
