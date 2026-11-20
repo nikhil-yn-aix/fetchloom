@@ -66,7 +66,7 @@ fn checked(
         match guard.name(&raw, is_folder)? {
             Named::File(path) => files.push((index, path)),
             Named::System(path) => guard.leave_out(path),
-            Named::Unstorable | Named::Folder => {}
+            Named::Folder => {}
         }
     }
     Ok(files)

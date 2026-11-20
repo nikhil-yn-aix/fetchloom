@@ -1910,7 +1910,7 @@ impl<'a> Placing<'a> {
             actions,
             &mut placement,
         ) {
-            Ok(settled) => settled,
+            Ok((todo, adopted)) => (todo, adopted, None),
             Err(error) => (Vec::new(), true, Some(error)),
         };
         copied_edits(&survey, &mut placement.kept);
@@ -1993,11 +1993,9 @@ impl<'a> Placing<'a> {
         let (kept_aside, moved_away) = track_aside(&project.root, state, stays);
         let replaced = forget_replaced(&project.root, state, checked);
         tell::set_aside(output, manifest, &state.aside);
-        // an add rolled back takes back its markers even when none of its files was placed
-        let rolled_back = (stopped || failure.is_some() || flushed.is_err()) && adding.is_some();
-        let undone = rolled_back
+        let undone = (stopped || failure.is_some() || flushed.is_err())
             && adding.is_some_and(|adding| undo(project, &root, threads, state, &adding, checked));
-        let taken_back = rolled_back && mark::take_back(&project.root, &mut placer, state, &made);
+        let taken_back = undone && mark::take_back(&project.root, &mut placer, state, &made);
         // a run that ends early tells no placement, so its error says where each changed copy went
         let ended = |error: Error| kept_copies(error, &placement.changed_copies);
         flushed.map_err(ended)?;
@@ -2970,8 +2968,7 @@ fn write_ahead(
 
 /// carries out every decision short of placing: counts what stays, records files found holding the
 /// locked bytes, and removes files about to be replaced unless changed since the scan, moving those
-/// `--force` replaces aside. returns the targets to place, whether the state changed, and the first
-/// failure to take a file away: that file stays as it is while the others go ahead, as in placing.
+/// `--force` replaces aside. returns the targets to place and whether the state changed.
 fn settle<'t, 'a>(
     project: &Project,
     placer: &mut Placer,
@@ -2980,10 +2977,9 @@ fn settle<'t, 'a>(
     targets: &'t [Target<'a>],
     actions: Vec<Action>,
     placement: &mut Placement,
-) -> Result<(Vec<&'t Target<'a>>, bool, Option<Error>), Error> {
+) -> Result<(Vec<&'t Target<'a>>, bool), Error> {
     let mut todo = Vec::new();
     let mut adopted = false;
-    let mut unmade = None;
     // each entry in the way once, by path: whether it is gone
     let mut cleared: BTreeMap<String, bool> = BTreeMap::new();
     let taken = taken_paths(survey, targets);
@@ -3052,13 +3048,7 @@ fn settle<'t, 'a>(
                     }
                     Some(_) => {
                         let forced = matches!(action, Action::Overwrite(_));
-                        // one another program holds open must not keep the rest from their pins
-                        if let Err(error) =
-                            make_way(project, placer, survey, &taken, target, forced, placement)
-                        {
-                            unmade = unmade.or(Some(error));
-                            continue;
-                        }
+                        make_way(project, placer, survey, &taken, target, forced, placement)?;
                         // sync removed it, so a run that cannot place the pin leaves no record
                         // that would have the next run tell of a file someone deleted
                         if !forced {
@@ -3082,7 +3072,7 @@ fn settle<'t, 'a>(
             }
         }
     }
-    Ok((todo, adopted, unmade))
+    Ok((todo, adopted))
 }
 
 /// clears `blocker` from `target`'s way, once a path as `cleared` remembers, and says whether

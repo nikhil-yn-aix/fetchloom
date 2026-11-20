@@ -84,7 +84,7 @@ fn take(
             Ok(())
         }
         // a name such as `data/` makes a folder of an entry that holds bytes
-        Named::Unstorable | Named::Folder => guard.pass(&raw, read),
+        Named::Folder => guard.pass(&raw, read),
     }
 }
 

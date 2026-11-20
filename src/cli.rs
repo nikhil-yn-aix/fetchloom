@@ -1404,16 +1404,11 @@ fn ask_room_on(
 
 /// what `doing` needs on the disk holding `place` and what it has free, in words.
 fn shortage(doing: &str, (needed, free): (u64, u64), place: &str) -> String {
-    let needs = units::size(needed);
-    let mut has = units::size(free);
-    // sizes that round alike would read as a contradiction, so the gap is said instead
-    if has == needs {
-        has = format!(
-            "{} less than that",
-            units::size(needed.saturating_sub(free))
-        );
-    }
-    format!("{doing} needs at least {needs} on the disk holding {place}, which has {has} free")
+    format!(
+        "{doing} needs at least {} on the disk holding {place}, which has {} free",
+        units::size(needed),
+        units::size(free)
+    )
 }
 
 /// warns, for a run told `--yes`, that `doing` may lack room on the disk holding `place`: free

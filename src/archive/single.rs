@@ -119,8 +119,6 @@ fn decompress(
         // a person asked for this one file, so one a system writes by itself stays too
         let path = match guard.name(name, false)? {
             Named::File(path) | Named::System(path) => path,
-            // the one name is the whole refusal
-            Named::Unstorable => return guard.storable(),
             Named::Folder => return Err(refused(format!("\"{name}\" names a folder"))),
         };
         let counted = tar::counted(input, guard.meter())?;

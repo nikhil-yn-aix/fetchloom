@@ -258,13 +258,11 @@ impl Volume {
 
     /// clears the read-only flag of the plain file at `path`, through a handle that never follows a
     /// link, and removes it, putting the flag back when that fails too. none when the file is not
-    /// a read-only plain file or has another name, which shares its flag.
+    /// a read-only plain file or may have another name.
     fn remove_read_only(&self, path: &Path) -> Option<io::Result<()>> {
         let file = open_attributes(path).ok()?;
         let before = file.metadata().ok().filter(is_plain)?.permissions();
-        // a disk may refuse to ignore the flag, as ReFS on windows server 2022 does, though it
-        // links, so the file's own names decide, not the disk's
-        if !before.readonly() || name_count(&file).ok()? != 1 {
+        if !before.readonly() || self.can_hardlink() != Some(false) {
             return None;
         }
         file.set_permissions(writable(before.clone())).ok()?;
@@ -273,27 +271,6 @@ impl Volume {
             let _ = file.set_permissions(before);
         }
         Some(removed)
-    }
-
-    /// removes `path`, a read-only file whose only other name is `kept`, as a sealed download is
-    /// once linked as a new object, keeping `kept` read-only. a disk that refuses to remove a
-    /// read-only file, as ReFS on windows server 2022 does, gets the shared flag cleared for the
-    /// removal and set again through `kept`.
-    pub(crate) fn remove_twin(&self, path: &Path, kept: &Path) -> io::Result<()> {
-        let refused = match self.remove(path) {
-            Err(err) if err.kind() == io::ErrorKind::PermissionDenied => err,
-            removed => return removed,
-        };
-        let file = open_attributes(path)?;
-        let metadata = file.metadata()?;
-        let before = metadata.permissions();
-        if !is_plain(&metadata) || !before.readonly() || name_count(&file)? != 2 {
-            return Err(refused);
-        }
-        file.set_permissions(writable(before.clone()))?;
-        let removed = (self.remove_file)(path);
-        let sealed = open_attributes(kept).and_then(|kept| kept.set_permissions(before));
-        removed.and(sealed)
     }
 
     /// whether the volume can hardlink, learned once by linking a new hidden file in the scratch
@@ -485,24 +462,6 @@ pub(crate) fn open_attributes(path: &Path) -> io::Result<File> {
 /// deduplication keeps as one reads as any file does.
 pub(crate) fn is_plain(metadata: &Metadata) -> bool {
     metadata.file_type().is_file()
-}
-
-/// how many names the open `file` has.
-pub(crate) fn name_count(file: &File) -> io::Result<u64> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        Ok(file.metadata()?.nlink())
-    }
-    #[cfg(windows)]
-    {
-        Ok(winapi_util::file::information(file)?.number_of_links())
-    }
-    #[cfg(not(any(unix, windows)))]
-    {
-        let _ = file;
-        Ok(1)
-    }
 }
 
 /// opens `path` to read and write without following a link at its end, and refuses anything

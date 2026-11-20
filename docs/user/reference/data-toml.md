@@ -71,14 +71,14 @@ an explicitly supplied `--as` name that is taken is refused. a name that breaks 
 
 `data_dir` and `path` use `/` on every platform. absolute paths, drive prefixes, backslashes, control characters, empty components, `.` and `..` are refused, with one exception: `path = "."` is the data folder itself, so a dataset's `train.csv` lands at `data/train.csv` for scripts that already read it there. `data_dir = "."` stays refused, since it would mix data with the project's own files. so is a folder some disk cannot store, on every system, since windows clones read the same data.toml: a name windows reserves for devices, such as `NUL` or `con`, one ending in a dot or a space, one with `<`, `>`, `:`, `"`, `|`, `?` or `*`, or one longer than 255 bytes. `data_dir` cannot start with the name of one of the project's own files, `data.toml`, `data.lock` or `data.lock.d`, and none of its folders may be named as a file git reads, `.gitignore`, `.gitattributes` or `.gitmodules`, in any case. a leading `./` and a trailing `/` are stripped, so `./data` is `data`; spaces are kept as written, so `"data "` is refused as a name ending in a space, not read as `data`. the data folder and its child folders must be real directories; see [filesystem placement](../../dev/architecture/placing.md#choose-a-filesystem-method). a data folder that is a link to another disk is refused too, and `data_dir` cannot point there instead: to keep the data on another disk, move the whole project folder to that disk.
 
-the files inside a dataset keep the names their source, folder or archive gives them. windows cannot store some names linux and macos can: one with `<`, `>`, `:`, `"`, `|`, `?` or `*`, one ending in a dot or a space, or a device name such as `con.txt` or `nul`. the run that pins a dataset holding such names places them here as they are and warns once for that dataset, naming them, and its help says what lets a teammate on windows go on: leaving files the source lists out with `exclude`, or keeping an archive that holds such a name packed with `extract = false`, since windows cannot unpack it:
+the files inside a dataset keep the names their source, folder or archive gives them. windows, and fat or exfat disks anywhere, cannot store some names linux and macos can: one with `<`, `>`, `:`, `"`, `|`, `?` or `*`, one ending in a dot or a space, or a device name such as `con.txt` or `nul`. the run that pins a dataset holding such names places them here as they are and warns once for that dataset, naming them:
 
 ```text
 warning: fatbad has 3 files whose names windows and fat disks cannot store: pipe|.csv, star*.csv and what?.csv
-  help: a teammate on windows cannot place them; leave them out with exclude in data.toml if one needs to
+  help: a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to
 ```
 
-on windows a sync refuses such a file by name before anything is written, and an archive holding any is refused whole, naming each. elsewhere a fat or exfat disk takes what its driver takes while placing: linux's exfat driver refuses `<`, `>`, `:`, `"`, `|`, `?` and `*`, macos 15 took every one of these names on exfat, and neither refuses a device name, which windows keeps for its devices.
+on windows a sync refuses such a file by name before anything is written; on a fat or exfat disk elsewhere, the disk itself refuses it while placing.
 
 `path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. sync places it there and warns, naming the `path` that puts it at `data/train.csv`:
 
@@ -94,13 +94,7 @@ error: datasets test and train would both place data/splits/README
   help: give datasets.test or datasets.train another path in data.toml
 ```
 
-sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced. a clash between a file the source lists beside an archive and a file inside it is resolved by leaving the one beside it out with the dataset's `exclude`, or the one inside with the archive's [members table](#files-inside-archives) while the archive keeps another file, or by keeping the archive packed with `extract = false`; an add that meets such a clash is undone, so its help names `--exclude` and `--no-extract` instead. two files of one archive that a disk ignoring case sees as one, or that differ only in how their unicode is composed, stop the archive from unpacking at all, before a members table could leave one out, so only `extract = false`, or `--no-extract` for an add, keeps such an archive, packed:
-
-```text
-error: the archive holds "Data.csv" and "data.csv", which are one name on disks that ignore case
-  in case/case.zip
-  help: keep the archive packed with extract = false on its dataset in data.toml, or with --no-extract
-```
+sync and add refuse a clash before downloading anything when the sources list the file names, as most repositories and buckets do. a name only the server gives, as for a plain link, is checked once the file is downloaded, and the files inside an archive this machine never unpacked once it is unpacked, still before anything is placed or replaced. a clash between a file the source lists beside an archive and a file inside it is resolved by leaving the one beside it out with the dataset's `exclude`, or the one inside with the archive's [members table](#files-inside-archives) while the archive keeps another file, or by keeping the archive packed with `extract = false`; two files of one archive that a disk ignoring case sees as one take the members table or `extract = false`. an add that meets such a clash is undone, so its help names `--exclude` and `--no-extract` instead.
 
 each placed file belongs to one dataset, so `remove` and sync delete only that dataset's unchanged files from a shared folder and leave the other datasets' files and your own.
 

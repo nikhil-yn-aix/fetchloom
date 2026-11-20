@@ -49,9 +49,7 @@ pub(crate) use upkeep::{Checked, Freed, GRACE, Needed, Scan, Unfinished};
 
 use crate::digest::{self, Block, Md5, Sha256};
 use crate::place::{FolderUse, found_folder, real_folder};
-use crate::volume::{
-    Volume, is_plain, name_count, open_unfollowed, read_unfollowed, refuses_links,
-};
+use crate::volume::{Volume, is_plain, open_unfollowed, read_unfollowed, refuses_links};
 
 const TAG: &str = "Signature: 8a477f597d28d172789f06886806bc55\n# a cache made by fetchloom. backup tools can skip this folder.\n";
 const FOLDERS: [&str; 10] = [
@@ -589,6 +587,24 @@ fn write_over(path: &Path, bytes: &[u8]) -> io::Result<()> {
     }
     file.write_all(bytes)?;
     file.sync_all()
+}
+
+/// how many names the open `file` has.
+fn name_count(file: &File) -> io::Result<u64> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(file.metadata()?.nlink())
+    }
+    #[cfg(windows)]
+    {
+        Ok(winapi_util::file::information(file)?.number_of_links())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = file;
+        Ok(1)
+    }
 }
 
 #[cfg(test)]
@@ -1615,12 +1631,7 @@ impl Cache {
                 }
             }
         }
-        // the download and the new object are one file until the download's name goes
-        if new {
-            volume.remove_twin(source, path)?;
-        } else {
-            volume.remove(source)?;
-        }
+        volume.remove(source)?;
         Ok(new)
     }
 }
