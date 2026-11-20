@@ -3660,6 +3660,82 @@ fn a_failed_replacement_is_placed_later_without_blaming_anyone() -> Result {
     Ok(())
 }
 
+/// a file sync cannot take away for its pin, as one another program holds open on windows, stays as
+/// it was, and the other files it replaces still get theirs rather than being left deleted.
+#[cfg(unix)]
+#[test]
+fn a_file_that_cannot_make_way_leaves_the_other_replacements_placed() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    // copy = true replaces a placed hardlink, while a clone or a copy only turns writable
+    if !sandbox.links()?.hardlinks_read_only() {
+        return skipped(
+            "placed-hardlinks",
+            "this disk places no read-only file as a hardlink",
+        );
+    }
+    if !folders_refuse_files(&sandbox)? {
+        return skipped("permissions", "this disk keeps no folder from new files");
+    }
+    let bytes = zip_of(&[
+        ("README.txt", b"read me"),
+        ("nested/deep/c.bin", b"deep"),
+        ("tables/t.csv", b"a,b\n"),
+    ])?;
+    let server = Server::start("/files.zip", vec![file(&bytes, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let manifest = sandbox.work().join("data.toml");
+    fs::write(
+        &manifest,
+        format!("[datasets.held]\nref = \"{}\"\n", server.url),
+    )?;
+    let placed = sandbox.run(&["sync"])?;
+    assert_eq!(placed.status.code(), Some(0), "{}", text(&placed.stderr)?);
+    fs::write(
+        &manifest,
+        format!("[datasets.held]\nref = \"{}\"\ncopy = true\n", server.url),
+    )?;
+    // the file that sorts last cannot be removed, so the others were taken away before it failed
+    let dataset = sandbox.work().join("data").join("held");
+    let refusing = dataset.join("tables");
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o555))?;
+
+    let synced = sandbox.run(&["sync"]);
+    fs::set_permissions(&refusing, fs::Permissions::from_mode(0o755))?;
+    let synced = synced?;
+
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(50), "{stderr}");
+    assert!(stderr.contains("t.csv"), "{stderr}");
+    for (path, bytes) in [
+        ("README.txt", &b"read me"[..]),
+        ("nested/deep/c.bin", &b"deep"[..]),
+    ] {
+        let copy = dataset.join(path);
+        assert_eq!(
+            fs::read(&copy).ok().as_deref(),
+            Some(bytes),
+            "{path}: {stderr}"
+        );
+        assert!(
+            !fs::metadata(&copy)?.permissions().readonly(),
+            "{path}: {stderr}"
+        );
+    }
+    assert_eq!(fs::read(refusing.join("t.csv"))?, b"a,b\n", "{stderr}");
+    let again = sandbox.run(&["sync"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    assert!(
+        !fs::metadata(refusing.join("t.csv"))?
+            .permissions()
+            .readonly()
+    );
+    Ok(())
+}
+
 /// the list is rolled back whole, so the files placed for each of its datasets go too.
 #[cfg(unix)]
 #[test]
