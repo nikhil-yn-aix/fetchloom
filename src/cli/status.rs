@@ -716,7 +716,7 @@ fn check(
     };
     let cache = super::peek_cache()?;
     let mut survey = Survey::read(project, &Folders::of(&manifest), threads, stop)?;
-    let manifest = dropped_here(&mut status, &manifest, &survey);
+    let manifest = dropped_here(&mut status, manifest, &survey);
     status.unfinished = survey.leftovers().count();
     // status writes no state, so files hashing found unchanged ask for nothing
     survey.needs_writing = false;
@@ -795,8 +795,9 @@ fn output_folders(project: &Project, manifest: &Manifest) -> BTreeMap<String, St
 }
 
 /// `manifest` as a plain sync places it, without the datasets dropped here, which `status` names:
-/// a dataset dropped here is no difference, since a plain sync leaves it out.
-fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Manifest {
+/// a dataset dropped here is no difference, since a plain sync leaves it out. they are left out
+/// of `manifest` itself, so status holds one manifest, not a copy beside it.
+fn dropped_here(status: &mut Status, manifest: Manifest, survey: &Survey) -> Manifest {
     status.dropped = manifest
         .datasets
         .keys()
@@ -815,7 +816,7 @@ fn dropped_here(status: &mut Status, manifest: &Manifest, survey: &Survey) -> Ma
         .filter(|name| survey.state.freeing.contains(*name))
         .cloned()
         .collect();
-    super::drop::placed_by(manifest, &Scope::All, &survey.state.dropped).into_owned()
+    super::drop::placed_owned(manifest, &Scope::All, &survey.state.dropped)
 }
 
 /// the files a sync of `status` would download, once each, by the link it starts at: one neither

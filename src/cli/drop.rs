@@ -745,6 +745,18 @@ pub(super) fn placed_by<'m>(
     std::borrow::Cow::Owned(placed)
 }
 
+/// [`placed_by`] taking `manifest` and changing it in place, so no second manifest is ever made.
+pub(super) fn placed_owned(
+    mut manifest: Manifest,
+    scope: &Scope,
+    dropped: &BTreeSet<String>,
+) -> Manifest {
+    if *scope == Scope::All && !dropped.is_empty() {
+        left_out(&mut manifest, dropped);
+    }
+    manifest
+}
+
 /// whether a run of `scope`, for which the person named `named`, leaves `name` out: it is
 /// dropped here and the run only reaches it, as an add reaches the rest of the project, so the run
 /// neither fetches nor places it.
@@ -1204,5 +1216,31 @@ mod tests {
             files.keys().collect::<Vec<_>>(),
             ["data/iris/iris.csv", "data/many/b.csv"]
         );
+    }
+
+    /// leaving dropped datasets out of the manifest in place gives the manifest a copy gives, for
+    /// a run of all and of some, with datasets dropped here and none.
+    #[test]
+    fn leaving_datasets_out_in_place_places_what_a_copy_places() {
+        let manifest = Manifest::parse(
+            "[datasets.iris]\nref = \"zenodo:1\"\n\n[datasets.many]\nref = \"zenodo:2\"\n\n[datasets.wine]\nref = \"zenodo:3\"\n",
+        )
+        .unwrap();
+        let placed = |manifest: &Manifest| -> Vec<(String, bool)> {
+            manifest
+                .datasets
+                .iter()
+                .map(|(name, entry)| (name.clone(), entry.place))
+                .collect()
+        };
+        let some = Scope::Only(BTreeSet::from(["many".to_owned()]));
+        for scope in [Scope::All, some] {
+            for dropped in [vec![], vec!["many"], vec!["iris", "wine"]] {
+                let dropped: BTreeSet<String> = dropped.into_iter().map(str::to_owned).collect();
+                let copied = placed_by(&manifest, &scope, &dropped).into_owned();
+                let owned = placed_owned(manifest.clone(), &scope, &dropped);
+                assert_eq!(placed(&owned), placed(&copied), "{scope:?} {dropped:?}");
+            }
+        }
     }
 }

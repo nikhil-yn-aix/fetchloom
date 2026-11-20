@@ -228,7 +228,7 @@ async fn sync_held(
     let scope = selected(&manifest, &args.names, "sync")?;
     let dropped = project.dropped();
     super::drop::tell_left_out(&context.output, &manifest, &scope, &dropped);
-    let manifest = super::drop::placed_by(&manifest, &scope, &dropped).into_owned();
+    let manifest = super::drop::placed_owned(manifest, &scope, &dropped);
     // a named dataset dropped here comes back, which the last sync's word that all was in place
     // left out
     let back = super::drop::names_any(&scope, &dropped);
@@ -372,7 +372,7 @@ async fn sync_plain(
         (None, outcome)
     } else {
         let whole = Project::parse_manifest(text)?;
-        let whole = super::drop::placed_by(&whole, &Scope::All, &dropped).into_owned();
+        let whole = super::drop::placed_owned(whole, &Scope::All, &dropped);
         let run = Run {
             upgrade: Upgrade::Nothing,
             force: args.force,
