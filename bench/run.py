@@ -1,5 +1,6 @@
 """run sequential, checked linux benchmark cases."""
 import argparse
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -186,10 +187,13 @@ def group(pgid):
     return members
 
 
-def parse_access(lines, file_paths):
-    """requests and bytes served, from the server's json access log, and the bytes of requests
-    for these file paths."""
-    result = dict(requests=0, bytes_served=0, file_bytes_served=0)
+def parse_access(lines, file_paths, rtt_ms=0):
+    """what the server's json access log says a run asked for: requests, bytes served, the bytes of
+    requests for these file paths, each host's and protocol's requests, the connections, and per host
+    the most requests and connections in flight at once."""
+    result = dict(requests=0, bytes_served=0, file_bytes_served=0, hosts=Counter(), protocols=Counter(),
+                  connections=0, most_requests_per_connection=0)
+    spans, connections = defaultdict(list), defaultdict(list)
     for line in lines:
         if not line.strip():
             continue
@@ -199,7 +203,47 @@ def parse_access(lines, file_paths):
         parts = row["request"].split()
         if len(parts) >= 2 and urlsplit(parts[1]).path in file_paths:
             result["file_bytes_served"] += row["bytes"]
+        host = row.get("host", "")
+        result["hosts"][host] += 1
+        result["protocols"][row.get("protocol", "")] += 1
+        result["most_requests_per_connection"] = max(result["most_requests_per_connection"],
+                                                     row.get("connection_requests", 0))
+        if "msec" in row and "request_time" in row:
+            span = in_flight_span(row["msec"], row["request_time"], rtt_ms)
+            spans[host].append(span)
+            connections[host, row.get("connection")].append(span)
+    result["connections"] = len({connection for _, connection in connections})
+    joined = defaultdict(list)
+    for (host, _), held in connections.items():
+        joined[host].append((min(start for start, _ in held), max(end for _, end in held)))
+    result["peak_in_flight"] = {host: most_at_once(held) for host, held in sorted(spans.items())}
+    result["peak_connections"] = {host: most_at_once(held) for host, held in sorted(joined.items())}
+    result["hosts"], result["protocols"] = dict(result["hosts"]), dict(result["protocols"])
     return result
+
+
+# nginx logs whole milliseconds of a clock it reads once per batch of events, so an arrival may look
+# up to 2 ms early beside the end before it
+SLACK_MS = 2
+
+
+def in_flight_span(msec, request_time, rtt_ms):
+    """when a request was open, in whole ms: from its arrival until nginx logged it, and for at least
+    a round trip, since a client cannot send its next request on a slot before the last answer
+    reaches it; both ends less the log's slack, so back-to-back requests never seem to overlap."""
+    end = round(msec * 1000)
+    start = end - round(request_time * 1000)
+    return start, max(end, start + rtt_ms) - SLACK_MS
+
+
+def most_at_once(spans):
+    """the most spans open at one moment; one that ends as another starts does not overlap it."""
+    events = sorted([(start, 1) for start, end in spans if end > start] + [(end, -1) for start, end in spans if end > start])
+    most = now = 0
+    for _, step in events:
+        now += step
+        most = max(most, now)
+    return most
 
 
 def free_bytes(path):
@@ -300,6 +344,7 @@ def metadata(args, adapters):
                 fetchloom_binary=binary_identity(args.fetchloom) if any(
                     name == "fetchloom" or name.startswith("fetchloom+") for name in adapters) else None,
                 seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.network_profiles(),
+                budget=tools.BUDGET,
                 commands={}, orders=[], cases=[],
                 native_packages=native_versions(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
@@ -393,7 +438,9 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             for path in (lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"):
                 if path.is_file() and not path.name.endswith(".dir"):
                     paths.add("/" + str(path.relative_to(lab.ROOT / "www")))
-        row.update(parse_access(access.read_text().splitlines(), paths))
+        row.update(parse_access(access.read_text().splitlines(), paths, lab.PROFILES[case["profile"]]["delay_ms"]))
+        # flagged rather than failed: the budget is shown, not asserted
+        row["over_budget"] = max(row["peak_in_flight"].values(), default=0) > tools.BUDGET
         row["checks"] = verify(tool.outputs(case, workdir))
         if case["id"] == "s7":
             row["download_ratio"] = row["file_bytes_served"] / sum(item["size"] for item in case["files"])

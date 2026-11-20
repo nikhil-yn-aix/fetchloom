@@ -285,7 +285,48 @@ class HelperTests(unittest.TestCase):
     def test_the_access_log_counts_every_request_and_the_bytes_of_measured_files(self):
         lines = ['{"request": "GET /key/a.bin HTTP/1.1", "bytes": 10}', "", '{"request": "-", "bytes": 3}',
                  '{"request": "GET /key/a.bin?x=1 HTTP/2.0", "bytes": 5}', '{"request": "HEAD /other HTTP/1.1", "bytes": 0}']
-        self.assertEqual(run.parse_access(lines, {"/key/a.bin"}), dict(requests=4, bytes_served=18, file_bytes_served=15))
+        result = run.parse_access(lines, {"/key/a.bin"})
+        self.assertEqual({key: result[key] for key in ("requests", "bytes_served", "file_bytes_served")},
+                         dict(requests=4, bytes_served=18, file_bytes_served=15))
+
+    def test_the_server_log_format_reads_back_as_the_parser_expects(self):
+        sample = {"$request": "GET /key/a.bin HTTP/2.0", "$status": "200", "$body_bytes_sent": "13", "$host": "lab.flb",
+                  "$server_protocol": "HTTP/2.0", "$connection": "7", "$connection_requests": "2",
+                  "$request_time": "0.004", "$msec": "1700000000.125"}
+        line = lab.ACCESS_FORMAT
+        # a longer name first, so $connection does not eat $connection_requests
+        for name in sorted(sample, key=len, reverse=True):
+            line = line.replace(name, sample[name])
+        result = run.parse_access([line], {"/key/a.bin"}, rtt_ms=20)
+        self.assertEqual((result["file_bytes_served"], result["hosts"], result["protocols"], result["connections"],
+                          result["most_requests_per_connection"], result["peak_in_flight"]),
+                         (13, {"lab.flb": 1}, {"HTTP/2.0": 1}, 1, 2, {"lab.flb": 1}))
+
+    def test_requests_in_flight_count_streams_and_last_at_least_a_round_trip(self):
+        def line(host, connection, end_ms, took_ms, protocol="HTTP/2.0"):
+            return json.dumps(dict(request="GET /a HTTP/2.0", status=200, bytes=1, host=host, protocol=protocol,
+                                   connection=connection, connection_requests=1, request_time=took_ms / 1000,
+                                   msec=1700000000 + end_ms / 1000))
+        # four streams of one connection, each sending again 21 ms after its answer was handed over in
+        # under a millisecond: a client's own pace at home, never more than four at once
+        paced = [line("lab.flb", 1, worker + 21 * turn, 0) for worker in range(4) for turn in range(5)]
+        result = run.parse_access(paced, set(), rtt_ms=20)
+        self.assertEqual((result["peak_in_flight"], result["peak_connections"], result["connections"]),
+                         ({"lab.flb": 4}, {"lab.flb": 1}, 1))
+        # the same answers on lan, where nothing holds a request open but the server's own time
+        self.assertEqual(run.parse_access(paced, set(), rtt_ms=0)["peak_in_flight"], {"lab.flb": 0})
+        # six streams sent at once are six in flight however fast the server answered them
+        burst = [line("lab.flb", 1, 5, 0) for _ in range(6)]
+        self.assertEqual(run.parse_access(burst, set(), rtt_ms=20)["peak_in_flight"], {"lab.flb": 6})
+        # back to back on one connection, the next arrival logged a millisecond before the last end
+        chained = [line("lab.flb", 2, 10, 10, "HTTP/1.1"), line("lab.flb", 2, 20, 11, "HTTP/1.1")]
+        result = run.parse_access(chained, set(), rtt_ms=0)
+        self.assertEqual((result["peak_in_flight"], result["protocols"]), ({"lab.flb": 1}, {"HTTP/1.1": 2}))
+        # each host has its own budget, and each connection counts once
+        hosts = [line(host, number, 30, 25) for number, host in enumerate(["lab.flb"] * 4 + ["store.flb"] * 4)]
+        result = run.parse_access(hosts, set(), rtt_ms=20)
+        self.assertEqual((result["peak_in_flight"], result["peak_connections"], result["connections"]),
+                         ({"lab.flb": 4, "store.flb": 4}, {"lab.flb": 4, "store.flb": 4}, 8))
 
     def test_free_space_still_moving_after_every_try_is_its_last_reading(self):
         with mock.patch.object(lab, "flush") as flush, mock.patch.object(run, "free_bytes", side_effect=range(100)), \
@@ -460,6 +501,25 @@ class OneRunTests(unittest.TestCase):
                               interruption_sent=False)])
         row = self.one_run(Downloader("unused"), measured, dict(self.case, id="s7", profile="home"))
         self.assertEqual(row["checks"], ["no expected outputs"])
+
+    def test_a_run_with_more_requests_in_flight_than_the_budget_is_flagged(self):
+        class Fast(tools.Tool):
+            name = "fast"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        for streams, flagged in ((4, False), (5, True)):
+            def measured(*args, **kwargs):
+                # every stream sent at once on one connection, each answered within the millisecond
+                (self.root / "access.jsonl").write_text("".join(
+                    json.dumps(dict(request="GET /key/a.bin HTTP/2.0", status=200, bytes=1, host="lab.flb", protocol="HTTP/2.0",
+                                    connection=1, connection_requests=n + 1, request_time=0.0, msec=1700000000.005)) + "\n"
+                    for n in range(streams)))
+                return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+            row = self.one_run(Fast("unused"), measured, dict(self.case, profile="home"))
+            self.assertEqual((row["peak_in_flight"], row["connections"], row["over_budget"]), ({"lab.flb": streams}, 1, flagged))
 
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):

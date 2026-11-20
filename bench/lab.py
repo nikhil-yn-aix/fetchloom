@@ -22,6 +22,11 @@ CA = Path("/usr/local/share/ca-certificates/fl-bench.crt")
 HOSTS = Path("/etc/hosts")
 SERVER_ADDRESS = "10.77.0.2"
 HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
+# one json line per request: which host and connection it came on, and when it arrived and ended,
+# in milliseconds, so the budget of requests in flight is read from the server's side
+ACCESS_FORMAT = ('{"request":"$request","status":$status,"bytes":$body_bytes_sent,"host":"$host",'
+                 '"protocol":"$server_protocol","connection":$connection,"connection_requests":$connection_requests,'
+                 '"request_time":$request_time,"msec":$msec}')
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
 INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
                        r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
@@ -341,7 +346,7 @@ def setup(image_gib=12, cpus=None):
 error_log {ROOT}/nginx-error.log;
 events {{}}
 http {{
-    log_format bench escape=json '{{"request":"$request","status":$status,"bytes":$body_bytes_sent}}';
+    log_format bench escape=json '{ACCESS_FORMAT}';
     access_log {ROOT}/access.jsonl bench;
     server {{
         listen {SERVER_ADDRESS}:443 ssl http2;

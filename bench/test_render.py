@@ -401,6 +401,15 @@ class PageTests(Quiet):
         self.assertEqual(hero.find(svg + "style").text.count("@font-face"), 1)
         self.assertEqual([element.text for element in hero.iter(svg + "text")][:2], ["one large file, local network", "3\u00d7 faster"])
 
+    def test_each_tool_shows_its_connections_and_the_most_requests_it_had_in_flight(self):
+        rows = [lab_row(connections=2, peak_in_flight={"lab.flb": 4}, over_budget=False),
+                lab_row(tool="curl", wall_seconds=2, connections=1, peak_in_flight={"lab.flb": 6, "store.flb": 1}, over_budget=True)]
+        page = self.render(rows, dict(kind="lab", quick=True, budget=4))
+        self.assertIn("| connections | most in flight to a host | failures |", page)
+        self.assertIn("| n/a | 2 | 4 | 0/1 |", page)
+        self.assertIn("| n/a | 1 | 6, over the budget in 1 of 1 runs | 0/1 |", page)
+        self.assertIn("- politeness budget: at most 4 requests in flight to one host, for every tool", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)

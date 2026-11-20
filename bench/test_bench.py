@@ -336,7 +336,8 @@ class MeasurementTests(unittest.TestCase):
             '{"request":"GET /a HTTP/2.0","status":206,"bytes":13}',
             '{"request":"GET /other HTTP/1.1","status":200,"bytes":7}',
         ], {"/a"})
-        self.assertEqual(result, {"requests": 3, "bytes_served": 20, "file_bytes_served": 13})
+        self.assertEqual({key: result[key] for key in ("requests", "bytes_served", "file_bytes_served")},
+                         {"requests": 3, "bytes_served": 20, "file_bytes_served": 13})
 
 
 class MetadataTests(unittest.TestCase):
@@ -569,6 +570,17 @@ class ToolTests(unittest.TestCase):
                          [(self.work / "cache/pooch" / item["name"], item["sha256"]) for item in self.FILES])
         self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
                          [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
+
+    def test_every_tool_keeps_to_four_requests_a_host_by_its_own_flags(self):
+        self.assertEqual(tools.BUDGET, 4)
+        self.assertEqual(tools.Fetchloom("unused").env(self.work)["FETCHLOOM_HOST_JOBS"], "4")
+        curl = self.lines(tools.Curl, "s2", self.FILES)[2].split()
+        self.assertEqual(curl[curl.index("--parallel-max") + 1], "4")
+        aria2 = self.lines(tools.Aria2c, "s2", self.FILES)[2].split()
+        self.assertEqual((aria2[aria2.index("-j") + 1], aria2[aria2.index("-x") + 1]), ("4", "4"))
+        self.assertEqual(tools.Dvc("unused").command(dict(id="s2"), self.work)[-2:], ["-j", "4"])
+        tools.Datalad("unused").command(dict(id="s2"), self.work)
+        self.assertEqual((self.work / "command.sh").read_text().splitlines()[-1], "datalad get -J 4 data")
 
     def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
         self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])

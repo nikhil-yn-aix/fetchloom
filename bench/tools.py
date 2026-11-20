@@ -10,6 +10,8 @@ import lab
 
 # the scenarios that run again over files already in place, each with its tool's own way to skip work
 NOOP = ("s6", "s9")
+# the most requests any tool may have in flight to one host, fetchloom's own default
+BUDGET = 4
 
 
 def shell(argv):
@@ -131,6 +133,9 @@ class Fetchloom(Tool):
     def command(self, scenario, workdir):
         return [self.fetchloom, "-q", "--yes", "sync"]
 
+    def env(self, workdir):
+        return {**super().env(workdir), "FETCHLOOM_HOST_JOBS": str(BUDGET)}
+
     def outputs(self, scenario, workdir):
         if scenario["members"]:
             return [(workdir / "project" / "data" / "f00000" / item["name"], item["sha256"])
@@ -177,7 +182,7 @@ class Curl(Tool):
         return script(workdir / "command.sh", self.steps(scenario, workdir))
 
     def steps(self, scenario, workdir):
-        argv = ["curl", "-q", "--parallel", "--parallel-max", "4"]
+        argv = ["curl", "-q", "--parallel", "--parallel-max", str(BUDGET)]
         for i, item in enumerate(scenario["files"]):
             if i:
                 argv.append("--next")
@@ -216,7 +221,8 @@ class Aria2c(Tool):
         urls = workdir / "aria2.txt"
         urls.write_text("".join(f'{item["url"]}\n  out={item["name"]}\n  checksum=sha-256={item["sha256"]}\n'
                                 for item in scenario["files"]))
-        argv = ["aria2c", "-j", "4", "-x", "4", "-i", urls, "-d", "data"]
+        # -x splits only the large file, into BUDGET pieces
+        argv = ["aria2c", "-j", str(BUDGET), "-x", str(BUDGET), "-i", urls, "-d", "data"]
         if scenario["id"] in NOOP:
             argv.append("--check-integrity=true")
         return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), shell(argv),
@@ -264,7 +270,7 @@ class Dvc(Tool):
         return workdir / "project"
 
     def command(self, scenario, workdir):
-        return ["dvc", "pull", "-j", "4"]
+        return ["dvc", "pull", "-j", str(BUDGET)]
 
 
 class Datalad(Tool):
@@ -288,7 +294,7 @@ class Datalad(Tool):
 
     def command(self, scenario, workdir):
         lines = [shell(["cd", workdir / "project"]),
-                 f"git config annex.security.allowed-ip-addresses {lab.SERVER_ADDRESS}", "datalad get -J 4 data"]
+                 f"git config annex.security.allowed-ip-addresses {lab.SERVER_ADDRESS}", f"datalad get -J {BUDGET} data"]
         return script(workdir / "command.sh", lines)
 
 

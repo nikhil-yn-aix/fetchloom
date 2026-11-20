@@ -17,20 +17,23 @@ TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
 
 
 def summarize(rows):
-    """one tool's runs in one case: median, fastest and slowest passed run, failure counts, and
-    medians of the other measures."""
+    """one tool's runs in one case: median, fastest and slowest passed run, failure counts, medians
+    of the other measures, the most requests any run had in flight to one host and how many runs
+    went over the budget."""
     successful = [r for r in rows if r.get("status") == "passed"]
     times = [r["wall_seconds"] for r in successful]
     def metric(name):
         values = [r[name] for r in successful if r.get(name) is not None]
         return median(values) if values else None
     cpu = [r.get("user_seconds", 0) + r.get("sys_seconds", 0) for r in successful]
+    peaks = [max(r["peak_in_flight"].values(), default=0) for r in rows if r.get("peak_in_flight") is not None]
     return dict(median=median(times) if times else None, low=min(times) if times else None,
                 high=max(times) if times else None, failures=sum(r.get("status") == "failed" for r in rows),
                 timeouts=sum(r.get("status") == "failed" and bool(r.get("timeout")) for r in rows),
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
                 cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
-                requests=metric("requests"), download_ratio=metric("download_ratio"))
+                requests=metric("requests"), connections=metric("connections"), download_ratio=metric("download_ratio"),
+                in_flight=max(peaks) if peaks else None, over_budget=sum(bool(r.get("over_budget")) for r in rows))
 
 
 def link(profile, shaping=None):
@@ -58,6 +61,20 @@ def no_bar(result):
     if not result["failures"]:
         return "skipped"
     return "timed out" if result.get("timeouts") == result["failures"] else "failed"
+
+
+def shown(value):
+    """a value as the table shows it, or n/a."""
+    return "n/a" if value is None else value
+
+
+def in_flight(entry):
+    """the most requests a tool's runs had in flight to one host, and how many runs went over the
+    budget, or n/a without a server log."""
+    if entry.get("in_flight") is None:
+        return "n/a"
+    over = entry.get("over_budget")
+    return f"{entry['in_flight']}" + (f", over the budget in {over} of {entry['rounds']} runs" if over else "")
 
 
 def failures(entry):
@@ -394,7 +411,7 @@ def draw(charts, cases, services):
                   f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
 
 
-METHOD = ("the clock includes the entire command. warmups are excluded. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
+METHOD = ("the clock includes the entire command. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -461,6 +478,8 @@ def machines(metas):
             setting.append(f"- measured CPUs: `{meta['cpu_affinity']}`; nginx threads: `{meta.get('nginx_cpu_affinity', {})}`")
         if meta.get("fetchloom_binary"):
             setting.append(f"- supplied executable: `{meta['fetchloom_binary']['path']}`; SHA-256: `{meta['fetchloom_binary']['sha256']}`")
+        if meta.get("budget"):
+            setting.append(f"- politeness budget: at most {meta['budget']} requests in flight to one host, for every tool")
         cases = ", ".join(sorted({f"{case['filesystem']}/{case['profile']}/{case['id']}" for case in meta.get("cases") or []}))
         recorded = f"- recorded `{meta.get('date', 'unknown')}`" + (f": {cases}" if cases else f": {meta.get('kind', 'unknown')} run")
         if meta.get("filesystems"):
@@ -480,13 +499,13 @@ def case_section(case):
     rounds = max(item["rounds"] for item in summaries.values())
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
-             "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | failures |",
-             "|---|---:|---|---:|---:|---:|---:|---:|---:|"]
+             "| tool | median | min to max | ratio to fetchloom | CPU | peak memory | disk | requests | connections | most in flight to a host | failures |",
+             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|"]
     own = summaries.get("fetchloom", {})
     base = None if own.get("failures") else own.get("median")
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
         ratio_text = "n/a" if entry["failures"] else ratio(entry["median"], base)
-        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {entry['requests'] if entry['requests'] is not None else 'n/a'} | {failures(entry)} |")
+        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio_text} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
     if case["scenario"] == "s7":
         lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
         for tool, entry in summaries.items():
