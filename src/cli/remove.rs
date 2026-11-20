@@ -12,6 +12,7 @@ use crate::digest::Sha256;
 use crate::error::{Error, Kind};
 use crate::output::{Output, Warning};
 use crate::plan;
+use crate::project::Project;
 use crate::project::lock;
 use crate::project::manifest::{self, Manifest};
 use crate::stop::Stop;
@@ -23,18 +24,20 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let names = distinct(args.names);
     let project = find(context)?;
     let dry_run = args.dry.dry_run;
-    if !dry_run && let Ok((_, manifest)) = project.manifest() {
+    let mut read = None;
+    if !dry_run && let Ok((text, manifest)) = project.manifest() {
         // the names first, so no yes is asked for a removal a typo then stops; asked before the
         // project is held, so other runs never wait on the answer
         named(&manifest, &names)?;
         ask_import(context, &manifest, &names)?;
+        read = Some((text, manifest));
     }
     let _held = if dry_run {
         None
     } else {
         Some(hold(context, &project, "remove").await?)
     };
-    let (text, mut kept) = project.manifest()?;
+    let (text, mut kept) = read_again(&project, read)?;
     named(&kept, &names)?;
     // one edit of data.toml for every name, which a stop between names ends with nothing written
     let updated = manifest::without_datasets(&text, &names, |at| {
@@ -146,6 +149,22 @@ fn unlisted_outputs(gone: &Manifest, folders: &Folders) -> Vec<String> {
         .filter_map(|entry| entry.at.clone())
         .filter(|at| folders.holding(at).is_none())
         .collect()
+}
+
+/// data.toml as the project's hold finds it: `read` again when its text is the same as before
+/// the hold, else parsed anew.
+fn read_again(
+    project: &Project,
+    read: Option<(String, Manifest)>,
+) -> Result<(String, Manifest), Error> {
+    let text = project.manifest_text()?;
+    match read {
+        Some((before, manifest)) if before == text => Ok((text, manifest)),
+        _ => {
+            let manifest = Project::parse_manifest(&text)?;
+            Ok((text, manifest))
+        }
+    }
 }
 
 /// what the removal of `listed` would change, told as the removal tells it.
@@ -407,4 +426,34 @@ fn unnamed(context: &Context) -> Error {
             "name one of them, as in `{}`",
             super::project::command(&format!("remove {first}"))
         ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::manifest::tests::reads;
+
+    /// under the hold, the data.toml read before it is kept with no second parse while its text
+    /// is the same, and parsed anew once an edit came in while the removal waited.
+    #[test]
+    fn data_toml_is_parsed_again_only_once_it_changed() {
+        let folder = tempfile::tempdir().unwrap();
+        let project = Project::at(folder.path().to_path_buf());
+        let path = folder.path().join(manifest::FILE);
+        std::fs::write(&path, "[datasets.a]\nref = \"zenodo:1\"\n").unwrap();
+        let read = project.manifest().unwrap();
+        let names = |manifest: &Manifest| manifest.datasets.keys().cloned().collect::<Vec<_>>();
+        let before = reads();
+        let (_, same) = read_again(&project, Some(read.clone())).unwrap();
+        assert_eq!(reads(), before);
+        assert_eq!(names(&same), ["a"]);
+        std::fs::write(&path, "[datasets.b]\nref = \"zenodo:2\"\n").unwrap();
+        let (text, edited) = read_again(&project, Some(read)).unwrap();
+        assert_eq!(reads(), before + 1);
+        assert_eq!(text, "[datasets.b]\nref = \"zenodo:2\"\n");
+        assert_eq!(names(&edited), ["b"]);
+        let (_, unread) = read_again(&project, None).unwrap();
+        assert_eq!(reads(), before + 2);
+        assert_eq!(names(&unread), ["b"]);
+    }
 }
