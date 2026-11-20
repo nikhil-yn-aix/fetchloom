@@ -465,7 +465,7 @@ impl State {
         folders: &[String],
         keep: &dyn Fn(&str) -> bool,
     ) -> io::Result<(State, u64)> {
-        let mut reading = Reading { file, bytes: 0 };
+        let mut reading = Reading::of(file);
         match indexed(&mut reading, folders, keep) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
@@ -497,11 +497,30 @@ impl State {
         Ok((State::parse(&bytes), filled as u64))
     }
 
+    /// [`State::read_whole`] on a thread beside the walk of the data folder: what follows the
+    /// records is parsed as it is read, since its time hides behind the walk's and its bytes held
+    /// whole would add to the run's peak.
+    pub(crate) fn read_whole_beside(
+        file: &mut (impl Read + Seek),
+        length: u64,
+    ) -> io::Result<(State, u64)> {
+        if length > BLOCK as u64 {
+            let mut reading = Reading::of(file);
+            reading.slice = None;
+            return State::read_blocks_from(reading);
+        }
+        State::read_whole(file, length)
+    }
+
     /// [`State::parse`] of `file`, read a block at a time through its index, so the document is
     /// never held whole, with how many bytes it read; a state whose index does not fit is read
     /// whole.
     fn read_blocks(file: &mut (impl Read + Seek)) -> io::Result<(State, u64)> {
-        let mut reading = Reading { file, bytes: 0 };
+        State::read_blocks_from(Reading::of(file))
+    }
+
+    /// [`State::read_blocks`] through `reading`.
+    fn read_blocks_from<R: Read + Seek>(mut reading: Reading<'_, R>) -> io::Result<(State, u64)> {
         match by_blocks(&mut reading) {
             Ok(state) => return Ok((state, reading.bytes)),
             Err(reason) => tracing::debug!(reason, "the state is read whole"),
@@ -827,6 +846,24 @@ struct Tail {
 struct Reading<'a, R> {
     file: &'a mut R,
     bytes: u64,
+    /// the most bytes after the records read whole and parsed from their bytes, none when they
+    /// are parsed as they are read.
+    slice: Option<u64>,
+}
+
+/// the most bytes after the records a state's read holds whole to parse them; a longer tail is
+/// parsed as it is read.
+const TAIL_MOST: u64 = 64 << 20;
+
+impl<'a, R: Read + Seek> Reading<'a, R> {
+    /// a read of `file` from nothing read, holding a tail up to [`TAIL_MOST`] whole.
+    fn of(file: &'a mut R) -> Self {
+        Reading {
+            file,
+            bytes: 0,
+            slice: Some(TAIL_MOST),
+        }
+    }
 }
 
 impl<R: Read + Seek> Reading<'_, R> {
@@ -842,8 +879,9 @@ impl<R: Read + Seek> Reading<'_, R> {
         Ok(())
     }
 
-    /// what follows the records that end at `at`, parsed as it is read: the comma that ends the
-    /// records opens it as an object of its own.
+    /// what follows the records that end at `at`, read whole and parsed from its bytes up to
+    /// `slice` bytes, else parsed as it is read: the comma that ends the records opens it as an
+    /// object of its own.
     fn tail<T: serde::de::DeserializeOwned>(&mut self, at: u64) -> Result<T, &'static str> {
         let unread = |_| "what follows its records cannot be read";
         self.file.seek(SeekFrom::Start(at)).map_err(unread)?;
@@ -854,6 +892,25 @@ impl<R: Read + Seek> Reading<'_, R> {
         self.bytes += 1;
         if comma != *b"," {
             return Err("its records do not end where its header says");
+        }
+        if let Some(most) = self.slice {
+            let end = self.file.seek(SeekFrom::End(0)).map_err(unread)?;
+            self.file.seek(SeekFrom::Start(at + 1)).map_err(unread)?;
+            let length = end.saturating_sub(at + 1);
+            if length <= most {
+                // room for the whole tail at once, so no growth copies it or leaves room unused
+                let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default() + 1);
+                bytes.push(b'{');
+                let read = self
+                    .file
+                    .by_ref()
+                    .take(length)
+                    .read_to_end(&mut bytes)
+                    .map_err(|_| "what follows its records is not its index")?;
+                self.bytes += read as u64;
+                return serde_json::from_slice(&bytes)
+                    .map_err(|_| "what follows its records is not its index");
+            }
         }
         let mut counted = Counted {
             inner: &mut *self.file,
@@ -1810,10 +1867,7 @@ mod tests {
         for block in [1, 300, 4096, usize::MAX] {
             let bytes = state.render_in(block, None);
             let mut file = io::Cursor::new(&bytes);
-            let mut reading = Reading {
-                file: &mut file,
-                bytes: 0,
-            };
+            let mut reading = Reading::of(&mut file);
             let read = by_blocks(&mut reading).expect("its index fits");
             assert_same(&read, &State::parse(&bytes), &format!("blocks of {block}"));
             assert_eq!(read.aside, state.aside, "blocks of {block}");
@@ -1827,12 +1881,63 @@ mod tests {
                 let case = format!("{folders:?} in blocks of {block}");
                 let keep = |path: &str| inside(path, &folders);
                 let mut file = io::Cursor::new(&bytes);
+                let mut reading = Reading::of(&mut file);
+                let read = indexed(&mut reading, &folders, &keep).expect(&case);
+                assert_same(&read, &whole_within(&bytes, &folders), &case);
+            }
+        }
+    }
+
+    /// what follows the records reads the same whole as through a reader: every field, the
+    /// bytes counted, a damaged tail refused alike, and a tail past the most held read as before.
+    #[test]
+    fn a_tail_read_whole_answers_as_one_read_as_it_comes() {
+        let mut state = crowded();
+        state
+            .followed
+            .insert("data/link".to_owned(), "/elsewhere".to_owned());
+        state.id = Some("0123".to_owned());
+        let bytes = state.render_in(300, None);
+        let at = usize::try_from(records_end(&bytes[..START]).unwrap()).unwrap();
+        let cut = bytes[..bytes.len() - 3].to_vec();
+        let mut garbled = bytes.clone();
+        garbled[at + 5] = b'#';
+        let mut no_comma = bytes.clone();
+        no_comma[at] = b' ';
+        let mut spaced = bytes.clone();
+        spaced.extend_from_slice(b" \n");
+        let mut trailing = bytes.clone();
+        trailing.push(b'x');
+        for (case, bytes) in [
+            ("whole", &bytes),
+            ("cut", &cut),
+            ("garbled", &garbled),
+            ("no comma", &no_comma),
+            ("spaced", &spaced),
+            ("trailing", &trailing),
+        ] {
+            let read = |slice: Option<u64>, within: bool| {
+                let mut file = io::Cursor::new(bytes.as_slice());
                 let mut reading = Reading {
                     file: &mut file,
                     bytes: 0,
+                    slice,
                 };
-                let read = indexed(&mut reading, &folders, &keep).expect(&case);
-                assert_same(&read, &whole_within(&bytes, &folders), &case);
+                let folders = ["data/a".to_owned()];
+                let read = if within {
+                    indexed(&mut reading, &folders, &|path| inside(path, &folders))
+                } else {
+                    by_blocks(&mut reading)
+                };
+                read.map(|state| (format!("{state:?}"), reading.bytes))
+            };
+            for within in [false, true] {
+                let streamed = read(None, within);
+                assert_eq!(read(Some(TAIL_MOST), within), streamed, "{case}, {within}");
+                assert_eq!(read(Some(8), within), streamed, "{case}, past the most");
+                if case == "whole" || case == "spaced" {
+                    assert!(streamed.is_ok(), "{case}");
+                }
             }
         }
     }
