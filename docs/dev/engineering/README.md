@@ -22,6 +22,7 @@ cargo clippy --all-targets --locked -- -D warnings
 cargo clippy --release --locked -- -D warnings
 cargo test --locked
 RUSTDOCFLAGS='-D warnings' cargo doc --locked --no-deps
+RUSTDOCFLAGS='-D rustdoc::broken_intra_doc_links' cargo doc --locked --no-deps --document-private-items
 python3 -m unittest discover -s python
 python3 -m unittest discover -s bench
 typos
