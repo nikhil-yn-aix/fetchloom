@@ -324,7 +324,8 @@ pub(crate) fn unpack(
             }
         }
         meter.read_to_end();
-        guard.check_stopped()
+        guard.check_stopped()?;
+        guard.storable()
     })?;
     room.keep();
     members.sort_unstable_by(|a, b| a.path.cmp(&b.path));

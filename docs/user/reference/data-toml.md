@@ -78,7 +78,7 @@ warning: fatbad has 3 files whose names windows and fat disks cannot store: pipe
   help: a teammate on windows, or with the data on a fat or exfat disk, cannot place them; leave them out with exclude in data.toml if one needs to
 ```
 
-on windows a sync refuses such a file by name before anything is written; on a fat or exfat disk elsewhere, the disk itself refuses it while placing.
+on windows a sync refuses such a file by name before anything is written, and an archive holding any is refused whole, naming each; on a fat or exfat disk elsewhere, the disk itself refuses it while placing.
 
 `path` names a folder, never a file: `path = "train.csv"` makes a folder named `train.csv`, so the file lands at `data/train.csv/train.csv`. sync places it there and warns, naming the `path` that puts it at `data/train.csv`:
 
