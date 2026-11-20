@@ -282,3 +282,19 @@ a sync that places files said nothing about them until its first `Placed` line, 
 | 5,000 files into a pipe | 70.4 -> 70.6 | 1.013 [0.964, 1.027] |
 
 cpu stayed flat: 0.993 and 1.004 into a pipe, 1.017 [1.000, 1.017] and 1.000 at a terminal. peak memory: 38.8 -> 38.9 MiB for 1,000 files, 1.001 [0.999, 1.006], and 73.1 -> 74.9 MiB for 5,000, 1.016 [1.003, 1.027], 1.8 MiB more, within the rule, a lower end at most 1.02. what raised it is not established: the count the line needs allocates nothing. the output gains the one line, at a terminal and in plain stderr alike. kept.
+
+## one look at the cache when the room is plain, 2026-11-20
+
+a sync placing from the cache looked up every object it needs twice: once to count what the cache's disk must hold, then after the fill to find what to download. the first look is now skipped where the sizes data.lock gives prove room for every file, cached or not, on the cache's disk and for the data folder's copies; the strong look after the fill stays as it was. at 1,000 cached objects it was 2,000 `lstat` and 1,000 `statx` calls fewer, 10,609 to 7,462 system calls in all. the round-3 feel window measured it as round 2's placing rows did, a sync placing every file of a project from a warm cache into an emptied data folder, into a pipe, off against on in shuffled rounds on ext4: 30 rounds for 1,000 files in 20 datasets, 20 for 5,000 in 50, 10 for the larger cases, on the musl build 7a68d56e3 over main 03078ac56.
+
+| case | median ms, off -> on | wall | cpu | peak memory |
+|---|---:|---:|---:|---:|
+| 1,000 files from the cache | 23.9 -> 22.2 | 0.939 [0.930, 0.950] | 0.853 [0.848, 0.866] | 1.004, 38.8 -> 38.9 MiB |
+| 5,000 files from the cache | 68.9 -> 63.4 | 0.921 [0.908, 0.936] | 0.834 [0.829, 0.847] | 0.979, 74.6 -> 72.9 MiB |
+| 10,000 files from the cache | 119.6 -> 110.7 | 0.928 [0.917, 0.936] | 0.862 [0.857, 0.866] | 0.978 |
+| 100,000 files from a mirror into an empty cache | 7,603 -> 7,373 | 0.973 [0.969, 0.980] | | 0.973 |
+| a settled sync of 3 files | 4.7 -> 4.7 | 1.004 [0.989, 1.020] | | 1.000 |
+| a settled sync of 5,000 files | 18.9 -> 18.9 | 0.998 [0.991, 1.008] | | 1.001 |
+| first sync of 1,000 zip datasets, where it steps aside | 1,839 -> 1,873 | 1.018 [0.990, 1.060] | | 0.977 |
+
+the p90s moved with the medians, 0.935 and 0.912, and no resource rose. the 10,000-file row ran beside the others as a diagnostic. kept.

@@ -619,6 +619,31 @@ fn a_sync_settles_files_as_new_as_the_state_and_then_hashes_nothing() -> Result 
     Ok(())
 }
 
+/// a sync placing from the cache, with room for every file it needs, looks at what the cache lacks
+/// once, after the fill, as its timeline shows: the look that only weighed the room is skipped.
+#[test]
+fn a_sync_from_the_cache_looks_at_what_the_cache_lacks_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
+    let added = sandbox.run(&["add", &server.url])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    delete_folder(&sandbox.work().join("data"))?;
+    let trace = sandbox.folder("traces")?.join("sync.json");
+    let synced = sandbox
+        .command(&["sync"])
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    let events: Vec<serde_json::Value> = serde_json::from_str(&fs::read_to_string(&trace)?)?;
+    let looks = events
+        .iter()
+        .filter(|event| event["name"] == "find_objects" && event["ph"] != "E")
+        .count();
+    assert_eq!(looks, 1);
+    assert_eq!(fs::read(sandbox.work().join("data/iris/iris.csv"))?, V1);
+    Ok(())
+}
+
 #[test]
 fn removing_a_dataset_keeps_an_edit_a_coarse_clock_hides() -> Result {
     let sandbox = Sandbox::new()?;
