@@ -311,11 +311,13 @@ class HelperTests(unittest.TestCase):
             run.variant_choice("Lean:FETCHLOOM_EXP_A=1")
 
     def test_the_access_log_counts_every_request_and_the_bytes_of_measured_files(self):
-        lines = ['{"request": "GET /key/a.bin HTTP/1.1", "bytes": 10}', "", '{"request": "-", "bytes": 3}',
-                 '{"request": "GET /key/a.bin?x=1 HTTP/2.0", "bytes": 5}', '{"request": "HEAD /other HTTP/1.1", "bytes": 0}']
+        # a refusal's or a redirect's page is no part of the file
+        lines = ['{"request": "GET /key/a.bin HTTP/1.1", "status": 200, "bytes": 10}', "", '{"request": "-", "status": 400, "bytes": 3}',
+                 '{"request": "GET /key/a.bin?x=1 HTTP/2.0", "status": 206, "bytes": 5}', '{"request": "HEAD /other HTTP/1.1", "status": 200, "bytes": 0}',
+                 '{"request": "GET /key/a.bin HTTP/1.1", "status": 416, "bytes": 197}', '{"request": "GET /key/a.bin HTTP/1.1", "status": 302, "bytes": 145}']
         result = run.parse_access(lines, {"/key/a.bin"})
         self.assertEqual({key: result[key] for key in ("requests", "bytes_served", "file_bytes_served")},
-                         dict(requests=4, bytes_served=18, file_bytes_served=15))
+                         dict(requests=6, bytes_served=360, file_bytes_served=15))
 
     def test_the_server_log_format_reads_back_as_the_parser_expects(self):
         sample = {"$request": "GET /key/a.bin HTTP/2.0", "$status": "200", "$body_bytes_sent": "13", "$host": "lab.flb",
@@ -512,15 +514,15 @@ class OneRunTests(unittest.TestCase):
         def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None):
             # a listing of the folder costs bytes too, but is no part of the file
             access = self.root / "access.jsonl"
-            access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "bytes": 3}\n'
-                                                   '{"request": "GET /key/ HTTP/1.1", "bytes": 100}\n')
+            access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "status": 206, "bytes": 3}\n'
+                                                   '{"request": "GET /key/ HTTP/1.1", "status": 200, "bytes": 100}\n')
             return next(attempts)
 
         row = self.one_run(Downloader("unused"), measured, dict(self.case, id="s7", profile="home"))
         self.assertEqual((row["wall_seconds"], row["user_seconds"], row["sys_seconds"], row["maxrss_bytes"]), (3, 5, 10, 7))
         self.assertEqual(row["first_attempt"]["exit_code"], 130)
         self.assertEqual(row["resume_command"]["argv"], ["true"])
-        self.assertEqual(row["download_ratio"], 6 / 4)
+        self.assertEqual((row["dataset_bytes"], row["body_bytes_ratio"]), (4, 6 / 4))
         self.assertEqual(row["checks"], ["no expected outputs", "first attempt ended before the prescribed interruption"])
         self.assertEqual(row["status"], "failed")
         attempts = iter([dict(wall_seconds=10, user_seconds=1, sys_seconds=2, maxrss_bytes=7, exit_code=130, timeout=False,
@@ -627,7 +629,7 @@ class OneRunTests(unittest.TestCase):
         self.assertEqual(made, [("home", 10, 10)])
         self.assertEqual([step if isinstance(step, str) else step[0] for step in shaped], ["home", "measured"])
         self.assertIsInstance(shaped[1][1], Drop)
-        self.assertEqual((row["link_drop"]["dropped_at"], row["download_ratio"]), (10.0, 6 / 4))
+        self.assertEqual((row["link_drop"]["dropped_at"], row["body_bytes_ratio"]), (10.0, 6 / 4))
         self.assertNotIn("the download ended before the link came back", row["checks"])
 
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
@@ -647,8 +649,8 @@ class OneRunTests(unittest.TestCase):
 
         def measured(*args, **kwargs):
             (self.root / "access.jsonl").write_text(
-                '{"request": "GET /dvc/key/files/md5/90/0150983cd24fb0d6963f7d28e17f72 HTTP/1.1", "bytes": 3}\n'
-                '{"request": "GET /dvc/key/files/md5/90/abc.dir HTTP/1.1", "bytes": 2}\n')
+                '{"request": "GET /dvc/key/files/md5/90/0150983cd24fb0d6963f7d28e17f72 HTTP/1.1", "status": 200, "bytes": 3}\n'
+                '{"request": "GET /dvc/key/files/md5/90/abc.dir HTTP/1.1", "status": 200, "bytes": 2}\n')
             return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
 
         row = self.one_run(Dvc("unused"), measured)

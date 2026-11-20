@@ -197,9 +197,9 @@ def group(pgid):
 
 
 def parse_access(lines, file_paths, rtt_ms=0):
-    """what the server's json access log says a run asked for: requests, bytes served, the bytes of
-    requests for these file paths, each host's and protocol's requests, the connections, and per host
-    the most requests and connections in flight at once."""
+    """what the server's json access log says a run asked for: requests, bytes served, the body bytes
+    of whole and partial answers for these file paths, each host's and protocol's requests, the
+    connections, and per host the most requests and connections in flight at once."""
     result = dict(requests=0, bytes_served=0, file_bytes_served=0, hosts=Counter(), protocols=Counter(),
                   connections=0, most_requests_per_connection=0)
     spans, connections = defaultdict(list), defaultdict(list)
@@ -210,7 +210,8 @@ def parse_access(lines, file_paths, rtt_ms=0):
         result["requests"] += 1
         result["bytes_served"] += row["bytes"]
         parts = row["request"].split()
-        if len(parts) >= 2 and urlsplit(parts[1]).path in file_paths:
+        # a refusal's or a redirect's page is no part of a file
+        if len(parts) >= 2 and urlsplit(parts[1]).path in file_paths and row.get("status") in (200, 206):
             result["file_bytes_served"] += row["bytes"]
         host = row.get("host", "")
         result["hosts"][host] += 1
@@ -463,8 +464,10 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             unseen = [host for host in (lab.HOST, lab.STORE) if not row["hosts"].get(host)]
             if unseen:
                 row["checks"].append(f"the server log shows no request to {' or '.join(unseen)}")
-        if case["id"] in ("s7", "s10"):
-            row["download_ratio"] = row["file_bytes_served"] / sum(item["size"] for item in case["files"])
+        if case["id"] in fixtures.BROKEN:
+            # what the application asked for again, not the wire: nginx never sees a retransmitted packet
+            row["dataset_bytes"] = sum(item["size"] for item in case["files"])
+            row["body_bytes_ratio"] = row["file_bytes_served"] / row["dataset_bytes"]
         if case["id"] == "s7" and not first["interruption_sent"]:
             row["checks"].append("first attempt ended before the prescribed interruption")
         if drop is not None:

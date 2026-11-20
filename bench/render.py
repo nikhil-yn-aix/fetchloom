@@ -36,7 +36,7 @@ def summarize(rows):
                 timeouts=sum(r.get("status") == "failed" and bool(r.get("timeout")) for r in rows),
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
                 cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
-                requests=metric("requests"), connections=metric("connections"), download_ratio=metric("download_ratio"),
+                requests=metric("requests"), connections=metric("connections"), body_bytes_ratio=metric("body_bytes_ratio"),
                 in_flight=max(peaks) if peaks else None, over_budget=sum(bool(r.get("over_budget")) for r in rows))
 
 
@@ -421,6 +421,8 @@ def draw(charts, cases, services):
                   f"{measured['count']:,} files of {size(measured['file_size'])}, live", measured["summaries"], dark)
 
 
+# what s7 and s10 count of a download asked for again
+REFETCH = "server body bytes / dataset size"
 # the clock of a library timed around its calls, as tools.py names it
 WARM_CALL = "call inside a warm interpreter"
 METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. `hero-*` cards repeat each scenario's first result below, home broadband where it was measured, with a verdict against the fastest other tool, for the README.\n")
@@ -525,21 +527,24 @@ def case_section(case):
                          f"{seconds(entry['process'])}.")
     if case["scenario"] == "s10":
         unbroken = case.get("unbroken", {})
-        lines += ["", "| tool | with the drop | unbroken, s1 on this link | added | bytes served / file size |", "|---|---:|---:|---:|---:|"]
+        lines += ["", f"| tool | with the drop | unbroken, s1 on this link | added | {REFETCH} |", "|---|---:|---:|---:|---:|"]
         for tool, entry in summaries.items():
             plain = unbroken.get(tool, {}).get("median")
             added = f"{entry['median'] - plain:+.2f} s" if entry["median"] is not None and plain is not None else "n/a"
-            value = entry["download_ratio"]
+            value = entry["body_bytes_ratio"]
             lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(plain)} | {added} | "
                          f"{f'{value:.3f}x' if value is not None else 'n/a'} |")
         lines.append("\nthe link drops at 10 s for 10 s, both ways, and nothing is stopped: new packets are lost while those "
                      "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
     if case["scenario"] == "s7":
-        lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
+        lines += ["", f"| tool | {REFETCH} |", "|---|---:|"]
         for tool, entry in summaries.items():
-            value = entry["download_ratio"]
+            value = entry["body_bytes_ratio"]
             lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
         lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both; interruption is at 10 s, with a 5 s kill grace period.\n")
+    if case["scenario"] in ("s7", "s10"):
+        lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
+                     "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]
 
 

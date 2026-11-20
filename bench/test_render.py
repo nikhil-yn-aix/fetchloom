@@ -53,7 +53,7 @@ class RenderTests(Quiet):
         try:
             record = dict(kind="lab", scenario="s7", profile="home", filesystem="ext4", tool="fetchloom",
                           quick=True, count=1, file_size=4, status="passed", wall_seconds=1,
-                          download_ratio=1.0)
+                          body_bytes_ratio=1.0)
             (root / "runs.jsonl").write_text(json.dumps(record))
             (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=True)))
             render.render(root, root / "report")
@@ -420,21 +420,23 @@ class PageTests(Quiet):
 
     def test_a_dropped_link_is_set_against_the_same_tools_unbroken_run(self):
         rows = [lab_row(profile="home", wall_seconds=22), lab_row(profile="home", tool="curl", wall_seconds=24),
-                lab_row(scenario="s10", profile="home", wall_seconds=33, download_ratio=1.0),
-                lab_row(scenario="s10", profile="home", tool="curl", wall_seconds=41, download_ratio=1.02)]
+                lab_row(scenario="s10", profile="home", wall_seconds=33, body_bytes_ratio=1.0),
+                lab_row(scenario="s10", profile="home", tool="curl", wall_seconds=41, body_bytes_ratio=1.02)]
         page = self.render(rows, dict(kind="lab", quick=True))
-        self.assertIn("| tool | with the drop | unbroken, s1 on this link | added | bytes served / file size |", page)
+        self.assertIn("| tool | with the drop | unbroken, s1 on this link | added | server body bytes / dataset size |", page)
         self.assertIn("| fetchloom | 33.00 s | 22.00 s | +11.00 s | 1.000x |", page)
         self.assertIn("| curl | 41.00 s | 24.00 s | +17.00 s | 1.020x |", page)
 
     def test_a_dropped_link_without_the_same_file_unbroken_has_nothing_to_set_against(self):
-        rows = [lab_row(profile="home", file_size=2), lab_row(scenario="s10", profile="home", wall_seconds=33, download_ratio=1.0)]
+        rows = [lab_row(profile="home", file_size=2), lab_row(scenario="s10", profile="home", wall_seconds=33, body_bytes_ratio=1.0)]
         page = self.render(rows, dict(kind="lab", quick=True))
         self.assertIn("| fetchloom | 33.00 s | n/a | n/a | 1.000x |", page)
 
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
-        self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)
+        self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)
+        self.assertIn("server body bytes / dataset size counts the body bytes of the server's whole and partial answers for the file, "
+                      "so it says what a tool asked for again; the server cannot see packets the network sent twice.", page)
 
     def test_the_command_renders_its_results_into_this_repository(self):
         with mock.patch.object(render, "render") as rendered, mock.patch.object(sys, "argv", ["render.py", "results"]):
