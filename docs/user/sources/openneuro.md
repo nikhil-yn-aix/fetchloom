@@ -42,7 +42,7 @@ a file in git-annex comes from openneuro's S3 bucket at the object version the s
 
 ## listing
 
-openneuro lists a snapshot one folder at a time, up to `most_files`, and `--select` patterns list only the folders they can reach, so a dataset of hundreds of subjects takes a few requests: `sub-*/anat/*` lists each subject's folder and the `anat` folder in it, never `func`, and `*.tsv` the top folder alone. `Resolved` then says what it listed, as `1 file in the top folder` or `2 files in sub-01/anat`. a pattern that starts with `**` can match anywhere, so the whole snapshot is listed, and a pattern that matches none of the files listed has the whole snapshot listed instead, so it is told against all the snapshot holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.
+openneuro lists a snapshot folder by folder, up to `host_jobs` folders at once, up to `most_files`, and `--select` patterns list only the folders they can reach, so a dataset of hundreds of subjects takes a few requests: `sub-*/anat/*` lists each subject's folder and the `anat` folder in it, never `func`, and `*.tsv` the top folder alone. `Resolved` then says what it listed, as `1 file in the top folder` or `2 files in sub-01/anat`. a pattern that starts with `**` can match anywhere, so the whole snapshot is listed, and a pattern that matches none of the files listed has the whole snapshot listed instead, so it is told against all the snapshot holds. DataLad's own `.datalad` folder, which holds none of the data, is left out.
 
 `s3://openneuro.org/ds000001/` lists the same files from the bucket as they are now, the newest snapshot, without its digests or a pin to one snapshot.
 

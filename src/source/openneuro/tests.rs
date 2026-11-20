@@ -487,3 +487,117 @@ fn a_selection_lists_only_the_folders_its_patterns_can_reach() {
         ]
     );
 }
+
+/// a snapshot shaped as a study is: `subjects` folders at the top, each holding `anat` and
+/// `func`, each of those one file, with every folder's id made from its path.
+fn study(subjects: usize) -> Recorded {
+    // git names each folder by what it holds; here each id is its own number
+    let tree = |path: &str| {
+        let (subject, kind) = path.split_once('/').unwrap_or((path, ""));
+        let number: usize = subject.trim_start_matches("sub-").parse().unwrap();
+        let kind = match kind {
+            "" => 0,
+            "anat" => 1,
+            _ => 2,
+        };
+        format!("{:040x}", 1_000 + number * 10 + kind)
+    };
+    let entry = |name: &str, id: &str, directory: bool| {
+        serde_json::json!({"id": id, "filename": name, "size": if directory { 0 } else { 9 },
+            "directory": directory, "annexed": false,
+            "urls": if directory { vec![] } else { vec![format!("https://openneuro.org/crn/datasets/ds000002/objects/{id}?filename={name}")] }})
+    };
+    let answer = |files: Vec<serde_json::Value>| {
+        serde_json::to_vec(&serde_json::json!({"data": {"snapshot": {"files": files}}})).unwrap()
+    };
+    let mut recorded = Recorded::default();
+    let mut top = vec![entry("README", &format!("{:040x}", 1), false)];
+    for subject in 1..=subjects {
+        let name = format!("sub-{subject:02}");
+        top.push(entry(&name, &tree(&name), true));
+        let kinds = ["anat", "func"].map(|kind| (kind, format!("{name}/{kind}")));
+        let inside = kinds
+            .iter()
+            .map(|(kind, path)| entry(kind, &tree(path), true))
+            .collect();
+        recorded = recorded.on(
+            &folder("ds000002", "1.0.0", &tree(&name)),
+            200,
+            answer(inside),
+        );
+        for (kind, path) in &kinds {
+            let file = entry(
+                &format!("{name}_{kind}.tsv"),
+                &format!("{:040x}", 500_000 + subject * 10 + kind.len()),
+                false,
+            );
+            recorded = recorded.on(
+                &folder("ds000002", "1.0.0", &tree(path)),
+                200,
+                answer(vec![file]),
+            );
+        }
+    }
+    let described = serde_json::json!({"data": {"snapshot": {"tag": "1.0.0", "deprecated": null,
+        "description": {"Name": "a study", "License": "CC0", "DatasetDOI": null}, "files": top}}});
+    recorded.on(
+        &top_of("ds000002"),
+        200,
+        serde_json::to_vec(&described).unwrap(),
+    )
+}
+
+fn top_of(id: &str) -> String {
+    top(id, "1.0.0")
+}
+
+/// the rounds of requests that wait on each other to list `recorded`'s study, each answer
+/// taking a second of a paused clock, and the requests.
+fn study_rounds(recorded: &Recorded) -> (Result<Listing, Error>, u64, usize) {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    let reference = Reference::parse("openneuro:ds000002@1.0.0")
+        .unwrap()
+        .reference;
+    runtime.block_on(async {
+        let start = tokio::time::Instant::now();
+        let listed = reference.resolve(recorded).await;
+        (listed, start.elapsed().as_secs(), recorded.asked().len())
+    })
+}
+
+/// a study of 16 subjects takes a request a folder either way, 49, but asking four folders at a
+/// time waits through 13 rounds where one at a time waits through all 49, and lists the same.
+#[test]
+fn a_study_asking_four_folders_at_a_time_waits_through_a_quarter_of_the_rounds() {
+    let second = std::time::Duration::from_secs(1);
+    let (alone, alone_rounds, alone_asked) = study_rounds(&study(16).holding(second));
+    let (together, together_rounds, together_asked) =
+        study_rounds(&study(16).holding(second).window(4));
+    let (alone, together) = (alone.unwrap(), together.unwrap());
+    assert_eq!(alone.files.len(), 33);
+    assert_eq!(format!("{alone:?}"), format!("{together:?}"));
+    assert_eq!((alone_asked, together_asked), (49, 49));
+    assert_eq!((alone_rounds, together_rounds), (49, 13));
+}
+
+/// a study past the most files a run lists ends in the same refusal either way, and the walk
+/// asking folders together asks at most the folder the walk one at a time stops before and the
+/// three asked beside it.
+#[test]
+fn a_study_past_the_most_files_ends_alike_asking_folders_together() {
+    let (alone, _, alone_asked) = study_rounds(&study(16).most(12));
+    let (together, _, together_asked) = study_rounds(&study(16).most(12).window(4));
+    let (alone, together) = (alone.unwrap_err(), together.unwrap_err());
+    assert_eq!(
+        (alone.kind, alone.message.as_str()),
+        (together.kind, together.message.as_str())
+    );
+    assert!(
+        together_asked <= alone_asked + 4,
+        "one at a time asked {alone_asked}, together {together_asked}"
+    );
+}

@@ -28,6 +28,11 @@ pub(crate) struct Recorded {
     echo: bool,
     /// the most requests a test lets an adapter make, past which it counts as looping.
     most_asked: Option<usize>,
+    /// how many folders a walk may ask for at once, one when unset.
+    window: Option<usize>,
+    /// how long each answer takes on tokio's clock, by link, and for any other link.
+    holds: HashMap<String, std::time::Duration>,
+    hold: Option<std::time::Duration>,
 }
 
 /// what a recorded network panics with when an adapter asks more than its test allows.
@@ -45,6 +50,9 @@ impl Clone for Recorded {
             otherwise: self.otherwise,
             echo: self.echo,
             most_asked: self.most_asked,
+            window: self.window,
+            holds: self.holds.clone(),
+            hold: self.hold,
         }
     }
 }
@@ -195,6 +203,31 @@ impl Recorded {
         self
     }
 
+    /// lets a walk of folders ask for `window` at once.
+    pub(crate) fn window(mut self, window: usize) -> Recorded {
+        self.window = Some(window);
+        self
+    }
+
+    /// answers every link `hold` after it is asked, on tokio's clock, which a paused test runtime
+    /// moves on at once, so a test counts the requests that waited on each other.
+    pub(crate) fn holding(mut self, hold: std::time::Duration) -> Recorded {
+        self.hold = Some(hold);
+        self
+    }
+
+    /// answers `url` `hold` after it is asked, whatever the others take.
+    pub(crate) fn holding_at(mut self, url: &str, hold: std::time::Duration) -> Recorded {
+        self.holds
+            .insert(Url::parse(url).unwrap().to_string(), hold);
+        self
+    }
+
+    /// how long the answer for `url` takes.
+    fn hold_for(&self, url: &Url) -> Option<std::time::Duration> {
+        self.holds.get(url.as_str()).copied().or(self.hold)
+    }
+
     /// what the network answers for `url`, asked as `asked`, which is remembered.
     fn reply(&self, url: &Url, asked: String) -> Result<Response, Error> {
         let count = {
@@ -240,8 +273,12 @@ impl Api for Recorded {
         self.most.unwrap_or(crate::net::MOST_FILES)
     }
 
+    fn walk_window(&self, _url: &Url) -> usize {
+        self.window.unwrap_or(1)
+    }
+
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {
-        ready(self.reply(url, url.to_string()))
+        held(self.hold_for(url), self.reply(url, url.to_string()))
     }
 
     /// answers as [`Api::get`] does, and remembers the request as its link, then each header
@@ -255,7 +292,10 @@ impl Api for Recorded {
             .iter()
             .map(|(name, value)| format!("{name}: {value}"))
             .collect();
-        ready(self.reply(url, format!("{url} {}", carried.join(" "))))
+        held(
+            self.hold_for(url),
+            self.reply(url, format!("{url} {}", carried.join(" "))),
+        )
     }
 
     fn drive_refused<'a>(
@@ -268,6 +308,17 @@ impl Api for Recorded {
             .push(format!("drive refused {id}"));
         ready(Ok(self.private.unwrap_or(crate::net::Private::Unlisted)))
     }
+}
+
+/// `answer`, given once `hold` has passed on tokio's clock, or at once.
+async fn held(
+    hold: Option<std::time::Duration>,
+    answer: Result<Response, Error>,
+) -> Result<Response, Error> {
+    if let Some(hold) = hold {
+        tokio::time::sleep(hold).await;
+    }
+    answer
 }
 
 /// the bytes of a file under `tests/fixtures/sources`.

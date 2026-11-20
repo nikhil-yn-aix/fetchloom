@@ -184,6 +184,10 @@ pub(super) async fn list_at_most(
     // drive may send a page with no items and a token for the next, but not forever
     let mut pages = crate::source::Pages::most(most + 1);
     let mut listed = 0;
+    let window = Url::parse(FILES).map_or(1, |url| api.walk_window(&url));
+    if window > 1 {
+        together(item, api, &mut walk, &mut pages, window).await?;
+    }
     while let Some((id, path)) = walk.folders.pop_front() {
         let mut token = None;
         pages.begin();
@@ -192,12 +196,7 @@ pub(super) async fn list_at_most(
                 .next((id.clone(), token.clone()), listed)
                 .map_err(|reason| unreadable(item, &reason))?;
             let page: Page = read(&api.get(&children(&id, token.as_deref())?).await?)?;
-            if page.incomplete_search {
-                return Err(unreadable(item, "drive said its listing is incomplete"));
-            }
-            listed += page.files.len();
-            walk.add(item, &path, page.files)?;
-            match page.next_page_token.filter(|next| !next.is_empty()) {
+            match walk.page(item, &path, page, &mut listed)? {
                 Some(next) => token = Some(next),
                 None => break,
             }
@@ -224,7 +223,70 @@ pub(super) async fn list_at_most(
     })
 }
 
+/// lists the folders `walk` queues, the first page of up to `window` at once, reading them in the
+/// order it asked and each folder's later pages in its turn, so it refuses and stops at what the
+/// walk one page at a time does.
+async fn together(
+    item: &Item,
+    api: &impl Api,
+    walk: &mut Walk,
+    pages: &mut crate::source::Pages<(String, Option<String>)>,
+    window: usize,
+) -> Result<(), Error> {
+    let mut ahead = crate::source::ahead::Ahead::new(window);
+    let mut refused = false;
+    let mut listed = 0;
+    loop {
+        while !refused
+            && ahead.has_room()
+            && let Some((id, path)) = walk.folders.pop_front()
+        {
+            match children(&id, None) {
+                Ok(url) => ahead.ask((id, path), async move { api.get(&url).await }),
+                Err(error) => {
+                    ahead.answered((id, path), Err(error));
+                    refused = true;
+                }
+            }
+        }
+        let Some(((id, path), answer)) = ahead.next().await else {
+            return Ok(());
+        };
+        pages.begin();
+        // the guard counts the page asked ahead in its turn, as the walk counts one before asking
+        pages
+            .next((id.clone(), None), listed)
+            .map_err(|reason| unreadable(item, &reason))?;
+        let mut page: Page = read(&answer?)?;
+        while let Some(next) = walk.page(item, &path, page, &mut listed)? {
+            let token = Some(next);
+            pages
+                .next((id.clone(), token.clone()), listed)
+                .map_err(|reason| unreadable(item, &reason))?;
+            let url = children(&id, token.as_deref())?;
+            page = read(&ahead.meanwhile(api.get(&url)).await?)?;
+        }
+    }
+}
+
 impl Walk {
+    /// takes in `page`, a page of the folder at `parent`, counting its items in `listed`, and
+    /// gives the token of the folder's next page, none after its last.
+    fn page(
+        &mut self,
+        item: &Item,
+        parent: &str,
+        page: Page,
+        listed: &mut usize,
+    ) -> Result<Option<String>, Error> {
+        if page.incomplete_search {
+            return Err(unreadable(item, "drive said its listing is incomplete"));
+        }
+        *listed += page.files.len();
+        self.add(item, parent, page.files)?;
+        Ok(page.next_page_token.filter(|next| !next.is_empty()))
+    }
+
     /// takes in the items of the folder at `parent`, queueing its subfolders.
     fn add(&mut self, item: &Item, parent: &str, found: Vec<About>) -> Result<(), Error> {
         for entry in found {

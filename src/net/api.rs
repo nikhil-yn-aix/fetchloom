@@ -91,6 +91,14 @@ pub(crate) trait Api: Sync {
         1
     }
 
+    /// how many folders a source's walk of folders may ask `url`'s host for at once, openneuro's,
+    /// drive's or mendeley's: as many as the network lets the host take requests at once, and
+    /// one where it says nothing.
+    fn walk_window(&self, url: &Url) -> usize {
+        let _ = url;
+        1
+    }
+
     /// tells the network that drive refused item `id` without a token, and asks whether drive's
     /// api may be asked about it with one. a network that sends no google credentials says no.
     fn drive_refused<'a>(
@@ -203,6 +211,11 @@ impl Api for Net {
 
     /// as many as the host takes downloads at once.
     fn listing_window(&self, url: &Url) -> usize {
+        let most = (self.rules.most_at_once)(&self.paced(url));
+        most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
+    }
+
+    fn walk_window(&self, url: &Url) -> usize {
         let most = (self.rules.most_at_once)(&self.paced(url));
         most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
     }

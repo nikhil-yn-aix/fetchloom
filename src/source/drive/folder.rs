@@ -65,6 +65,10 @@ pub(super) async fn list_at_most(
     };
     walk.seen.insert(root.id);
     walk.add(item, "", page)?;
+    let window = Url::parse(EMBEDDED).map_or(1, |url| api.walk_window(&url));
+    if window > 1 {
+        walk_together(item, api, &mut walk, window).await?;
+    }
     while let Some((key, path)) = walk.folders.pop_front() {
         let page = read(item, api, &key, &path).await?;
         walk.add(item, &path, page)?;
@@ -151,15 +155,61 @@ pub(super) async fn read_root(item: &Item, api: &impl Api) -> Result<(), Error> 
     read(item, api, &root, "").await.map(drop)
 }
 
-/// asks drive for the page of the folder `key` names, found at `path` inside the folder `item`.
-async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page, Error> {
-    let mut url = Url::parse("https://drive.google.com/embeddedfolderview")
-        .map_err(|err| unreadable(item, &err.to_string()))?;
+/// lists the folders `walk` queues, up to `window` at once, reading each answer in the order the
+/// walk queued its folder, so it finds, refuses and stops at what it would asking for one folder
+/// at a time.
+async fn walk_together(
+    item: &Item,
+    api: &impl Api,
+    walk: &mut Walk,
+    window: usize,
+) -> Result<(), Error> {
+    let mut ahead = crate::source::ahead::Ahead::new(window);
+    let mut refused = false;
+    loop {
+        while !refused
+            && ahead.has_room()
+            && let Some((key, path)) = walk.folders.pop_front()
+        {
+            match page_url(item, &key) {
+                Ok(url) => ahead.ask(path, async move { api.get(&url).await }),
+                Err(error) => {
+                    ahead.answered(path, Err(error));
+                    refused = true;
+                }
+            }
+        }
+        let Some((path, answer)) = ahead.next().await else {
+            return Ok(());
+        };
+        let page = page_of(item, &answer?, &path)?;
+        walk.add(item, &path, page)?;
+    }
+}
+
+/// where drive embeds the folder pages it shows anyone who has their link.
+const EMBEDDED: &str = "https://drive.google.com/embeddedfolderview";
+
+/// the link of the page of the folder `key` names.
+fn page_url(item: &Item, key: &Key) -> Result<Url, Error> {
+    let mut url = Url::parse(EMBEDDED).map_err(|err| unreadable(item, &err.to_string()))?;
     url.query_pairs_mut().append_pair("id", &key.id);
     if let Some(resource) = &key.resource {
         url.query_pairs_mut().append_pair("resourcekey", resource);
     }
+    Ok(url)
+}
+
+/// asks drive for the page of the folder `key` names, found at `path` inside the folder `item`.
+async fn read(item: &Item, api: &impl Api, key: &Key, path: &str) -> Result<Page, Error> {
+    let url = page_url(item, key)?;
     let response = api.get(&url).await?;
+    page_of(item, &response, path)
+}
+
+/// the folder page `response` holds, for the folder at `path` inside the folder `item`, or why
+/// drive did not show it.
+fn page_of(item: &Item, response: &crate::net::Response, path: &str) -> Result<Page, Error> {
     let what = if path.is_empty() {
         link(&item.id)
     } else {

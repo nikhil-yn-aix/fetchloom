@@ -71,9 +71,15 @@ impl Dataset {
         let version = described.version;
         let folders = self.folders(api, version).await?;
         let mut found = Found::default();
-        self.files_in(api, version, "root", "", &mut found).await?;
-        for (id, path) in folders {
-            self.files_in(api, version, &id, &path, &mut found).await?;
+        let window = self.url(&["files"]).map_or(1, |url| api.walk_window(&url));
+        if window > 1 {
+            self.files_together(api, version, folders, &mut found, window)
+                .await?;
+        } else {
+            self.files_in(api, version, "root", "", &mut found).await?;
+            for (id, path) in folders {
+                self.files_in(api, version, &id, &path, &mut found).await?;
+            }
         }
         Ok(Listing {
             within: Vec::new(),
@@ -165,6 +171,59 @@ impl Dataset {
         Ok(paths)
     }
 
+    /// the files of the top folder, then of each of `folders`, asking for the first part of up
+    /// to `window` folders at once and reading them in the order it asked, each folder's later
+    /// parts in its turn, so it refuses and stops at what the walk one part at a time does.
+    async fn files_together(
+        &self,
+        api: &impl Api,
+        version: u64,
+        folders: Vec<(String, String)>,
+        found: &mut Found,
+        window: usize,
+    ) -> Result<(), Error> {
+        let mut queued: std::collections::VecDeque<(String, String)> =
+            std::iter::once(("root".to_owned(), String::new()))
+                .chain(folders)
+                .collect();
+        let mut ahead = super::ahead::Ahead::new(window);
+        let mut refused = false;
+        loop {
+            while !refused
+                && ahead.has_room()
+                && let Some((id, path)) = queued.pop_front()
+            {
+                match self.part_url(version, &id, 0) {
+                    Ok(url) => ahead.ask((id, path), async move { api.get(&url).await }),
+                    Err(error) => {
+                        ahead.answered((id, path), Err(error));
+                        refused = true;
+                    }
+                }
+            }
+            let Some(((id, path), answer)) = ahead.next().await else {
+                return Ok(());
+            };
+            self.files_from(
+                api,
+                version,
+                (&id, &path),
+                found,
+                Some((answer, &mut ahead)),
+            )
+            .await?;
+        }
+    }
+
+    /// the link of the part of folder `folder` at version `version` that starts at file `start`.
+    fn part_url(&self, version: u64, folder: &str, start: u64) -> Result<Url, Error> {
+        let mut url = self.url(&["files"])?;
+        url.set_query(Some(&format!(
+            "folder_id={folder}&version={version}&$start={start}"
+        )));
+        Ok(url)
+    }
+
     /// the files of folder `folder` at `path`, a part at a time, until the listing holds as many
     /// as mendeley counts for the folder.
     async fn files_in(
@@ -175,7 +234,20 @@ impl Dataset {
         path: &str,
         found: &mut Found,
     ) -> Result<(), Error> {
-        let mut url = self.url(&["files"])?;
+        self.files_from(api, version, (folder, path), found, None)
+            .await
+    }
+
+    /// [`Dataset::files_in`], whose first part `first` may hold, asked ahead, its later parts then
+    /// asked while the requests asked ahead go on.
+    async fn files_from<'a>(
+        &self,
+        api: &'a impl Api,
+        version: u64,
+        (folder, path): (&str, &str),
+        found: &mut Found,
+        mut first: Option<Ahead<'_, 'a>>,
+    ) -> Result<(), Error> {
         let mut seen: u64 = 0;
         let mut ids = HashSet::new();
         let mut pages = super::Pages::most(api.most_files());
@@ -184,10 +256,14 @@ impl Dataset {
             pages
                 .next(seen, held)
                 .map_err(|reason| invalid(self, &reason))?;
-            url.set_query(Some(&format!(
-                "folder_id={folder}&version={version}&$start={seen}"
-            )));
-            let response = api.get(&url).await?;
+            let url = self.part_url(version, folder, seen)?;
+            let response = match first.as_mut() {
+                Some((answer, _)) if seen == 0 => {
+                    std::mem::replace(answer, Err(invalid(self, "a part was read twice")))?
+                }
+                Some((_, ahead)) => ahead.meanwhile(api.get(&url)).await?,
+                None => api.get(&url).await?,
+            };
             let listed: Vec<File> = self.answer(&response)?;
             let total = response.total;
             if listed.is_empty() {
@@ -300,6 +376,13 @@ fn is_uuid(text: &str) -> bool {
 }
 
 /// the files listed so far, and the entries without bytes to download.
+/// a folder's first part, asked ahead, with the requests asked ahead beside it, which go on
+/// while its later parts are asked.
+type Ahead<'w, 'a> = (
+    Result<Response, Error>,
+    &'w mut super::ahead::Ahead<'a, (String, String)>,
+);
+
 #[derive(Default)]
 struct Found {
     files: Vec<Remote>,

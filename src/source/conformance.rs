@@ -1880,3 +1880,173 @@ fn every_adapter_refuses_a_hostile_link() {
     }
     found.none();
 }
+
+/// what an outcome says, whole, so two can be told apart: a listing's every field, or an error's
+/// kind, words and help.
+fn told(outcome: &Outcome) -> String {
+    match outcome {
+        Outcome::Listed(listing) => format!("listed {listing:?}"),
+        Outcome::Failed(error) => format!(
+            "failed {:?} {} {:?} {:?}",
+            error.kind, error.message, error.details, error.help
+        ),
+        Outcome::Panicked(message) => format!("panicked {message}"),
+    }
+}
+
+/// a walk of folders that asks for several at once ends as the walk one folder at a time does,
+/// on every network a property makes: as recorded, past the most files, each link failing as
+/// the network fails it, answering each status, or answering wrong, so the answers it reads
+/// ahead change no listing, error or the order errors are told in.
+#[test]
+fn a_walk_asking_folders_together_ends_as_one_asking_one_at_a_time() {
+    let mut found = Found::of("folders together");
+    for subject in subjects() {
+        let mut networks = vec![("as recorded".to_owned(), subject.hostile())];
+        let count = subject.count();
+        if count > 1 {
+            networks.push((
+                format!("most {}", count - 1),
+                subject.hostile().most(count - 1),
+            ));
+        }
+        for link in subject.recorded.links() {
+            let error = too_large(&link);
+            networks.push((
+                format!("{link} {}", error.message),
+                subject.hostile().fail(&link, error),
+            ));
+            let body = subject.recorded.body(&link).to_vec();
+            for status in STATUSES {
+                networks.push((
+                    format!("{link} answered {status}"),
+                    subject.hostile().answer(&link, status, body.clone()),
+                ));
+            }
+            for change in wrong_answers(&body).into_iter().chain(wrong_values(&body)) {
+                networks.push((
+                    format!("{link} {}", change.what),
+                    subject.hostile().answer(&link, 200, change.body),
+                ));
+            }
+        }
+        for (change, recorded) in networks {
+            let alone = told(&subject.resolve(&recorded));
+            let together = told(&subject.resolve(&recorded.clone().window(4)));
+            if alone != together {
+                found.add(
+                    &subject,
+                    &change,
+                    &format!("one at a time: {alone}\ntogether: {together}"),
+                );
+            }
+        }
+    }
+    found.none();
+}
+
+/// the requests a row's resolve waits on one after another, each answer taking a second of a
+/// paused clock, asking a walk's folders `window` at once: the rounds of requests, and the
+/// requests.
+fn rounds(text: &str, recorded: &Recorded) -> (u64, usize) {
+    let row = rows()
+        .into_iter()
+        .find(|row| row.reference == text)
+        .unwrap_or_else(|| panic!("no row {text}"));
+    let reference = Reference::parse(row.reference).unwrap().reference;
+    let _keyed = keyed(row.keys);
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .start_paused(true)
+        .build()
+        .unwrap();
+    runtime.block_on(async {
+        let start = tokio::time::Instant::now();
+        reference
+            .resolve(recorded)
+            .await
+            .unwrap_or_else(|error| panic!("{text}: {}", error.message));
+        (start.elapsed().as_secs(), recorded.asked().len())
+    })
+}
+
+/// asking a walk's folders together takes fewer rounds of requests, never more requests: each
+/// folder whose parent is listed is asked beside the others, while a folder's own pages, which
+/// each name the next, still wait on each other.
+#[test]
+fn a_walk_asking_folders_together_takes_fewer_rounds() {
+    let second = std::time::Duration::from_secs(1);
+    for (text, alone, together) in [
+        ("openneuro:ds000001@1.0.0", 4, 3),
+        ("drive:folders/1oow464Z4Et95RAwtRZn6dLOFb_YYpLwL", 4, 3),
+        ("mendeley:rscbjbr9sj@2", 3, 3),
+        ("https://example.org/data/", 2, 2),
+    ] {
+        let row = rows()
+            .into_iter()
+            .find(|row| row.reference == text)
+            .unwrap();
+        let one = row.recorded.clone().holding(second);
+        let (one_rounds, one_asked) = rounds(text, &one);
+        let several = row.recorded.clone().holding(second).window(4);
+        let (several_rounds, several_asked) = rounds(text, &several);
+        assert_eq!(
+            (one_rounds, several_rounds),
+            (alone, together),
+            "{text}: rounds one at a time, then together"
+        );
+        assert_eq!(one_asked, several_asked, "{text}: requests");
+    }
+}
+
+/// a folder asked first is told first: its broken answer, slower to come than a later folder's,
+/// still ends the walk with its own error, as asking one folder at a time ends it.
+#[test]
+fn a_walk_asking_folders_together_tells_the_first_folders_error_first() {
+    let snapshot = |rest: &str| {
+        let query = format!(r#"query{{snapshot(datasetId:"ds000001",tag:"1.0.0"){{{rest}}}}}"#);
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("query", &query)
+            .finish();
+        format!("https://openneuro.org/crn/graphql?{encoded}")
+    };
+    let folder = |tree: &str| {
+        snapshot(&format!(
+            r#"files(tree:"{tree}"){{id filename size directory annexed urls}}"#
+        ))
+    };
+    let anat = folder("26d2ff4f763308d462f151c53e3e06f6b7d2aaaa");
+    let func = folder("4113b1609e2b0ea2e0a04e0800204d2ee6aab578");
+    let row = rows()
+        .into_iter()
+        .find(|row| row.reference == "openneuro:ds000001@1.0.0")
+        .unwrap();
+    let broken = row
+        .recorded
+        .clone()
+        .answer(&anat, 200, br#"{"data":{"snapshot":null}}"#.to_vec())
+        .answer(
+            &func,
+            200,
+            br#"{"data":{"snapshot":{"files":[{"id":"x","filename":"a/b","size":1,"directory":false,"annexed":false,"urls":[]}]}}}"#.to_vec(),
+        )
+        .holding(std::time::Duration::from_secs(1))
+        .holding_at(&anat, std::time::Duration::from_secs(5));
+    let reference = Reference::parse(row.reference).unwrap().reference;
+    for window in [1, 4] {
+        let recorded = broken.clone().window(window);
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .start_paused(true)
+            .build()
+            .unwrap();
+        let error = runtime
+            .block_on(reference.resolve(&recorded))
+            .expect_err("both folders are broken");
+        assert!(
+            error.message.contains("sub-01/anat holds no listing"),
+            "window {window}: {}",
+            error.message
+        );
+    }
+}

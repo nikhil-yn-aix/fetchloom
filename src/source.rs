@@ -3,6 +3,7 @@
 //! competition's smallest file to learn whether its rules were accepted.
 
 pub(crate) mod access;
+mod ahead;
 mod arxiv;
 mod bucket;
 #[cfg(test)]

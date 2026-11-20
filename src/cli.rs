@@ -2075,6 +2075,15 @@ mod tests {
         assert!(!told.iter().any(|text| text.contains("abc")), "{told:?}");
     }
 
+    /// a command's network lets a source's walk of folders ask a host for as many at once as the
+    /// host takes requests.
+    #[test]
+    fn a_walk_of_folders_asks_as_many_at_once_as_its_host_takes() {
+        use crate::net::Api as _;
+        let tree = url::Url::parse("https://openneuro.org/crn/graphql").unwrap();
+        assert_eq!(quiet(true).net().walk_window(&tree), net::HOST_JOBS);
+    }
+
     /// keys are looked for when a request first needs one, so a settled sync reads no key files.
     #[test]
     fn a_network_that_sends_nothing_looks_for_no_keys() {

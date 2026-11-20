@@ -173,6 +173,10 @@ impl Dataset {
             ..Found::default()
         };
         found.add(self, "", entries)?;
+        let window = Url::parse(API).map_or(1, |api_url| api.walk_window(&api_url));
+        if window > 1 {
+            return self.walk_together(api, tag, found, window).await;
+        }
         // git names a folder by what it holds, so two folders with the same files share an id;
         // only a folder with the id of one it lies in is a loop
         let mut trees = HashMap::new();
@@ -200,6 +204,67 @@ impl Dataset {
             found.add(self, &path, files)?;
         }
         Ok(found)
+    }
+
+    /// [`Dataset::walk`] from `found`, asking for up to `window` folders at once and reading
+    /// their answers in the order it asked, so it refuses and stops at what the walk one folder
+    /// at a time does.
+    async fn walk_together(
+        &self,
+        api: &impl Api,
+        tag: &str,
+        mut found: Found,
+        window: usize,
+    ) -> Result<Found, Error> {
+        let mut trees = HashMap::new();
+        let mut ahead = super::ahead::Ahead::new(window);
+        let mut refused = false;
+        loop {
+            while !refused
+                && ahead.has_room()
+                && let Some((tree, path)) = found.folders.pop_front()
+            {
+                // a folder's parents are listed before it, so the check sees what it does in turn
+                if parents(&path).any(|parent| trees.get(parent) == Some(&tree)) {
+                    ahead.answered(Turn::Refused, Err(invalid(self, "a folder lies in itself")));
+                    refused = true;
+                    continue;
+                }
+                trees.insert(path.clone(), tree.clone());
+                let counted = trees.len();
+                match self.query_url(&format!(
+                    r#"query{{snapshot(datasetId:"{}",tag:"{tag}"){{files(tree:"{tree}"){{{FIELDS}}}}}}}"#,
+                    self.id
+                )) {
+                    Ok(url) => ahead.ask(
+                        Turn::Asked { path, counted },
+                        async move { api.get_with(&url, PREFLIGHT).await },
+                    ),
+                    Err(error) => {
+                        ahead.answered(Turn::Asked { path, counted }, Err(error));
+                        refused = true;
+                    }
+                }
+            }
+            let Some((turn, answer)) = ahead.next().await else {
+                return Ok(found);
+            };
+            let Turn::Asked { path, counted } = turn else {
+                return Err(answer
+                    .err()
+                    .unwrap_or_else(|| invalid(self, "a folder lies in itself")));
+            };
+            // the walk one folder at a time stops here before asking for this folder
+            if counted + found.files.len() > api.most_files() {
+                return Err(self.too_many(api.most_files()));
+            }
+            let folder: Folder = self.read(&answer?)?;
+            let files = folder
+                .snapshot
+                .ok_or_else(|| invalid(self, &format!("the folder {path} holds no listing")))?
+                .files;
+            found.add(self, &path, files)?;
+        }
     }
 
     /// the tag of the dataset's newest snapshot.
@@ -235,12 +300,22 @@ impl Dataset {
     /// asks openneuro's API `query`, by GET with the header it asks of one, and reads the
     /// answer's data, or what its errors say.
     async fn ask<T: DeserializeOwned>(&self, api: &impl Api, query: &str) -> Result<T, Error> {
+        let url = self.query_url(query)?;
+        let response = api.get_with(&url, PREFLIGHT).await?;
+        self.read(&response)
+    }
+
+    /// the link that asks openneuro's API `query` by GET.
+    fn query_url(&self, query: &str) -> Result<Url, Error> {
         let encoded = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("query", query)
             .finish();
-        let url = Url::parse(&format!("{API}?{encoded}"))
-            .map_err(|_| invalid(self, "the query makes no valid link"))?;
-        let response = api.get_with(&url, PREFLIGHT).await?;
+        Url::parse(&format!("{API}?{encoded}"))
+            .map_err(|_| invalid(self, "the query makes no valid link"))
+    }
+
+    /// the data of openneuro's answer to a query, or what its errors say.
+    fn read<T: DeserializeOwned>(&self, response: &crate::net::Response) -> Result<T, Error> {
         if response.status != 200 {
             return Err(Error::new(
                 Kind::NetworkStatus,
@@ -389,6 +464,13 @@ impl Key {
             },
         })
     }
+}
+
+/// a folder [`Dataset::walk_together`] asked for, with the folders counted then against the most
+/// files, or a folder it refused before asking, whose refusal is told in its turn.
+enum Turn {
+    Asked { path: String, counted: usize },
+    Refused,
 }
 
 /// the files listed so far, the folders still to list, by id and path, and the patterns whose

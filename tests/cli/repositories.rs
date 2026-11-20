@@ -1868,6 +1868,61 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
     ])
 }
 
+/// openneuro's folders of one level are asked together, as many at once as its host takes: the
+/// three subjects' folders are answered only once all three were asked, which a walk asking for
+/// one folder at a time would wait on for ever, hence the short deadline.
+#[test]
+fn openneuros_folders_of_one_level_are_asked_together() -> Result {
+    let sandbox = Sandbox::new()?;
+    let objects = format!(
+        "https://openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
+    );
+    let readme = serde_json::json!({"id": OPENNEURO_README, "filename": "README",
+        "size": NOTES.len(), "directory": false, "annexed": false, "urls": [objects]});
+    let trees = [0x51, 0x52, 0x53].map(|number| format!("{number:040x}"));
+    let mut files = vec![readme.clone()];
+    for (at, tree) in trees.iter().enumerate() {
+        files.push(
+            serde_json::json!({"id": tree, "filename": format!("sub-0{}", at + 1),
+            "size": 0, "directory": true, "annexed": false, "urls": []}),
+        );
+    }
+    let top = serde_json::json!({"data": {"snapshot": {
+        "tag": "1.0.0",
+        "deprecated": null,
+        "description": {"Name": "Balloon Analog Risk-taking Task", "License": "CC0", "DatasetDOI": "10.18112/openneuro.ds000001.v1.0.0"},
+        "files": files,
+    }}});
+    let inside = serde_json::json!({"data": {"snapshot": {"files": [readme]}}});
+    let folders = trees.map(|tree| openneuro_folder(&tree));
+    let mut served = vec![(openneuro_top(), answer(&top)?)];
+    for folder in &folders {
+        served.push((folder.clone(), answer(&inside)?));
+    }
+    let routes = Routes::start(served)?;
+    routes.together(&folders);
+    let output = command(
+        &sandbox,
+        &routes,
+        &[
+            "add",
+            "openneuro:ds000001@1.0.0",
+            "--as",
+            "bart",
+            "--dry-run",
+        ],
+    )
+    .deadline(std::time::Duration::from_secs(30))
+    .output()?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    let targets = routes.targets();
+    for folder in &folders {
+        let asked = targets.iter().filter(|target| *target == folder).count();
+        assert_eq!(asked, 1, "{folder}: {targets:#?}");
+    }
+    Ok(())
+}
+
 /// the files come from the S3 links pinned to the snapshot, every query carries the header
 /// openneuro's API asks of a GET, and `DataLad`'s own folder is never asked for.
 #[test]
