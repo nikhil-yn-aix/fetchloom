@@ -616,7 +616,12 @@ pub(super) fn open_root(path: &Path, make: bool, real: bool) -> io::Result<File>
     component(&folder, name, make, false)
 }
 
-fn open_relative(root: &File, path: &Path, make: bool, fallback: bool) -> io::Result<File> {
+pub(super) fn open_relative(
+    root: &File,
+    path: &Path,
+    make: bool,
+    fallback: bool,
+) -> io::Result<File> {
     parts(path).try_for_each(|part| part.map(drop))?;
     #[cfg(target_os = "linux")]
     let absent = if fallback {

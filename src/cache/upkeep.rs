@@ -18,6 +18,21 @@ use crate::error::Error;
 use crate::stop::Stop;
 use crate::threads::Threads;
 
+/// a fan folder opened for removals, which only unix opens.
+#[cfg(unix)]
+type Opened = crate::place::Opened;
+#[cfg(not(unix))]
+type Opened = std::convert::Infallible;
+
+/// the handle on a fan folder a sweep removes objects through, opened at its first removal.
+#[cfg_attr(not(unix), expect(dead_code, reason = "only unix opens a fan folder"))]
+enum FanFolder {
+    Unopened,
+    Open(Opened),
+    /// it would not open, so each removal goes the way [`Cache::remove_inside`] goes.
+    Refused,
+}
+
 /// how long an object no project needs stays, so a download a project has not locked yet, or a
 /// `get` from this morning, survives a gc.
 pub(crate) const GRACE: Duration = Duration::from_hours(24);
@@ -99,6 +114,23 @@ pub(crate) struct Freed {
     /// projects whose registration went because their data.toml is gone, as from a folder that
     /// moved, so what only they needed was freed too.
     pub(crate) forgotten: Vec<PathBuf>,
+}
+
+/// what freeing the objects of a fan folder asks: a sweep's `needed`, `unused` and `stop`.
+struct Freeing<'f> {
+    needed: &'f Needed,
+    unused: &'f dyn Fn(SystemTime) -> bool,
+    stop: &'f Stop,
+}
+
+/// what freeing the objects of one fan folder did, as [`Freed`] counts it.
+#[derive(Default)]
+struct FanFreed {
+    removed_objects: u64,
+    removed_bytes: u64,
+    kept_objects: u64,
+    kept_bytes: u64,
+    not_removed: Vec<Failure>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -464,23 +496,15 @@ impl Cache {
                 freed.forgotten.push(root.clone());
             }
         }
-        for object in scan.objects {
-            stop.check()?;
-            if needed.objects.contains(&object.digest) {
-                continue;
-            }
-            if !unused(object.changed) {
-                freed.kept_objects += 1;
-                freed.kept_bytes += object.size;
-            } else if removed(
-                &object.path,
-                self.remove_inside(&object.path),
-                &mut freed.not_removed,
-            ) {
-                freed.removed_objects += 1;
-                freed.removed_bytes += object.size;
-            }
-        }
+        let freeing = Freeing {
+            needed,
+            unused: &unused,
+            stop,
+        };
+        let objects = scan.objects;
+        self.free_objects(&objects, &freeing, &mut freed)?;
+        // freed before the folders below are read, which make lists of their own
+        drop(objects);
         for entry in scan_entries(&self.root.join("unpacked"), &mut freed.not_removed, stop)? {
             stop.check()?;
             let Some(archive) = Sha256::from_hex(&entry.file_name().to_string_lossy()) else {
@@ -521,6 +545,110 @@ impl Cache {
         stop.check()?;
         super::failure::sort(&mut freed.not_removed);
         Ok(freed)
+    }
+
+    /// frees the objects no project needs that `freeing` ages out, a fan folder at a time and in
+    /// the scan's order, through one handle on each fan. the scan lists `objects` fan by fan, so
+    /// each fan is a run of them, freed where it lies.
+    fn free_objects(
+        &self,
+        objects: &[Object],
+        freeing: &Freeing<'_>,
+        freed: &mut Freed,
+    ) -> Result<(), Error> {
+        let fans: Vec<&[Object]> = objects
+            .chunk_by(|one, next| one.path.parent() == next.path.parent())
+            .collect();
+        let removable = objects.iter().any(|object| {
+            !freeing.needed.objects.contains(&object.digest) && (freeing.unused)(object.changed)
+        });
+        let root = self.fan_root(removable);
+        let freed_fans: Vec<Result<FanFreed, Error>> = fans
+            .iter()
+            .map(|fan| self.free_fan(fan, freeing, root.as_ref()))
+            .collect();
+        for fan in freed_fans {
+            let fan = fan?;
+            freed.removed_objects += fan.removed_objects;
+            freed.removed_bytes += fan.removed_bytes;
+            freed.kept_objects += fan.kept_objects;
+            freed.kept_bytes += fan.kept_bytes;
+            freed.not_removed.extend(fan.not_removed);
+        }
+        Ok(())
+    }
+
+    /// the cache's root opened once for removals through fan handles, when `wanted` and the
+    /// cache removes for real; none otherwise, and on systems that open no fan folder.
+    #[cfg(unix)]
+    fn fan_root(&self, wanted: bool) -> Option<Opened> {
+        (wanted && !self.volume.is_pretending())
+            .then(|| crate::place::Opened::root(&self.root).ok())
+            .flatten()
+    }
+
+    #[cfg(not(unix))]
+    #[expect(clippy::unused_self, reason = "unix opens the root it holds")]
+    fn fan_root(&self, _: bool) -> Option<Opened> {
+        None
+    }
+
+    /// frees what it may of `fan`, the objects of one fan folder.
+    fn free_fan(
+        &self,
+        fan: &[Object],
+        freeing: &Freeing<'_>,
+        root: Option<&Opened>,
+    ) -> Result<FanFreed, Error> {
+        let mut done = FanFreed::default();
+        let mut opened = FanFolder::Unopened;
+        for object in fan {
+            freeing.stop.check()?;
+            if freeing.needed.objects.contains(&object.digest) {
+                continue;
+            }
+            if !(freeing.unused)(object.changed) {
+                done.kept_objects += 1;
+                done.kept_bytes += object.size;
+                continue;
+            }
+            let result = self.remove_object(&object.path, root, &mut opened);
+            if removed(&object.path, result, &mut done.not_removed) {
+                done.removed_objects += 1;
+                done.removed_bytes += object.size;
+            }
+        }
+        Ok(done)
+    }
+
+    /// removes the object at `path` through `opened`, the handle on its fan folder opened below
+    /// `root` at the fan's first removal, or as [`Cache::remove_inside`] does without a root or
+    /// once the fan would not open, which then says why each removal is refused.
+    #[cfg(unix)]
+    fn remove_object(
+        &self,
+        path: &Path,
+        root: Option<&Opened>,
+        opened: &mut FanFolder,
+    ) -> io::Result<()> {
+        let fan = path
+            .parent()
+            .and_then(|fan| fan.strip_prefix(&self.root).ok());
+        let (Some(root), Some(fan), Some(name)) = (root, fan, path.file_name()) else {
+            return self.remove_inside(path);
+        };
+        if matches!(opened, FanFolder::Unopened) {
+            *opened = root.below(fan).map_or(FanFolder::Refused, FanFolder::Open);
+        }
+        match opened {
+            FanFolder::Open(folder) => self.volume.remove_with(path, &|| folder.remove_file(name)),
+            FanFolder::Unopened | FanFolder::Refused => self.remove_inside(path),
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn remove_object(&self, path: &Path, _: Option<&Opened>, _: &mut FanFolder) -> io::Result<()> {
+        self.remove_inside(path)
     }
 
     /// drops the record of each link whose object and unpack record are both gone, which would
@@ -1138,6 +1266,13 @@ mod tests {
             listed(Threads::default().at_most(1))
         );
         assert_eq!(many.len(), digests.len());
+        // each fan's objects come as one run, which the sweep frees as that fan's
+        let parents: Vec<&Path> = many
+            .iter()
+            .map(|(_, path, _)| path.parent().unwrap())
+            .collect();
+        let runs = parents.chunk_by(|one, next| one == next).count();
+        assert_eq!(runs, parents.iter().collect::<HashSet<_>>().len());
         for (digest, path, size) in &many {
             let expected = if *digest == digests[0] {
                 loud.clone()
@@ -1150,6 +1285,196 @@ mod tests {
         assert_eq!(
             unreadable,
             [cache.root.join("objects").join(&free).display().to_string()]
+        );
+    }
+
+    /// what freeing one object after another in the scan's order, the way a sweep freed before it
+    /// went a fan folder at a time, would free of `cache` at `now` with `grace`, freeing nothing:
+    /// the removed and the kept, as count and bytes, and the paths removed, in that order.
+    fn freed_in_turn(
+        cache: &Cache,
+        needed: &Needed,
+        (now, grace): (SystemTime, Duration),
+    ) -> ((u64, u64), (u64, u64), Vec<PathBuf>) {
+        let (mut removed, mut kept, mut paths) = ((0, 0), (0, 0), Vec::new());
+        for object in cache.objects() {
+            if needed.objects.contains(&object.digest) {
+                continue;
+            }
+            if grace.is_zero()
+                || now
+                    .duration_since(object.changed)
+                    .is_ok_and(|age| age >= grace)
+            {
+                removed = (removed.0 + 1, removed.1 + object.size);
+                paths.push(object.path);
+            } else {
+                kept = (kept.0 + 1, kept.1 + object.size);
+            }
+        }
+        (removed, kept, paths)
+    }
+
+    /// a sweep frees, keeps and counts what freeing one object after another in the scan's order
+    /// did, over hundreds of fan folders and with every object in one fan, and a pretend sweep
+    /// records those removals in that order.
+    #[test]
+    fn a_sweep_frees_what_freeing_in_turn_frees() {
+        let spread: Vec<String> = (0..600).map(|n| format!("object {n}")).collect();
+        let crowded: Vec<String> = (0..)
+            .map(|n| format!("crowded {n}"))
+            .filter(|body| crate::digest::sha256(body.as_bytes()).bytes()[0] == 0)
+            .take(40)
+            .collect();
+        for (bodies, pretend, grace) in [
+            (&spread, false, Duration::ZERO),
+            (&spread, true, Duration::ZERO),
+            (&spread, false, GRACE),
+            (&crowded, false, Duration::ZERO),
+            (&crowded, true, Duration::ZERO),
+        ] {
+            let (_dir, cache) = cache();
+            let digests: Vec<Sha256> = bodies
+                .iter()
+                .map(|body| store(&cache, body.as_bytes()).digest)
+                .collect();
+            let needed = Needed {
+                objects: digests.iter().step_by(3).copied().collect(),
+                ..Needed::default()
+            };
+            let now = SystemTime::now();
+            let (removed, kept, paths) = freed_in_turn(&cache, &needed, (now, grace));
+            assert!(removed.0 > 0 || !grace.is_zero(), "nothing to free");
+            let cache = if pretend { cache.pretending() } else { cache };
+            let freed = cache
+                .sweep_with_stop(
+                    &needed,
+                    &[],
+                    now,
+                    grace,
+                    Threads::default(),
+                    &Stop::default(),
+                )
+                .unwrap();
+            let case = format!(
+                "{} objects, pretend {pretend}, grace {grace:?}",
+                bodies.len()
+            );
+            assert_eq!(
+                (freed.removed_objects, freed.removed_bytes),
+                removed,
+                "{case}"
+            );
+            assert_eq!((freed.kept_objects, freed.kept_bytes), kept, "{case}");
+            assert!(freed.not_removed.is_empty(), "{case}");
+            let objects = cache.root().join("objects");
+            let pretended: Vec<PathBuf> = cache
+                .pretended()
+                .into_iter()
+                .filter(|path| path.starts_with(&objects))
+                .collect();
+            let mut gone: Vec<PathBuf> = digests
+                .iter()
+                .map(|digest| cache.object_path(digest))
+                .filter(|path| !path.exists())
+                .collect();
+            if pretend {
+                assert_eq!(pretended, paths, "{case}");
+                assert!(gone.is_empty(), "{case}");
+            } else {
+                let mut paths = paths;
+                paths.sort();
+                gone.sort();
+                assert_eq!(gone, paths, "{case}");
+            }
+        }
+    }
+
+    /// a removal the disk refuses is reported for each object, with its own cause, and a stop
+    /// asked first frees nothing.
+    #[test]
+    fn a_sweep_reports_each_refusal_and_a_stop_frees_nothing() {
+        let (_dir, mut cache) = cache();
+        let digests: Vec<Sha256> = (0..100)
+            .map(|n| store(&cache, format!("refused {n}").as_bytes()).digest)
+            .collect();
+        cache.volume = std::sync::Arc::new(
+            crate::volume::Volume::new(cache.root.join("tmp"))
+                .with_removal(|_| Err(io::Error::other("injected storage error"))),
+        );
+        let now = SystemTime::now();
+        let stop = Stop::default();
+        let sweep = || {
+            cache.sweep_with_stop(
+                &Needed::default(),
+                &[],
+                now,
+                Duration::ZERO,
+                Threads::default(),
+                &stop,
+            )
+        };
+        let freed = sweep().unwrap();
+        assert_eq!(freed.removed_objects, 0);
+        assert_eq!(freed.not_removed.len(), digests.len());
+        let report = serde_json::to_value(&freed).unwrap();
+        assert_eq!(
+            report["not_removed"][0]["message"],
+            "injected storage error"
+        );
+        stop.ask();
+        assert_eq!(sweep().unwrap_err().kind, Kind::Interrupted);
+        assert!(
+            digests
+                .iter()
+                .all(|digest| cache.object_path(digest).exists())
+        );
+    }
+
+    /// a fan the scan cannot read, the last it lists among hundreds, stops the sweep before any
+    /// removal: the whole cache is inspected first, and stays as it was.
+    #[cfg(unix)]
+    #[test]
+    fn a_fan_that_cannot_be_read_stops_the_sweep_before_any_removal() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
+        }
+        let (_dir, cache) = cache();
+        let digests: Vec<Sha256> = (0..300)
+            .map(|n| store(&cache, format!("object {n}").as_bytes()).digest)
+            .collect();
+        let last = cache
+            .objects()
+            .last()
+            .unwrap()
+            .path
+            .parent()
+            .unwrap()
+            .to_owned();
+        let before = fs::metadata(&last).unwrap().permissions();
+        fs::set_permissions(&last, fs::Permissions::from_mode(0o000)).unwrap();
+        let swept = cache.sweep_with_stop(
+            &Needed::default(),
+            &[],
+            SystemTime::now(),
+            Duration::ZERO,
+            Threads::default(),
+            &Stop::default(),
+        );
+        fs::set_permissions(&last, before).unwrap();
+        let refused = swept.unwrap_err();
+        assert!(
+            refused
+                .message
+                .starts_with("cannot inspect; the cache stays unchanged:"),
+            "{}",
+            refused.message
+        );
+        assert!(
+            digests
+                .iter()
+                .all(|digest| cache.object_path(digest).exists())
         );
     }
 

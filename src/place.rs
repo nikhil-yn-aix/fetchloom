@@ -1829,6 +1829,29 @@ pub(crate) fn remove_below(root: &Path, path: &Path) -> io::Result<()> {
         .remove_file()
 }
 
+/// a folder below a root, opened as [`remove_below`] opens a file's folder, from which files are
+/// removed by name: once it is open, a folder swapped for a link sends no removal elsewhere.
+#[cfg(unix)]
+pub(crate) struct Opened(File);
+
+#[cfg(unix)]
+impl Opened {
+    /// `root` itself, as [`remove_below`] opens it, following a link at the root alone.
+    pub(crate) fn root(root: &Path) -> io::Result<Opened> {
+        parents::open_root(root, false, false).map(Opened)
+    }
+
+    /// the folder `relative` below this one, reached without following a link.
+    pub(crate) fn below(&self, relative: &Path) -> io::Result<Opened> {
+        parents::open_relative(&self.0, relative, false, false).map(Opened)
+    }
+
+    /// removes the file `name` in this folder.
+    pub(crate) fn remove_file(&self, name: &std::ffi::OsStr) -> io::Result<()> {
+        rustix::fs::unlinkat(&self.0, name, rustix::fs::AtFlags::empty()).map_err(Into::into)
+    }
+}
+
 /// the folders between `root` and `path`, held until the result is dropped so none can be
 /// replaced meanwhile, though `root` itself may be a link; a link among them is refused.
 #[cfg(windows)]

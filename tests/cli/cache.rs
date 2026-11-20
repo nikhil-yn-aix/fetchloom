@@ -2211,3 +2211,62 @@ fn a_cache_folder_outside_the_windows_profile_is_warned_about() -> Result {
     }
     Ok(())
 }
+
+/// gc frees imports spread over hundreds of fan folders, a fan at a time, one of them still needed
+/// by another import: a dry run counts what the sweep then frees, and both lists of imports stay,
+/// since each names an object the cache still holds.
+#[test]
+fn gc_frees_imports_over_many_fan_folders() -> Result {
+    let bodies: Vec<String> = (0..300).map(|n| format!("row {n}\n")).collect();
+    let sandbox = Sandbox::new()?;
+    let first = sandbox.folder("first")?;
+    for (n, body) in bodies.iter().enumerate() {
+        fs::write(first.join(format!("{n}.csv")), body)?;
+    }
+    let second = sandbox.folder("second")?;
+    fs::write(second.join("kept.csv"), &bodies[0])?;
+    for folder in ["../first", "../second"] {
+        let added = sandbox.run(&["add", folder])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let removed = sandbox.run(&["remove", "first", "--yes"])?;
+    assert_eq!(removed.status.code(), Some(0), "{}", text(&removed.stderr)?);
+    let object = |body: &String| {
+        let hex = crate::support::sha256_hex(body.as_bytes());
+        sandbox
+            .cache()
+            .join("objects")
+            .join(&hex[..2])
+            .join(&hex[2..])
+    };
+    let counted =
+        |output: &std::process::Output| -> Result<(serde_json::Value, serde_json::Value)> {
+            let result = &json(output)?["result"];
+            Ok((
+                result["imported_objects"].clone(),
+                result["imported_bytes"].clone(),
+            ))
+        };
+    let bytes: usize = bodies[1..].iter().map(String::len).sum();
+    let dry = sandbox.run(&["--json", "cache", "gc", "--now", "--dry-run"])?;
+    assert_eq!(dry.status.code(), Some(0), "{}", text(&dry.stdout)?);
+    assert_eq!(
+        counted(&dry)?,
+        (
+            serde_json::json!(bodies.len() - 1),
+            serde_json::json!(bytes)
+        )
+    );
+    assert!(bodies.iter().all(|body| object(body).exists()));
+    let freed = sandbox.run(&["--json", "cache", "gc", "--now", "--yes"])?;
+    assert_eq!(freed.status.code(), Some(0), "{}", text(&freed.stdout)?);
+    assert_eq!(counted(&freed)?, counted(&dry)?);
+    assert!(object(&bodies[0]).exists());
+    assert!(bodies[1..].iter().all(|body| !object(body).exists()));
+    let lists = fs::read_dir(sandbox.cache().join("imported")).map_or(0, Iterator::count);
+    assert_eq!(
+        lists, 2,
+        "both lists name the object the second import holds"
+    );
+    Ok(())
+}
