@@ -20,6 +20,9 @@ const NAME_BYTES: u64 = 256 << 20;
 /// roughly what keeping one folder or file costs besides the bytes of its name.
 const PER_NAME: u64 = 64;
 
+/// the most files this machine cannot store that one refusal names; it counts the rest.
+const UNSTORABLE_NAMED: usize = 50;
+
 /// what an entry turned out to be, once its name passed every check.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Named {
@@ -27,6 +30,9 @@ pub(super) enum Named {
     File(String),
     /// at this path, a file a system writes by itself, as finder's `.DS_Store`: no data, left out.
     System(String),
+    /// a file this machine cannot store, left out. once every name is known the archive is
+    /// refused, naming them together, as [`Names::storable`] does.
+    Unstorable,
     /// a folder. folders are implied by the paths of the files inside them.
     Folder,
 }
@@ -40,6 +46,9 @@ pub(super) struct Names {
     /// what the names took so far, counted as [`NAME_BYTES`] says.
     kept: u64,
     budget: u64,
+    /// how many files this machine cannot store, and the first [`UNSTORABLE_NAMED`] as the
+    /// archive spells them, each with why.
+    unstorable: (u64, Vec<(String, String)>),
 }
 
 struct Seen {
@@ -63,6 +72,7 @@ impl Names {
             seen: HashMap::new(),
             kept: 0,
             budget,
+            unstorable: (0, Vec::new()),
         }
     }
 
@@ -113,10 +123,16 @@ impl Names {
             });
         }
         if let Some(reason) = name::unstorable(&nfc) {
-            return Err(refused(format!(
-                "the archive holds \"{}\", which this machine cannot store: {reason}",
-                name::abridged(raw)
-            )));
+            // the files inside such a folder are each named, and no folder is made on its own
+            if is_folder {
+                return Ok(Named::Folder);
+            }
+            let (files, first) = &mut self.unstorable;
+            *files += 1;
+            if first.len() < UNSTORABLE_NAMED {
+                first.push((name::abridged(raw).into_owned(), reason));
+            }
+            return Ok(Named::Unstorable);
         }
         self.kept = self.kept.saturating_add(nfc.len() as u64);
         self.check_budget()?;
@@ -133,6 +149,32 @@ impl Names {
         } else {
             Named::File(nfc)
         })
+    }
+
+    /// refuses the archive once every name is known, when it holds files this machine cannot store,
+    /// naming each up to [`UNSTORABLE_NAMED`], so one run shows them all.
+    pub(super) fn storable(&self) -> Result<(), Error> {
+        let (files, first) = &self.unstorable;
+        match first.as_slice() {
+            [] => Ok(()),
+            [(path, reason)] if *files == 1 => Err(refused(format!(
+                "the archive holds \"{path}\", which this machine cannot store: {reason}"
+            ))),
+            _ => {
+                let mut error = refused(format!(
+                    "the archive holds {} files this machine cannot store",
+                    units::grouped(*files)
+                ));
+                for (path, reason) in first {
+                    error = error.detail(format!("\"{path}\": {reason}"));
+                }
+                let more = *files - first.len() as u64;
+                if more > 0 {
+                    error = error.detail(format!("and {} more", units::grouped(more)));
+                }
+                Err(error)
+            }
+        }
     }
 
     /// the NFC path of the earlier file spelled exactly `raw`, as a hardlink's target names it.

@@ -1065,6 +1065,52 @@ fn a_huge_member_name_is_shown_once_and_short() {
     );
 }
 
+/// files this machine cannot store are refused together once the archive ends, each named, so
+/// one run shows every one; nothing the archive unpacked meanwhile stays in the cache.
+#[test]
+fn every_file_this_machine_cannot_store_is_named_in_one_refusal() {
+    let (long, longer) = ("x".repeat(256), "y".repeat(300));
+    let files: &[(&str, &[u8])] = &[(&long, b"1"), ("fine.csv", b"2"), (&longer, b"3")];
+    let shown = |letter: &str| {
+        format!(
+            "\"{}…{}\": its name is longer than disks allow",
+            letter.repeat(60),
+            letter.repeat(30)
+        )
+    };
+    for format in FAMILIES {
+        let err = Scratch::new().refuse(format, &archive(format, files));
+        assert_eq!(err.kind, Kind::SourceInvalid, "{format:?}");
+        assert_eq!(
+            err.message, "the archive holds 2 files this machine cannot store",
+            "{format:?}"
+        );
+        let mut named = err.details.clone();
+        named.sort();
+        assert_eq!(named, [shown("x"), shown("y")], "{format:?}");
+    }
+}
+
+/// windows' own rules name every file together too, as the harness's archive of reserved names
+/// showed when only the first was named.
+#[cfg(windows)]
+#[test]
+fn names_windows_refuses_are_named_together() {
+    let files: &[(&str, &[u8])] = &[("CON", b"1"), ("ok.csv", b"2"), ("pipe|.csv", b"3")];
+    let err = Scratch::new().refuse(Format::Zip, &archive(Format::Zip, files));
+    assert_eq!(
+        err.message,
+        "the archive holds 2 files this machine cannot store"
+    );
+    assert_eq!(
+        err.details,
+        [
+            "\"CON\": \"CON\" is a name windows reserves for devices",
+            "\"pipe|.csv\": \"pipe|.csv\" has '|', which windows does not allow in names",
+        ]
+    );
+}
+
 /// once every file is read, the caller hears the whole archive as read, though a tar `tar -b 2048`
 /// padded to 1 MiB has bytes left, so a bar tells writing the files apart from reading.
 #[test]
