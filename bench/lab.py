@@ -25,12 +25,14 @@ HOST_LINE = f"{SERVER_ADDRESS} lab.flb # fl-bench\n"
 # runs are public and reproducible, so no key, account file or fetchloom setting is inherited
 INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
                        r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|WGETRC|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
+# each link's round trip, loss each way, the server's rate and how long a full queue at that rate
+# holds; lan has no rate, so netem never queues there
 PROFILES = {
-    "lan": (0, 0, None, 1024 * 1024 * 1024, 1000),
-    "home": (20, 0, 100, 256 * 1024 * 1024, 1000),
-    "far": (150, 1, 50, 4 * 1024 * 1024, 50),
-    "poor": (300, 3, 10, 1024 * 1024, 20),
+    "lan": dict(delay_ms=0, loss_percent=0, rate_mbit=None, queue_ms=None),
+    "home": dict(delay_ms=20, loss_percent=0, rate_mbit=100, queue_ms=500),
+    "poor": dict(delay_ms=300, loss_percent=3, rate_mbit=10, queue_ms=1000),
 }
+PACKET = 1500
 PREPARE_TIMEOUT = 1200
 
 
@@ -181,12 +183,42 @@ def require_root():
         raise SystemExit("the lab needs root for namespaces, mounts and drop_caches")
 
 
-def shaping(profile):
+def queue_limit(profile):
+    """the netem limit, in packets, that holds a profile's queue time at its rate on the server's side,
+    counting the packets that side's half of the delay holds too; None for a link without a rate."""
+    shape = PROFILES[profile]
+    if not shape["rate_mbit"]:
+        return None
+    # twice (queue + half the delay) in ms, times the rate in mbit/s, is twice the bits a full queue holds
+    doubled = (2 * shape["queue_ms"] + shape["delay_ms"]) * shape["rate_mbit"] * 1000
+    return -(-doubled // (2 * 8 * PACKET))
+
+
+def network_profiles():
+    """every profile as the results record it, with the queue limit its shaping sets."""
+    return {name: dict(shape, limit_packets=queue_limit(name)) for name, shape in PROFILES.items()}
+
+
+def shaping(profile, loss=None):
     """the client and server netem specs of a profile: half the delay on each side, the loss on
-    both, the rate cap on the server's."""
-    delay, loss, rate, _, _ = PROFILES[profile]
-    common = ["netem", "delay", f"{delay / 2:g}ms", "loss", f"{loss}%"]
-    return common[:], common + (["rate", f"{rate}mbit"] if rate else [])
+    both, the rate cap and its queue limit on the server's; ``loss`` replaces the profile's own."""
+    shape = PROFILES[profile]
+    loss = shape["loss_percent"] if loss is None else loss
+    common = ["netem", "delay", f"{shape['delay_ms'] / 2:g}ms", "loss", f"{loss}%"]
+    server = common + (["rate", f"{shape['rate_mbit']}mbit"] if shape["rate_mbit"] else [])
+    limit = queue_limit(profile)
+    return common[:], server + (["limit", str(limit)] if limit else [])
+
+
+def taken(shown, spec):
+    """whether a qdisc tc shows has the rate cap and queue limit of the spec it was given."""
+    words = shown.split()
+    if ("rate" in words) != ("rate" in spec):
+        return False
+    if "limit" in spec:
+        limit = spec[spec.index("limit") + 1]
+        return any(word == "limit" and value == limit for word, value in zip(words, words[1:]))
+    return True
 
 
 def profile(name):
@@ -201,7 +233,7 @@ def profile(name):
         subprocess.run([*prefix, "tc", "qdisc", "del", "dev", dev, "root"], stderr=subprocess.DEVNULL)
         call([*prefix, "tc", "qdisc", "add", "dev", dev, "root", *spec])
         shown = subprocess.check_output([*prefix, "tc", "qdisc", "show", "dev", dev, "root"], text=True)
-        if ("rate" in shown.split()) != ("rate" in spec):
+        if not taken(shown, spec):
             raise RuntimeError(f"{dev} did not take the {name} profile: {shown.strip()}")
 
 

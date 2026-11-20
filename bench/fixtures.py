@@ -17,6 +17,12 @@ import lab
 ALL_SCENARIOS = tuple(f"s{i}" for i in range(1, 10))
 # scenarios measured after an untimed run of another scenario's files, and that scenario
 WARM = {"s5": "s2", "s6": "s2", "s9": "s3"}
+# the links each scenario runs on: the network cases on the links people have, the cases about the
+# machine's own work on lan, where the link adds nothing
+LINKS = {"s1": ("home", "poor"), "s2": ("home", "poor"), "s3": ("home", "lan"), "s4": ("home",), "s5": ("lan",),
+         "s6": ("lan",), "s7": ("home", "poor"), "s8": ("home",), "s9": ("lan",)}
+# the large file and the number of 100 KiB files on each link, sized so a transfer takes 20 to 60 s
+SIZES = {"lan": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (64 * 1024 * 1024, 200)}
 # every member written on 2020-01-01, so an archive's bytes depend only on its members
 EPOCH = 1577836800
 
@@ -51,25 +57,22 @@ def sha256(path):
 
 
 def case_specs(profiles, scenarios, quick):
-    """the cases to measure, with file count and size. s1 and s2 run at every profile, s7 only at
-    home and the rest only on lan."""
+    """the cases to measure, with file count and size: each scenario on the links LINKS gives it."""
     cases = []
     for profile in profiles:
         for scenario in scenarios:
-            if scenario not in ("s1", "s2", "s7") and profile != "lan":
-                continue
-            if scenario == "s7" and profile != "home":
+            if profile not in LINKS[scenario]:
                 continue
             base = "s1" if scenario == "s7" else WARM.get(scenario, scenario)
-            size = (lab.PROFILES[profile][3] if base == "s1" else 102400 if base == "s2"
+            large, many = SIZES[profile]
+            size = (large if base == "s1" else 102400 if base == "s2"
                     else 1024 * 1024 if base == "s8" else 4096)
-            count = 1 if base == "s1" else lab.PROFILES[profile][4] if base == "s2" else 100 if base == "s8" else 10000
+            count = 1 if base == "s1" else many if base == "s2" else 100 if base == "s8" else 10000
             if quick:
-                size = 2 * 1024 * 1024 if base == "s1" else 64 * 1024 if base == "s8" else size
+                # the resume keeps its whole file, so it is still downloading when it is stopped
+                if scenario != "s7":
+                    size = 2 * 1024 * 1024 if base == "s1" else 64 * 1024 if base == "s8" else size
                 count = min(count, 12)
-                # keep the prescribed ten-second interruption meaningful at 100 mbit/s
-                if scenario == "s7":
-                    size = 256 * 1024 * 1024
             cases.append(dict(id=scenario, base=base, profile=profile, size=size,
                               count=count, quick=quick))
     return cases

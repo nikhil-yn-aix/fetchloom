@@ -18,9 +18,8 @@ import fixtures
 import lab
 import tools
 
-# measured rounds per profile, after one warmup. lossy links spread one tool's runs by several times,
-# so they get more rounds for a median that holds
-ROUNDS = {"lan": 5, "home": 5, "far": 7, "poor": 7}
+# measured rounds per profile, after one warmup; a verdict needs at least 10 pairs
+ROUNDS = {"lan": 10, "home": 10, "poor": 10}
 TIME = "/usr/bin/time"
 
 
@@ -300,7 +299,7 @@ def metadata(args, adapters):
                 repo_head=repo_head(),
                 fetchloom_binary=binary_identity(args.fetchloom) if any(
                     name == "fetchloom" or name.startswith("fetchloom+") for name in adapters) else None,
-                seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.PROFILES,
+                seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.network_profiles(),
                 commands={}, orders=[], cases=[],
                 native_packages=native_versions(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),

@@ -10,7 +10,7 @@ from statistics import median
 
 # what each network profile stands for, in words a reader knows from their own connection, in the
 # order the results lead with: the links most people have before the lab's own
-LINKS = {"home": "home broadband", "poor": "poor connection", "far": "distant server", "lan": "local network"}
+LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network"}
 TITLES = {"s1": "one large file", "s2": "many small files", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files"}
@@ -39,7 +39,7 @@ def link(profile, shaping=None):
     name = LINKS.get(profile, profile)
     if not shaping:
         return name
-    delay, loss, rate = shaping[:3]
+    delay, loss, rate = shaping["delay_ms"], shaping["loss_percent"], shaping["rate_mbit"]
     if not (delay or loss or rate):
         return f"{name}, no added delay or limit"
     facts = [f"{rate} Mbit" if rate else "no rate limit", f"{delay} ms"] + ([f"{loss}% loss"] if loss else [])
@@ -425,10 +425,13 @@ def networks(metas):
     shaping = network_profiles(metas)
     if not shaping:
         return []
-    lines = ["| profile | stands for | round-trip delay | loss per direction | server egress |", "|---|---|---:|---:|---:|"]
+    lines = ["| profile | stands for | round-trip delay | loss per direction | server egress | queue at the server |",
+             "|---|---|---:|---:|---:|---:|"]
     for name in sorted(shaping, key=lead):
-        delay, loss, rate = shaping[name][:3]
-        lines.append(f"| {name} | {link(name)} | {delay} ms | {loss}% | {f'{rate} Mbit/s' if rate else 'unlimited'} |")
+        shape = shaping[name]
+        rate = f"{shape['rate_mbit']} Mbit/s" if shape["rate_mbit"] else "unlimited"
+        queue = f"{shape['queue_ms'] / 1000:g} s, {shape['limit_packets']:,} packets" if shape.get("limit_packets") else "none"
+        lines.append(f"| {name} | {link(name)} | {shape['delay_ms']} ms | {shape['loss_percent']}% | {rate} | {queue} |")
     return lines + [""]
 
 

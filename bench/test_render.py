@@ -238,6 +238,11 @@ class CampaignTests(Quiet):
                 render.render(root, report)
 
 
+def shape(delay, loss, rate, queue=None, limit=None):
+    """a network profile as meta.json records it."""
+    return dict(delay_ms=delay, loss_percent=loss, rate_mbit=rate, queue_ms=queue, limit_packets=limit)
+
+
 def lab_row(**changes):
     return dict(dict(kind="lab", scenario="s1", profile="lan", filesystem="ext4", tool="fetchloom", quick=True,
                      count=1, file_size=4, status="passed", wall_seconds=1, round=1), **changes)
@@ -307,29 +312,31 @@ class PageTests(Quiet):
     def test_the_conditions_name_the_machine_the_binary_and_each_network(self):
         meta = dict(kind="lab", quick=False, cpu_affinity=[2, 3], nginx_cpu_affinity={"41": [4]},
                     fetchloom_binary=dict(path="/home/fl/bin/fetchloom", sha256="a" * 64), filesystems={"ext4": "ext4 rw"},
-                    network_profiles=dict(lan=[0, 0, None], far=[150, 1, 50]))
+                    network_profiles=dict(lan=shape(0, 0, None), poor=shape(300, 3, 10, 1000, 959)))
         page = self.render([lab_row(quick=False), lab_row(quick=False, round=0, warmup=True, status="failed")], meta)
         self.assertIn("- measured CPUs: `[2, 3]`; nginx threads: `{'41': [4]}`", page)
         self.assertIn(f"- supplied executable: `/home/fl/bin/fetchloom`; SHA-256: `{'a' * 64}`", page)
         self.assertIn('- recorded `unknown`: lab run on `{"ext4": "ext4 rw"}`', page)
-        self.assertIn("| far | distant server | 150 ms | 1% | 50 Mbit/s |\n| lan | local network | 0 ms | 0% | unlimited |", page)
+        self.assertIn("| poor | poor connection | 300 ms | 3% | 10 Mbit/s | 1 s, 959 packets |\n"
+                      "| lan | local network | 0 ms | 0% | unlimited | none |", page)
         self.assertIn("1 warmup commands failed; their records remain in runs.jsonl.", page)
         self.assertNotIn("smoke-test", page)
 
     def test_home_and_poor_links_lead_and_each_link_is_said_in_plain_words(self):
         import xml.etree.ElementTree as ET
-        shaping = dict(lan=[0, 0, None, 1, 1], home=[20, 0, 100, 1, 1], far=[150, 1, 50, 1, 1], poor=[300, 3, 10, 1, 1])
-        rows = [lab_row(profile=profile, quick=False) for profile in ("lan", "far", "poor", "home")]
+        shaping = dict(lan=shape(0, 0, None), home=shape(20, 0, 100, 500, 4250), poor=shape(300, 3, 10, 1000, 959))
+        rows = [lab_row(profile=profile, quick=False) for profile in ("lan", "poor", "home")]
         rows += [lab_row(profile=profile, quick=False, tool="curl", wall_seconds=2) for profile in ("lan", "home")]
         page = self.render(rows, dict(kind="lab", quick=False, network_profiles=shaping))
         self.assertEqual([line for line in page.splitlines() if line.startswith("## s1")],
                          ["## s1: one large file, home broadband (ext4)", "## s1: one large file, poor connection (ext4)",
-                          "## s1: one large file, distant server (ext4)", "## s1: one large file, local network (ext4)"])
+                          "## s1: one large file, local network (ext4)"])
         self.assertIn("home broadband, about 100 Mbit and 20 ms: 1 file of 4 B, downloaded and checked", page)
         self.assertIn("\npoor connection, about 10 Mbit, 300 ms and 3% loss: 1 file", page)
         self.assertIn("\nlocal network, no added delay or limit: 1 file", page)
-        self.assertIn("| profile | stands for | round-trip delay | loss per direction | server egress |\n|---|---|---:|---:|---:|\n"
-                      "| home | home broadband | 20 ms | 0% | 100 Mbit/s |\n| poor | poor connection | 300 ms | 3% | 10 Mbit/s |", page)
+        self.assertIn("| profile | stands for | round-trip delay | loss per direction | server egress | queue at the server |\n"
+                      "|---|---|---:|---:|---:|---:|\n| home | home broadband | 20 ms | 0% | 100 Mbit/s | 0.5 s, 4,250 packets |\n"
+                      "| poor | poor connection | 300 ms | 3% | 10 Mbit/s | 1 s, 959 packets |", page)
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         svg = "{http://www.w3.org/2000/svg}"
         texts = [element.text for element in ET.parse(cards / "s1-home-ext4.svg").iter(svg + "text")]
@@ -412,11 +419,10 @@ class WordingTests(unittest.TestCase):
         self.assertEqual([render.times(value) for value in (12.4, 1.6, 3.0)], ["12\u00d7", "1.6\u00d7", "3\u00d7"])
 
     def test_a_link_reads_as_its_name_and_shaping(self):
-        self.assertEqual([render.link(*pair) for pair in (("home", [20, 0, 100]), ("poor", [300, 3, 10]), ("far", [150, 1, 50]),
-                                                         ("lan", [0, 0, None]), ("home", None), ("cable", [5, 0, None]))],
+        self.assertEqual([render.link(*pair) for pair in (("home", shape(20, 0, 100)), ("poor", shape(300, 3, 10)),
+                                                         ("lan", shape(0, 0, None)), ("home", None), ("cable", shape(5, 0, None)))],
                          ["home broadband, about 100 Mbit and 20 ms", "poor connection, about 10 Mbit, 300 ms and 3% loss",
-                          "distant server, about 50 Mbit, 150 ms and 1% loss", "local network, no added delay or limit",
-                          "home broadband", "cable, no rate limit and 5 ms"])
+                          "local network, no added delay or limit", "home broadband", "cable, no rate limit and 5 ms"])
 
     def test_a_verdict_needs_a_measured_fetchloom_and_a_rival(self):
         def summary(median, failures=0):

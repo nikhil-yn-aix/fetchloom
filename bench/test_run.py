@@ -505,7 +505,7 @@ class MainPreparationTests(unittest.TestCase):
             root = Path(folder)
             (root / "owned.json").write_text("{}")
             case = dict(id="s2", base="s2", profile="lan", quick=True, count=1, size=3, key="sample", members=[], files=[])
-            argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4", "--profiles", "lan",
+            argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4", "--profiles", "home",
                     "--scenarios", "s2", "--quick", "--out", str(root / "results")]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
                  mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
@@ -533,7 +533,7 @@ class MainRefusalTests(unittest.TestCase):
 
     def refused(self, *arguments, mounted=True):
         argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
-                "--profiles", "lan", "--scenarios", "s2", "--out", str(self.root / "results"), *arguments]
+                "--profiles", "home", "--scenarios", "s2", "--out", str(self.root / "results"), *arguments]
         said = io.StringIO()
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", self.root), \
              mock.patch.object(lab, "require_root"), mock.patch.object(run.os.path, "ismount", return_value=mounted), \
@@ -548,7 +548,7 @@ class MainRefusalTests(unittest.TestCase):
         self.assertEqual(self.refused("--out", "/elsewhere"), f"run.py: error: write results under {self.root}; copy them out after measurement")
         self.assertEqual(self.refused("--variant", "a:FETCHLOOM_EXP_A=1", "--variant", "a:FETCHLOOM_EXP_B=1"),
                          "run.py: error: each variant needs its own label")
-        self.assertEqual(self.refused("--scenarios", "s3", "--profiles", "home"),
+        self.assertEqual(self.refused("--scenarios", "s3", "--profiles", "poor"),
                          "run.py: error: no cases match these scenario/profile combinations")
         self.assertEqual(self.refused(mounted=False), "run.py: error: ext4 is not mounted")
         (self.root / "results").mkdir(exist_ok=True)

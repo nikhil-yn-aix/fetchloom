@@ -53,17 +53,17 @@ UV_PROJECT_ENVIRONMENT="$FL_BENCH_VENV" UV_PYTHON_DOWNLOADS=never uv sync --proj
 python3 -m unittest discover -s bench -p 'test_*.py'
 ```
 
-set `FL_BENCH_LAB_CHECKS=1` on the test command, inside a set-up lab, to check that switching network profiles leaves no earlier rate cap behind. set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
+set `FL_BENCH_LAB_CHECKS=1` on the test command, inside a set-up lab, to check that switching network profiles leaves no earlier rate cap behind and that each capped link holds its queue limit. set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
 
 setup creates `flb-srv`, `flb-client` and `flb-server`, adds `lab.flb` to `/etc/hosts`, installs a disposable CA, starts nginx and mounts two 12 GiB sparse images. setup replaces only a lab with its ownership marker. it refuses conflicting unowned resources. setup also checks that HTTPS is responsive.
 
 ## run
 
-full lab and live runs. ext4 runs every scenario on every profile it applies to. xfs adds the two scenarios where reflinks change the result, the second project and the no-op:
+full lab and live runs. ext4 runs every scenario on every link it applies to. xfs adds the two scenarios where reflinks change the result, the second project and the no-op:
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" \
-  --profiles lan,home,far,poor --scenarios s1,s2,s3,s4,s5,s6,s7,s8,s9 \
+  --profiles lan,home,poor --scenarios s1,s2,s3,s4,s5,s6,s7,s8,s9 \
   --fs ext4 --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-ext4"
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan --scenarios s5,s6 \
@@ -72,27 +72,27 @@ python3 bench/live.py --fetchloom "$benchmark_binary" \
   --seed 1729 --out "$FL_BENCH_ROOT/results/full/live"
 ```
 
-there are 5 measured rounds on lan and home and 7 on far and poor, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
+there are 10 measured rounds on every link, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
-smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 keeps the 256 MiB home file so it is still downloading when SIGINT arrives at 10 s.
+smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 keeps its link's whole large file, 256 MiB at home and 64 MiB on the poor link, so it is still downloading when SIGINT arrives at 10 s.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --quick \
-  --profiles lan,home --fs ext4 --out "$FL_BENCH_ROOT/results/quick/lab"
+  --profiles lan,home,poor --fs ext4 --out "$FL_BENCH_ROOT/results/quick/lab"
 python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
   --out "$FL_BENCH_ROOT/results/quick/live"
 ```
 
 - every invocation needs a new output directory. a campaign may run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice.
 - `--only-tools fetchloom,curl` narrows the lab clients and `--services zenodo,huggingface` the live services. `curl+sync` is curl followed by a flush of what it wrote, to compare with fetchloom's durable writes. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks.
-- unsupported combinations are left out: s3 to s6, s8 and s9 use lan, and s7 uses home.
+- unsupported combinations are left out: s1, s2 and s7 run at home and on the poor link, s3 at home and on lan, s4 and s8 at home, and s5, s6 and s9 on lan.
 - each measured command has a 20-minute timeout by default. `--timeout` must be finite and positive, and invalid settings are refused before a client starts. interruption and timeout deadlines include process startup, and a timer that fails to start kills and reaps the started group.
 - a failed command, timeout or wrong hash is a failed record, not a short timing.
 
 to compare a setting the measured build accepts, add `--variant label:FETCHLOOM_X=1`, once per variant. each variant syncs the same prepared project with its own environment, shuffled into the same rounds as the plain build; the runner tests cover twelve variants plus the base, and there is no limit. the case seed gives the same order for the same selected names, and each row records its variant settings; adding variants changes the shuffle and can lengthen the gap between paired runs. `python3 bench/ab.py <out>` reports wall, cpu, memory, disk, server bytes and requests from matched successful rounds: the median log ratio `ln(variant) - ln(plain)`, its exponentiated ratio, a paired percentile bootstrap 95% interval, wins and metric-specific pair counts. a metric enters a pair only when both sides have finite values; zero and negative pairs keep their win and tie counts but have no log ratio. in the example, `FETCHLOOM_SPLIT=1` asks eligible large downloads to split from the first answer.
 
 ```sh
-python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles lan \
+python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom --profiles home \
   --scenarios s1 --fs ext4 --rounds 20 --variant split:FETCHLOOM_SPLIT=1 \
   --out "$FL_BENCH_ROOT/results/ab/split"
 python3 bench/ab.py "$FL_BENCH_ROOT/results/ab/split" --threshold .03 \
@@ -130,13 +130,13 @@ on linux, set `FL_BENCH_CPUS=0-7` or pass `--cpus 0-7` to `run.py` or `live.py`.
 
 CPU affinity does not isolate shared cache, memory bandwidth, filesystem flushes or disk traffic. run benchmarks alone on the machine until a controlled check shows that builds on other cores leave the noise where it was. do not claim a quieter island from unit tests alone.
 
-`island.py check` is an operator-only measurement. it runs full-size A/A campaigns first with a quiet island, then with a repeated release build on disjoint cores. `--case filesystem/profile/scenario` is repeatable and selects exactly those cases; the default is ext4/lan s2, s3 and s5. use the unchanged executable from the quiet noise campaign. it compares both paired noise distributions with `noise.json` and reports the loaded/quiet-island wall shift. default acceptance requires 20 complete pairs per case, A/A 95% intervals within 0.97 to 1.03, robust log spread no more than twice the old spread (with a 0.01 log-scale floor), and a central loaded/quiet-island shift within 3%. the loaded interval width must stay within twice the larger quiet/historical width (with a 1-percentage-point floor), and the A/A median bias may shift by at most 1 percentage point. the width and bias floors are one third of `--effect`. these are explicit operational checks, not a proof of independence or an 80% power guarantee.
+`island.py check` is an operator-only measurement. it runs full-size A/A campaigns first with a quiet island, then with a repeated release build on disjoint cores. `--case filesystem/profile/scenario` is repeatable and selects exactly those cases; the default is ext4/lan s3, s5 and s6. use the unchanged executable from the quiet noise campaign. it compares both paired noise distributions with `noise.json` and reports the loaded/quiet-island wall shift. default acceptance requires 20 complete pairs per case, A/A 95% intervals within 0.97 to 1.03, robust log spread no more than twice the old spread (with a 0.01 log-scale floor), and a central loaded/quiet-island shift within 3%. the loaded interval width must stay within twice the larger quiet/historical width (with a 1-percentage-point floor), and the A/A median bias may shift by at most 1 percentage point. the width and bias floors are one third of `--effect`. these are explicit operational checks, not a proof of independence or an 80% power guarantee.
 
 run the check with nothing else on the machine: it creates its own compiler load on the build CPUs. give it a new target directory used by no other process, because the load worker repeatedly cleans fetchloom in that target before rebuilding. load failure aborts the measurement, and the worker group is stopped on exit. source is read without modification. `--noise` names the `ab.py --json` output of an earlier quiet A/A campaign on the same machine and lab, with the same cases, measured like this:
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --only-tools fetchloom \
-  --profiles lan --scenarios s2,s3,s5 --fs ext4 --rounds 20 \
+  --profiles lan --scenarios s3,s5,s6 --fs ext4 --rounds 20 \
   --variant aa:FETCHLOOM_EXP_NONE=1 --cpus 0-7 --out "$FL_BENCH_ROOT/results/noise"
 python3 bench/ab.py "$FL_BENCH_ROOT/results/noise" --json "$FL_BENCH_ROOT/results/noise.json"
 ```
@@ -162,7 +162,7 @@ mkdir -p bench/results
 cp -a "$FL_BENCH_ROOT/results/full" bench/results/
 ```
 
-rendering requires a matching `meta.json` beside every `runs.jsonl`. it rejects repeated live-service campaigns, inconsistent dataset sizes and reference hashes, and mixed quick/full inputs before deleting any old chart. split service campaigns may be combined only when each service occurs once. rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per case in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. it first removes every SVG card already in that folder, so no card, including a `hero-*` card, outlives the results that produced it. the page leads with the links most people have, home broadband and a poor connection, then a distant server and the local network, and names each in plain words with its recorded shaping, such as `home broadband, about 100 Mbit and 20 ms`. a `hero-*` card repeats a scenario's first result on the page and its title states the result, including when another tool wins; when that result has no verdict, because fetchloom failed a run or no other tool passed all of its runs, the scenario has no hero rather than one from another link. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
+rendering requires a matching `meta.json` beside every `runs.jsonl`. it rejects repeated live-service campaigns, inconsistent dataset sizes and reference hashes, and mixed quick/full inputs before deleting any old chart. split service campaigns may be combined only when each service occurs once. rendering writes `docs/dev/performance/benchmarks.md` and one SVG card per case in `docs/assets/bench/`, each with a `-dark.svg` twin for github's dark theme. it first removes every SVG card already in that folder, so no card, including a `hero-*` card, outlives the results that produced it. the page leads with the links most people have, home broadband and a poor connection, then the local network, and names each in plain words with its recorded shaping, such as `home broadband, about 100 Mbit and 20 ms`. a `hero-*` card repeats a scenario's first result on the page and its title states the result, including when another tool wins; when that result has no verdict, because fetchloom failed a run or no other tool passed all of its runs, the scenario has no hero rather than one from another link. quick output is marked as smoke data; do not publish it. the ignored `bench/results/` copy is an archive, never a measured workspace.
 
 `meta.json` records the machine, versions, seed, random orders, exact commands and package versions. `fetchloom_binary` records the supplied executable's resolved path, size and SHA-256; `repo_head` identifies the harness checkout, not a separately built product. keep the supplied executable unchanged throughout a campaign. for a dispatcher executable the digest identifies the dispatcher; preserve the selected product binaries and their build provenance separately. its inventories record missing native packages as `not installed` and a missing python environment as `no python env`; neither stops a run that does not use them. `runs.jsonl` contains metrics, checker failures and exit statuses. command logs retain errors. s7 records both attempts, file-body bytes across them and the second attempt's wall time.
 

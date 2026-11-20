@@ -73,26 +73,46 @@ class FixtureTests(unittest.TestCase):
         self.assertNotEqual(a, fixtures.content(17, "b", 4096))
         self.assertGreater(len(set(a)), 240)
 
-    def test_cases_use_only_design_profiles(self):
-        cases = fixtures.case_specs(["lan", "home"], ["s1", "s3", "s7"], False)
-        self.assertEqual([(c["profile"], c["id"]) for c in cases],
-                         [("lan", "s1"), ("lan", "s3"), ("home", "s1"), ("home", "s7")])
-        self.assertEqual(cases[0]["size"], 1073741824)
-        self.assertEqual(cases[1]["count"], 10000)
+    def test_each_scenario_runs_on_the_links_of_the_design(self):
+        cases = fixtures.case_specs(list(lab.PROFILES), fixtures.ALL_SCENARIOS, False)
+        self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
+                         sorted([("s1", "home"), ("s1", "poor"), ("s2", "home"), ("s2", "poor"), ("s3", "home"),
+                                 ("s3", "lan"), ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"),
+                                 ("s7", "poor"), ("s8", "home"), ("s9", "lan")]))
+        sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
+        self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
+        self.assertEqual(sized["s1", "poor"], (1, 64 * 1024 * 1024))
+        self.assertEqual(sized["s7", "poor"], sized["s1", "poor"])
+        self.assertEqual(sized["s2", "home"], (1000, 102400))
+        self.assertEqual(sized["s2", "poor"], (200, 102400))
+        self.assertEqual(sized["s3", "home"], (10000, 4096))
+        # the resume keeps its whole file in a smoke run, on every link it runs on
+        quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7"], True)}
+        self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,
+                                 ("s7", "home"): 256 * 1024 * 1024, ("s7", "poor"): 64 * 1024 * 1024})
 
-    def test_the_compressed_archive_and_the_large_no_op_run_on_lan(self):
+    def test_the_compressed_archive_runs_at_home_and_the_large_no_op_on_lan(self):
         cases = fixtures.case_specs(["lan", "home"], ["s8", "s9"], False)
-        self.assertEqual([(c["profile"], c["id"], c["base"]) for c in cases], [("lan", "s8", "s8"), ("lan", "s9", "s3")])
+        self.assertEqual([(c["profile"], c["id"], c["base"]) for c in cases], [("lan", "s9", "s3"), ("home", "s8", "s8")])
         [tiny] = fixtures.case_specs(["lan"], ["s3"], False)
-        self.assertEqual((cases[1]["count"], cases[1]["size"]), (tiny["count"], tiny["size"]))
-        self.assertEqual(cases[1]["size"], 4096)
+        self.assertEqual((cases[0]["count"], cases[0]["size"]), (tiny["count"], tiny["size"]))
+        self.assertEqual(cases[0]["size"], 4096)
 
     def test_shaping_splits_roundtrip_and_limits_server(self):
         client, server = lab.shaping("home")
         self.assertIn("10ms", client)
         self.assertIn("10ms", server)
         self.assertNotIn("rate", client)
-        self.assertEqual(server[-2:], ["rate", "100mbit"])
+        self.assertNotIn("limit", client)
+        self.assertEqual(server[-4:], ["rate", "100mbit", "limit", "4250"])
+
+    def test_a_queue_holds_its_time_at_the_rate_beside_the_delay(self):
+        # (0.5 s + 10 ms) at 100 Mbit/s is 4250 packets of 1500 bytes; (1 s + 150 ms) at 10 Mbit/s is 958.3
+        self.assertEqual([lab.queue_limit(name) for name in ("home", "poor", "lan")], [4250, 959, None])
+        recorded = lab.network_profiles()
+        self.assertEqual(recorded["home"], dict(delay_ms=20, loss_percent=0, rate_mbit=100, queue_ms=500, limit_packets=4250))
+        self.assertEqual(recorded["lan"]["limit_packets"], None)
+        self.assertEqual(sorted(recorded), ["home", "lan", "poor"])
 
     def test_forgetting_connections_resets_only_the_lab(self):
         from unittest import mock
@@ -114,13 +134,14 @@ class MeasurementTests(unittest.TestCase):
         def server_shaping():
             return subprocess.check_output(["ip", "netns", "exec", lab.NS, "tc", "qdisc", "show", "dev",
                                             lab.SERVER, "root"], text=True).split()
-        for name in ("poor", "lan", "home", "far", "lan"):
+        for name in ("poor", "lan", "home", "lan"):
             lab.profile(name)
-            rate = lab.PROFILES[name][2]
+            rate = lab.PROFILES[name]["rate_mbit"]
             shown = server_shaping()
             self.assertEqual("rate" in shown, bool(rate), (name, shown))
             if rate:
                 self.assertIn(f"{rate}Mbit", shown, (name, shown))
+                self.assertEqual(shown[shown.index("limit") + 1], str(lab.queue_limit(name)), (name, shown))
 
     @unittest.skipUnless(os.environ.get("FL_BENCH_LAB_CHECKS") == "1", "needs a set-up lab")
     def test_server_answers_a_later_if_modified_since_with_not_modified(self):
@@ -751,16 +772,19 @@ class LabLifecycleTests(unittest.TestCase):
     def test_a_profile_starts_from_no_shaping_and_must_take_at_both_ends(self):
         with self.machine(), mock.patch.object(lab, "call") as call, \
              self.assertRaisesRegex(RuntimeError, "run lab.py setup before changing a profile"):
-            lab.profile("far")
+            lab.profile("poor")
         call.assert_not_called()
         self.root.mkdir()
         (self.root / "owned.json").write_text("{}")
         server = ["ip", "netns", "exec", lab.NS]
-        plain = "qdisc netem 8001: root refcnt 2 limit 1000 delay 75ms loss 1%"
-        for name, shown, said in [("far", {lab.CLIENT: plain, lab.SERVER: plain + " rate 50Mbit"}, None),
-                                  ("far", {lab.CLIENT: plain, lab.SERVER: plain}, f"{lab.SERVER} did not take the far profile: {plain}"),
+        plain = "qdisc netem 8001: root refcnt 2 limit 1000 delay 150ms loss 3%"
+        capped = "qdisc netem 8002: root refcnt 2 limit 959 delay 150ms loss 3% rate 10Mbit"
+        for name, shown, said in [("poor", {lab.CLIENT: plain, lab.SERVER: capped}, None),
+                                  ("poor", {lab.CLIENT: plain, lab.SERVER: plain}, f"{lab.SERVER} did not take the poor profile: {plain}"),
+                                  # a queue the netem default left at 1000 packets, not the profile's time
+                                  ("poor", {lab.CLIENT: plain, lab.SERVER: plain + " rate 10Mbit"}, f"{lab.SERVER} did not take the poor profile"),
                                   # a cap the last profile set and this one leaves out
-                                  ("lan", {lab.CLIENT: plain, lab.SERVER: plain + " rate 50Mbit"}, f"{lab.SERVER} did not take the lan profile")]:
+                                  ("lan", {lab.CLIENT: plain, lab.SERVER: capped}, f"{lab.SERVER} did not take the lan profile")]:
             steps = []
             with self.subTest(name=name, said=said), self.machine(shown=shown), \
                  mock.patch.object(lab.subprocess, "run", side_effect=lambda argv, **_: steps.append(argv)), \
@@ -771,16 +795,16 @@ class LabLifecycleTests(unittest.TestCase):
                 else:
                     lab.profile(name)
                     self.assertEqual(steps, [["tc", "qdisc", "del", "dev", lab.CLIENT, "root"],
-                                             ["tc", "qdisc", "add", "dev", lab.CLIENT, "root", "netem", "delay", "75ms", "loss", "1%"],
+                                             ["tc", "qdisc", "add", "dev", lab.CLIENT, "root", "netem", "delay", "150ms", "loss", "3%"],
                                              [*server, "tc", "qdisc", "del", "dev", lab.SERVER, "root"],
-                                             [*server, "tc", "qdisc", "add", "dev", lab.SERVER, "root", "netem", "delay", "75ms",
-                                              "loss", "1%", "rate", "50mbit"]])
+                                             [*server, "tc", "qdisc", "add", "dev", lab.SERVER, "root", "netem", "delay", "150ms",
+                                              "loss", "3%", "rate", "10mbit", "limit", "959"]])
 
     def test_the_command_sets_up_tears_down_or_changes_the_profile_under_the_lock(self):
         for argv, calls in [(["setup", "--image-gib", "3"], [mock.call.setup(3, (1,))]),
                             (["teardown"], [mock.call.teardown()]),
-                            (["profile", "--profile", "far"], [mock.call.exclusive(), mock.call.exclusive().__enter__(),
-                                                               mock.call.profile("far"), mock.call.exclusive().__exit__(None, None, None)])]:
+                            (["profile", "--profile", "poor"], [mock.call.exclusive(), mock.call.exclusive().__enter__(),
+                                                                mock.call.profile("poor"), mock.call.exclusive().__exit__(None, None, None)])]:
             stood = mock.MagicMock()
             with self.subTest(argv[0]), mock.patch.object(sys, "argv", ["lab.py", *argv, "--cpus", "1"]), \
                  mock.patch.object(lab.os, "sched_getaffinity", return_value={0, 1}), \

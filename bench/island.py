@@ -13,7 +13,7 @@ import ab
 import fixtures
 import lab
 
-SCENARIOS = ("s2", "s3", "s5")
+SCENARIOS = ("s3", "s5", "s6")
 DEFAULT_CASES = tuple(f"ext4/lan/{scenario}" for scenario in SCENARIOS)
 # the variant an a/a campaign compares with the plain build, as campaign_command names it
 AA = "fetchloom+aa"
@@ -296,7 +296,7 @@ def main():
     inspect.add_argument("--build-cpus", required=True, type=lab.cpu_choice)
     inspect.add_argument("--noise", required=True, type=Path)
     inspect.add_argument("--case", action="append", dest="cases", type=case_choice,
-                         help="repeat filesystem/profile/scenario; default ext4/lan s2,s3,s5")
+                         help="repeat filesystem/profile/scenario; default ext4/lan s3,s5,s6")
     inspect.add_argument("--out", required=True, type=Path)
     inspect.add_argument("--worktree", required=True, type=Path, help="checkout used only as compiler input")
     inspect.add_argument("--target", required=True, type=Path, help="new, dedicated compiler target directory")

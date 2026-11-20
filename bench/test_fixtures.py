@@ -44,7 +44,7 @@ class CacheIdentityTests(unittest.TestCase):
     def test_the_compressed_archive_holds_csv_tables_that_shrink_and_repeat(self):
         import hashlib
         import tarfile
-        [spec] = fixtures.case_specs(["lan"], ["s8"], True)
+        [spec] = fixtures.case_specs(["home"], ["s8"], True)
         archives = []
         for _ in range(2):
             with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
@@ -74,7 +74,7 @@ class CaseTests(unittest.TestCase):
 
     def test_the_zip_holds_each_file_stored_and_dated_alike_so_its_bytes_repeat(self):
         import zipfile
-        [spec] = fixtures.case_specs(["lan"], ["s4"], True)
+        [spec] = fixtures.case_specs(["home"], ["s4"], True)
         spec = dict(spec, count=3, size=16)
         built = []
         for _ in range(2):

@@ -120,7 +120,7 @@ class IslandCheckTests(unittest.TestCase):
     def test_campaign_is_only_the_requested_full_aa_cases(self):
         import island
         command = island.campaign_command(Path("/binary"), Path("/results"), (0, 2), 20, 17)
-        self.assertIn("s2,s3,s5", command)
+        self.assertIn("s3,s5,s6", command)
         self.assertIn("aa:FETCHLOOM_EXP_NONE=1", command)
         self.assertIn("0,2", command)
         self.assertNotIn("--quick", command)
@@ -131,7 +131,7 @@ class IslandCheckTests(unittest.TestCase):
 
     def test_selected_cases_do_not_expand_into_a_cartesian_matrix(self):
         import island
-        cases = ("ext4/lan/s3", "ext4/lan/s4", "xfs/lan/s4", "ext4/lan/s1", "ext4/home/s2")
+        cases = ("ext4/lan/s3", "ext4/home/s4", "xfs/home/s4", "ext4/home/s1", "ext4/poor/s2")
         for case in cases:
             self.assertEqual(island.case_choice(case), case)
             fs, profile, scenario = case.split("/")
@@ -141,7 +141,7 @@ class IslandCheckTests(unittest.TestCase):
             self.assertEqual(command[command.index("--scenarios") + 1], scenario)
             self.assertEqual(command[command.index("--rounds") + 1], "10")
         import argparse
-        for bad in ("ext4/home/s3", "ntfs/lan/s3", "ext4/unknown/s1", "lan/s3"):
+        for bad in ("ext4/poor/s3", "ext4/lan/s1", "ntfs/lan/s3", "ext4/far/s1", "lan/s3"):
             with self.assertRaises(argparse.ArgumentTypeError):
                 island.case_choice(bad)
 
@@ -389,7 +389,7 @@ class CheckTests(unittest.TestCase):
                          ["build-load", "--cpus", "2,3", "--worktree", str(self.root / "source"), "--target", str(self.root / "target-holds"),
                           "--jobs", "2", "--cargo", "cargo", "--ready", str(self.root / "lab/holds/build-ready.json")])
         self.assertEqual((report["build_start"], report["build_end"]), (state, state))
-        self.assertTrue(shown.startswith("quiet-island: ext4/lan/s2\n"))
+        self.assertTrue(shown.startswith(f"quiet-island: {island.DEFAULT_CASES[0]}\n"))
         self.assertEqual(json.loads(shown[shown.index("{"):]), report)
         # an island that shifts a/a timings under load is a failed check, not a broken one
         code, report, _, _, _ = self.check("drifts", ready=state, loaded=lambda case: aa(case, median_ratio=1.02))
