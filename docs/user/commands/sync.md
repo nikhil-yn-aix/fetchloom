@@ -35,9 +35,8 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 1. find the project and read its manifest and lock.
 2. fail if `--locked` finds a missing or stale lock; otherwise update it, keeping unchanged entries. a fetched dataset [renamed](../reference/data-toml.md#dataset-names) in data.toml keeps its pin under the new name, with no request, and says `Renamed iris to flowers in data.lock · its pin stays`. a dataset pinned for the first time gets a `Pinned` line with what it resolved to, its title, file count and size, so an id with a typo that pins an unrelated record stands out.
 3. reuse unchanged placed files and cached files, then take what the cache lacks from files [already in place](#already-in-place) in the data folder, then from [other caches](../guides/other-tools.md#reusing-other-caches) on this machine, such as hugging face's, then from the [mirrors](../guides/mirrors.md) you named, and download the rest. in [mirror-only mode](../guides/mirrors.md#mirror-only-mode), a file no mirror holds fails the run before any download.
-4. check downloads against their pinned sizes and hashes, then place files, saying `Placing <n> files` as placing starts, and remove the unchanged files fetchloom placed that no dataset needs now.
+4. check downloads against their pinned sizes and hashes, then place files, saying `Placing <n> files` as placing starts, and remove the unchanged files fetchloom placed that no dataset needs now. a dataset's folder gets a `.gitignore` before its files land, which keeps them out of git, in a git repository or not; fetchloom never edits the project's own `.gitignore`.
 5. save the project's state and register the project with the cache.
-6. add the data folder to `.gitignore` if needed: in a git repository, and outside one on the project's first sync, when there is no data.lock yet.
 
 with `--json`, `result.datasets` names the datasets whose pins changed and `result.selected` the names the sync was given, or null; [JSON output](../reference/json-output.md) has the rest. [placement](../concepts/cache-and-placement.md#placement) says how files are placed and when they are writable.
 

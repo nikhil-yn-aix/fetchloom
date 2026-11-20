@@ -25,7 +25,7 @@ fetchloom path [options] <name>[/file]
 
 1. find the dataset in the project manifest.
 2. check whether the requested member can exist in the lock or a cached archive tree.
-3. if the dataset is not ready, sync it alone, as `fetchloom sync <name>` does: no other dataset is resolved, downloaded or changed. in a git repository, add the data folder to `.gitignore`, as `sync` does. with `--locked`, first fail as `sync --locked <name>` does when data.lock is missing or the dataset's entry is out of date with data.toml, before any request.
+3. if the dataset is not ready, sync it alone, as `fetchloom sync <name>` does: no other dataset is resolved, downloaded or changed. with `--locked`, first fail as `sync --locked <name>` does when data.lock is missing or the dataset's entry is out of date with data.toml, before any request.
 4. print its absolute location on stdout. JSON returns it as `result.path`.
 
 on windows, a script that captures the path in powershell or cmd sets the console to utf-8 first, or reads `result.path` from `--json`, whose document is ASCII, as [paths with accents in scripts](../guides/windows.md#paths-with-accents-in-scripts) shows; otherwise a folder name with an accent arrives garbled.

@@ -60,7 +60,6 @@ $ fetchloom add http://127.0.0.1:19353/report/ --web-page
 Downloading report · 86 B
  Downloaded report · 86 B in 6 ms
     Started a project in /home/ada/notes
-    Ignored data/ in .gitignore, since its files come from data.lock
       Added report, its files are in data/report
   hint: scripts can find it with `fetchloom path report`
 $ fetchloom sync
@@ -79,7 +78,6 @@ $ fetchloom add --dry-run http://127.0.0.1:47811/named/download
       Would pin sepals, new in data.lock: http://127.0.0.1:47811/named/download · 1 file · 21 B
       Would fetch sepals/sepals.csv · 21 B
       Would place data/sepals · 1 file
-      Would add data/ to .gitignore, since its files come from data.lock
       Would add sepals to data.toml, its files in data/sepals
          Ok dry run, nothing was changed
 $ fetchloom add --dry-run http://127.0.0.1:47811/page/listing/

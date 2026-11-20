@@ -16,7 +16,7 @@ the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` hold
 | `.fetchloom/.<name>.<8 hex digits>.tmp` | metadata being written; a hard kill can leave this file behind, and the next command that changes the project removes one of `data.toml`, `data.lock`, the state or a list's part |
 | `.fetchloom/.fetchloom-<16 hex digits>.probe` | an empty hidden file, there only while a removal tests whether the volume can hardlink |
 
-inside a git repository, every command that places files, `add`, `sync` and a `path` that syncs its dataset first, adds `/<data_dir>/` to the project's `.gitignore` if absent. `.fetchloom/` ignores itself.
+every command that places files, `add`, `sync` and a `path` that syncs its dataset first, puts a `.gitignore` in each dataset's folder before its files land, which keeps them out of git, in a git repository or not. fetchloom never edits the project's own `.gitignore`. `.fetchloom/` ignores itself.
 
 inside the data folder, a file being copied or cloned into place is first written to a hidden `.fetchloom-<16 hex digits>.copy` beside its destination and then renamed. a hard kill can leave one behind; `status` does not list it, and the next `sync` deletes it.
 

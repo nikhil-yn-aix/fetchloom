@@ -461,12 +461,11 @@ fn collect_rust(folder: &Path, found: &mut Vec<PathBuf>) -> Result {
     Ok(())
 }
 
-/// the home page's add of hugging face's iris and a teammate's sync, replayed on linux from the
-/// hub's answers in docs-site/home, still print every line a terminal keeps, but for the times.
+/// hugging face's answers for the scikit-learn iris the home page and the README add, recorded in
+/// docs-site/home: the hub's api, and the server of its files.
 #[cfg(all(debug_assertions, target_os = "linux"))]
-#[test]
-fn the_home_page_shows_what_fetchloom_prints() -> Result {
-    use crate::support::{Routes, file, reply, text};
+fn recorded_iris() -> Result<(crate::support::Routes, crate::support::Routes)> {
+    use crate::support::{Routes, file, reply};
 
     let recorded = repository().join("docs-site/home");
     let read = |name: &str| fs::read_to_string(recorded.join(name));
@@ -512,49 +511,98 @@ fn the_home_page_shows_what_fetchloom_prints() -> Result {
             file(&vec![b'.'; usize::try_from(size)?], "\"v1\""),
         ));
     }
-    let files = Routes::start(served)?;
+    Ok((hub, Routes::start(served)?))
+}
+
+/// runs `shown`'s `$ fetchloom` line in `folder` against the recorded hub, with `cache`, and checks
+/// that fetchloom still prints the lines after it that a terminal keeps, but for the times.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+fn replays(
+    sandbox: &Sandbox,
+    iris: &(crate::support::Routes, crate::support::Routes),
+    folder: &Path,
+    shown: &str,
+    cache: &Path,
+) -> Result {
+    let (typed, said) = shown.split_once('\n').ok_or("an empty transcript")?;
+    let words: Vec<&str> = typed
+        .strip_prefix("$ fetchloom ")
+        .ok_or("not a fetchloom command")?
+        .split(' ')
+        .collect();
+    let output = sandbox
+        .command_in(folder, &words)
+        .env("FETCHLOOM_TEST_HF_API", &iris.0.url)
+        .env("FETCHLOOM_TEST_HOSTS", &iris.1.url)
+        .env("FETCHLOOM_CACHE", cache)
+        .output()?;
+    let stderr = crate::support::text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    // the transcripts were recorded on a disk that hardlinks; one that clones says cloned
+    let mut printed = kept(&stderr);
+    if sandbox.links()?.reflinks_read_only() {
+        printed = printed.replace(" cloned from the cache", " linked to the cache");
+    }
+    assert_eq!(
+        printed,
+        kept(said),
+        "{typed} no longer prints what the page shows: record the run again, as building and testing says"
+    );
+    Ok(())
+}
+
+/// the home page's add of hugging face's iris and a teammate's sync, replayed on linux from the
+/// hub's answers in docs-site/home, still print every line a terminal keeps, but for the times.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+#[test]
+fn the_home_page_shows_what_fetchloom_prints() -> Result {
+    let iris = recorded_iris()?;
+    let recorded = repository().join("docs-site/home");
+    let read = |name: &str| fs::read_to_string(recorded.join(name));
     let sandbox = Sandbox::new()?;
-    let clones = sandbox.links()?.reflinks_read_only();
-    let run = |folder: &Path, transcript: &str, cache: &Path| -> Result {
-        let shown = read(transcript)?;
-        let (typed, said) = shown.split_once('\n').ok_or("an empty transcript")?;
-        let words: Vec<&str> = typed
-            .strip_prefix("$ fetchloom ")
-            .ok_or("not a fetchloom command")?
-            .split(' ')
-            .collect();
-        let output = sandbox
-            .command_in(folder, &words)
-            .env("FETCHLOOM_TEST_HF_API", &hub.url)
-            .env("FETCHLOOM_TEST_HOSTS", &files.url)
-            .env("FETCHLOOM_CACHE", cache)
-            .output()?;
-        let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(0), "{stderr}");
-        // the transcripts were recorded on a disk that hardlinks; one that clones says cloned
-        let mut printed = kept(&stderr);
-        if clones {
-            printed = printed.replace(" cloned from the cache", " linked to the cache");
-        }
-        assert_eq!(
-            printed,
-            kept(said),
-            "{transcript} is not what fetchloom prints now: record the run again, as building and testing says"
-        );
-        Ok(())
-    };
     let mine = sandbox.folder("home/iris-study")?;
     if crate::merge::git(&sandbox, &mine, &["init", "-q"])?.is_none() {
         return Ok(());
     }
-    run(&mine, "add.txt", &sandbox.cache())?;
+    replays(&sandbox, &iris, &mine, &read("add.txt")?, &sandbox.cache())?;
     let theirs = sandbox.folder("teammate/iris-study")?;
     crate::merge::git(&sandbox, &theirs, &["init", "-q"])?;
     for name in ["data.toml", "data.lock"] {
         fs::copy(mine.join(name), theirs.join(name))?;
     }
-    run(&theirs, "sync.txt", &sandbox.folder("teammate-cache")?)?;
+    replays(
+        &sandbox,
+        &iris,
+        &theirs,
+        &read("sync.txt")?,
+        &sandbox.folder("teammate-cache")?,
+    )?;
     Ok(())
+}
+
+/// the README's quick start, an add in a new folder outside git, still prints every line its
+/// transcript shows but the `next:` line, which goes to a person at a terminal alone.
+#[cfg(all(debug_assertions, target_os = "linux"))]
+#[test]
+fn the_readme_shows_what_its_quick_start_prints() -> Result {
+    let readme = fs::read_to_string(repository().join("README.md"))?;
+    let shown = text_block(&readme, "$ mkdir iris-study && cd iris-study\n")
+        .ok_or("README.md shows no quick start")?;
+    let (_, shown) = shown.split_once('\n').ok_or("a quick start with no add")?;
+    let shown: Vec<&str> = shown
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("next: "))
+        .collect();
+    let iris = recorded_iris()?;
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("home/iris-study")?;
+    replays(
+        &sandbox,
+        &iris,
+        &folder,
+        &shown.join("\n"),
+        &sandbox.cache(),
+    )
 }
 
 /// data-toml.md shows the refusal of two files of one archive that are one name on a disk that
