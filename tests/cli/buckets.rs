@@ -2142,6 +2142,54 @@ fn an_add_in_a_shared_cache_downloads_an_object_another_member_recorded() -> Res
     Ok(())
 }
 
+/// in a cache a group shares, an add of files whose MD5 records another project's download wrote
+/// proves them by hashing the objects, all at once before its draft asks, and downloads nothing.
+#[cfg(unix)]
+#[test]
+fn an_add_in_a_shared_cache_proves_md5_records_ahead() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !crate::folders::shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let base = "/audit-bucket.s3.amazonaws.com/";
+    let objects: [(&str, &[u8]); 2] = [("data/a.bin", SCAN), ("data/b.bin", b"second file")];
+    let mut served = vec![(s3_listing(base, "data/", None), s3_page(&objects, None))];
+    for (key, body) in objects {
+        served.push((
+            format!("{base}{key}"),
+            file(body, &format!("\"{}\"", md5_hex(body))),
+        ));
+    }
+    let routes = Routes::start(served)?;
+    let add = ["add", "s3://audit-bucket/data/", "--as", "data"];
+    let first = command(&sandbox, &routes, &add).output()?;
+    assert_eq!(first.status.code(), Some(0), "{}", text(&first.stderr)?);
+    let downloads = || {
+        routes
+            .targets()
+            .iter()
+            .filter(|target| objects.iter().any(|(key, _)| target.ends_with(key)))
+            .count()
+    };
+    assert_eq!(downloads(), 2);
+    let project = sandbox.folder("project")?;
+    fs::write(project.join("data.toml"), "")?;
+    let trace = sandbox.folder("traces")?.join("add.json");
+    let added = command(&sandbox, &routes, &add)
+        .current_dir(&project)
+        .env("FETCHLOOM_TRACE", &trace)
+        .output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let lock = fs::read_to_string(project.join("data.lock"))?;
+    for (_, body) in objects {
+        assert!(lock.contains(&sha256_hex(body)), "{lock}");
+    }
+    assert_eq!(downloads(), 2);
+    let spans = fs::read_to_string(&trace)?;
+    assert!(spans.contains("\"name\":\"prove_md5s\""), "{spans}");
+    Ok(())
+}
+
 /// a record that no longer matches counts as none, and the new bytes are pinned.
 #[test]
 fn an_upgrade_downloads_an_object_listed_with_another_etag_or_size() -> Result {

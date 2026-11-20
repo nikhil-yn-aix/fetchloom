@@ -1120,14 +1120,14 @@ impl<'a> Loop<'a> {
             let entry = &manifest.datasets[&name];
             let source = &entry.source;
             self.note_unlisted(&name, source, &listing);
-            let mut draft = Draft::new(
+            let mut draft = Draft::proving(
                 &name,
                 entry,
                 source,
                 listing,
-                others.get(&name),
-                upgrade.includes(&name),
+                (others.get(&name), upgrade.includes(&name)),
                 &self.cache,
+                self.context.threads,
             )?;
             draft.recall_blobs(
                 &self.cache,

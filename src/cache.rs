@@ -1305,18 +1305,90 @@ impl Cache {
     /// [`Cache::stated_md5`], with the S3 version the bytes were. in a cache others may write,
     /// where anyone may record any bytes for an MD5, only bytes that have it count.
     pub(crate) fn stated(&self, md5: &Md5, url: &str) -> Option<Stated> {
+        let stated = self.recorded_stated(md5, url)?;
+        (!self.others_write || self.holds_md5(md5, &stated.digest, stated.size)).then_some(stated)
+    }
+
+    /// the record of the bytes `url` served when an earlier download hashed them to `md5`, as
+    /// written there, whoever wrote it.
+    fn recorded_stated(&self, md5: &Md5, url: &str) -> Option<Stated> {
         // a record is a line; one someone put there as a link or a pipe is none
         let mut text = String::new();
         read_unfollowed(&self.stated_path(md5, url))
             .and_then(|file| file.take(4096).read_to_string(&mut text))
             .ok()?;
         let mut words = text.split_whitespace();
-        let stated = Stated {
+        Some(Stated {
             digest: Sha256::from_hex(words.next()?)?,
             size: words.next()?.parse().ok()?,
             version: words.next().map(str::to_owned),
+        })
+    }
+
+    /// whether [`Cache::stated`] hashes an object before its MD5 record stands for it, as in a
+    /// cache others may write.
+    pub(crate) fn proves_md5_records(&self) -> bool {
+        self.others_write
+    }
+
+    /// in a cache others may write, proves at once on `threads` the MD5 records of the `wanted`
+    /// links that [`Cache::stated`] would prove one at a time, so its later asks find them proved.
+    /// a record no object proves is proved false, as there.
+    pub(crate) fn prove_md5s(&self, wanted: &[(Md5, &str)], threads: crate::threads::Threads) {
+        if !self.others_write {
+            return;
+        }
+        let recorded: Vec<(Md5, Sha256, u64)> = wanted
+            .iter()
+            .filter_map(|(md5, url)| {
+                let stated = self.recorded_stated(md5, url)?;
+                Some((*md5, stated.digest, stated.size))
+            })
+            .collect();
+        let unproved: Vec<(Md5, Sha256, u64)> = {
+            let proved = PROVED_MD5S
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut seen = std::collections::HashSet::new();
+            recorded
+                .into_iter()
+                .filter(|(md5, digest, _)| {
+                    !proved.contains_key(&(self.root.clone(), *md5, *digest))
+                        && seen.insert((*md5, *digest))
+                })
+                .collect()
         };
-        (!self.others_write || self.holds_md5(md5, &stated.digest, stated.size)).then_some(stated)
+        if unproved.is_empty() {
+            return;
+        }
+        let bytes = unproved
+            .iter()
+            .fold(0_u64, |sum, (.., size)| sum.saturating_add(*size));
+        let _span = tracing::debug_span!("prove_md5s", records = unproved.len(), bytes).entered();
+        // hashed as holds_md5 hashes one, without a stop, as a doubted object's are
+        let held =
+            crate::place::run_hashes(&unproved, bytes, threads, None, |(md5, digest, size)| {
+                self.find(digest, Some(*size)).is_some_and(|path| {
+                    object::md5_of(&path, *size, &crate::stop::Stop::default())
+                        .is_ok_and(|found| found == Some(*md5))
+                })
+            });
+        let mut proved = PROVED_MD5S
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for ((md5, digest, _), held) in unproved.into_iter().zip(held) {
+            proved.insert((self.root.clone(), md5, digest), held);
+        }
+    }
+
+    /// what this run proved of the record that the object for `digest` has the MD5 `md5`.
+    #[cfg(all(test, unix))]
+    pub(crate) fn proved_md5(&self, md5: &Md5, digest: &Sha256) -> Option<bool> {
+        PROVED_MD5S
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&(self.root.clone(), *md5, *digest))
+            .copied()
     }
 
     /// whether the object for `digest`, of `size` bytes, has the MD5 `md5`, hashed once a run.
@@ -3298,6 +3370,78 @@ pub(crate) mod tests {
                 fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).unwrap();
             }
         }
+    }
+
+    /// in a cache others may write, MD5 records proved at once answer as records proved one at a
+    /// time as asked do: an honest one, one whose object has another MD5, one whose object is gone,
+    /// each proved before anything asks. a cache only this user writes proves none.
+    #[cfg(unix)]
+    #[test]
+    fn md5_records_proved_at_once_answer_as_each_proved_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let md5 = |bytes: &[u8]| {
+            let mut hasher = digest::Md5Hasher::default();
+            hasher.update(bytes);
+            hasher.finish()
+        };
+        let mut answers = Vec::new();
+        for ahead in [false, true] {
+            let (_dir, cache) = cache();
+            let honest = store(&cache, b"honest bytes");
+            let other = store(&cache, b"other bytes");
+            let records = [
+                ("https://example.org/honest", md5(b"honest bytes"), honest),
+                ("https://example.org/other", md5(b"not these"), other),
+                (
+                    "https://example.org/gone",
+                    md5(b"gone"),
+                    Stored {
+                        digest: digest::sha256(b"gone"),
+                        size: 4,
+                        md5: None,
+                        new: true,
+                    },
+                ),
+            ];
+            for (url, md5, stored) in &records {
+                let stated = Stated {
+                    digest: stored.digest,
+                    size: stored.size,
+                    version: None,
+                };
+                cache.save_stated_md5(md5, url, &stated).unwrap();
+            }
+            let wanted: Vec<(Md5, &str)> = records
+                .iter()
+                .map(|(url, md5, _)| (*md5, *url))
+                .chain([(md5(b"no record"), "https://example.org/none")])
+                .collect();
+            let proved = |cache: &Cache| {
+                records
+                    .iter()
+                    .map(|(_, md5, stored)| cache.proved_md5(md5, &stored.digest))
+                    .collect::<Vec<_>>()
+            };
+            if ahead {
+                cache.prove_md5s(&wanted, crate::threads::Threads::default());
+                assert_eq!(proved(&cache), [None, None, None]);
+            }
+            fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o770)).unwrap();
+            let shared = Cache::open(cache.root.clone()).unwrap();
+            if ahead {
+                shared.prove_md5s(&wanted, crate::threads::Threads::default());
+                assert_eq!(proved(&shared), [Some(true), Some(false), Some(false)]);
+            }
+            answers.push(
+                records
+                    .iter()
+                    .map(|(url, md5, _)| shared.stated(md5, url).is_some())
+                    .collect::<Vec<_>>(),
+            );
+            fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert_eq!(answers[0], [true, false, false]);
+        assert_eq!(answers[1], answers[0]);
     }
 
     /// others may write a cache whose folder, or a folder of its records they may reach, every

@@ -67,10 +67,24 @@ struct DraftFile {
     listed: Listed,
 }
 
+/// the files of `previous` by their link; with `versions`, a link pinned to an object version goes
+/// by the link without it.
+fn by_link(previous: Option<&Locked>, versions: bool) -> HashMap<String, Vec<&LockedFile>> {
+    let mut by_url: HashMap<String, Vec<&LockedFile>> = HashMap::new();
+    for file in previous.iter().flat_map(|locked| &locked.files) {
+        let link = Url::parse(&file.url)
+            .ok()
+            .filter(|_| versions)
+            .and_then(|url| crate::net::s3::unversioned(&url))
+            .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
+        by_url.entry(link).or_default().push(file);
+    }
+    by_url
+}
+
 impl Draft {
-    /// a dataset's files with every hash known without a download: stated, carried from data.lock
-    /// or remembered from an earlier download. an upgrade carries no pin no checksum backs, since
-    /// only asking the server tells whether its bytes changed.
+    /// [`Draft::proving`] on the default threads, as tests draft a dataset.
+    #[cfg(test)]
     pub(super) fn new(
         name: &str,
         entry: &Entry,
@@ -80,25 +94,44 @@ impl Draft {
         upgrading: bool,
         cache: &Cache,
     ) -> Result<Draft, Error> {
+        Draft::proving(
+            name,
+            entry,
+            source,
+            listing,
+            (previous, upgrading),
+            cache,
+            Threads::default(),
+        )
+    }
+
+    /// a dataset's files with every hash known without a download: stated, carried from data.lock
+    /// or remembered from an earlier download. an upgrade carries no pin no checksum backs, since
+    /// only asking the server tells whether its bytes changed. the MD5 records a cache others may
+    /// write holds for the files it asks about one at a time are proved first, at once, on
+    /// `threads`.
+    pub(super) fn proving(
+        name: &str,
+        entry: &Entry,
+        source: &Source,
+        listing: Listing,
+        (previous, upgrading): (Option<&Locked>, bool),
+        cache: &Cache,
+        threads: Threads,
+    ) -> Result<Draft, Error> {
         let previous = previous.filter(|locked| !lock::page_no_longer_asked(locked, source));
         // data.lock's files by their link, so a dataset of many files needs no search for each; a
         // link pinned to an object version goes by the link without it, as the listing gives it
         let versions = listing.resolved.keeps_versions();
-        let mut by_url: HashMap<String, Vec<&LockedFile>> = HashMap::new();
-        for file in previous.iter().flat_map(|locked| &locked.files) {
-            let link = Url::parse(&file.url)
-                .ok()
-                .filter(|_| versions)
-                .and_then(|url| crate::net::s3::unversioned(&url))
-                .map_or_else(|| file.url.clone(), |(url, _)| url.to_string());
-            by_url.entry(link).or_default().push(file);
-        }
+        let by_url = by_link(previous, versions);
         // listed again at the revision data.lock pins, a revision nobody can change holds the
         // same bytes, so an upgrade has nothing to ask of its files
         let asks = upgrading
             && !(listing.resolved.fixes_bytes()
                 && previous.is_some_and(|locked| locked.resolved == listing.resolved.to_string()));
-        let files = filter(name, entry, &listing)?
+        let remotes = filter(name, entry, &listing)?;
+        prove_ahead(cache, threads, &remotes, &by_url, asks);
+        let files = remotes
             .into_iter()
             .map(|remote| {
                 let pinned = remote.sha256.is_some() || remote.md5.is_some();
@@ -1142,6 +1175,39 @@ fn listed_record(cache: &Cache, remote: &Remote, was: Option<&Sha256>) -> Option
         .then_some(record)
 }
 
+/// proves at once on `threads` the MD5 records of the files of `remotes` the draft asks the cache
+/// about, as [`stated_ahead`] finds them. a cache only this user writes proves nothing, so its
+/// files are not gone through twice.
+fn prove_ahead(
+    cache: &Cache,
+    threads: Threads,
+    remotes: &[Remote],
+    by_url: &HashMap<String, Vec<&LockedFile>>,
+    asks: bool,
+) {
+    if cache.proves_md5_records() {
+        cache.prove_md5s(&stated_ahead(remotes, by_url, asks), threads);
+    }
+}
+
+/// the MD5 and link of each of `remotes` the draft asks the cache about, as [`Draft::proving`]
+/// decides: one with a stated MD5, and neither a SHA-256 with its size nor a pin data.lock carries.
+fn stated_ahead<'r>(
+    remotes: &'r [Remote],
+    by_url: &HashMap<String, Vec<&LockedFile>>,
+    asks: bool,
+) -> Vec<(crate::digest::Md5, &'r str)> {
+    remotes
+        .iter()
+        .filter(|remote| {
+            let pinned = remote.sha256.is_some() || remote.md5.is_some();
+            let earlier = carried(by_url, remote).filter(|_| pinned || !asks);
+            !matches!((remote.sha256, remote.size), (Some(_), Some(_))) && earlier.is_none()
+        })
+        .filter_map(|remote| Some((remote.md5?, remote.url.as_str())))
+        .collect()
+}
+
 /// the file data.lock pins for this remote file when it is the same file: the same link, and path
 /// unless the server names it or its source zips it, when a listed size says nothing. a pin made
 /// without an MD5 cannot vouch for one now stated, unless the source states the SHA-256 too.
@@ -2158,6 +2224,141 @@ mod tests {
             carried(&by_url, &remote("e80b5017098950fc58aad83c8c14978e")).is_none(),
             "the bytes changed under the same link"
         );
+    }
+
+    #[cfg(unix)]
+    fn md5_of(bytes: &[u8]) -> crate::digest::Md5 {
+        let mut hasher = crate::digest::Md5Hasher::default();
+        hasher.update(bytes);
+        hasher.finish()
+    }
+
+    /// three files of the dataset `d`, each in `cache` with the record of the MD5 its source
+    /// states: one only stated, one with its SHA-256 and size too, one data.lock pins, with what
+    /// data.lock pins and the files as the source lists them.
+    #[cfg(unix)]
+    fn stated_three(cache: &Cache) -> (Locked, Vec<Remote>, Vec<crate::cache::Stored>) {
+        let link = |name: &str| Url::parse(&format!("https://example.org/d/{name}")).unwrap();
+        let names = ["asked.csv", "pinned.csv", "carried.csv"];
+        let stored: Vec<crate::cache::Stored> = names
+            .iter()
+            .map(|name| {
+                let stored = crate::cache::tests::store(cache, name.as_bytes());
+                let stated = crate::cache::Stated {
+                    digest: stored.digest,
+                    size: stored.size,
+                    version: None,
+                };
+                let md5 = md5_of(name.as_bytes());
+                cache
+                    .save_stated_md5(&md5, link(name).as_str(), &stated)
+                    .unwrap();
+                stored
+            })
+            .collect();
+        let locked = Locked {
+            name: "d".to_owned(),
+            reference: "https://example.org/d/".to_owned(),
+            spec: String::new(),
+            extract: true,
+            decompress: false,
+            web_page: false,
+            at: None,
+            resolved: "https://example.org/d/".to_owned(),
+            title: None,
+            license: None,
+            doi: None,
+            access: Access::Unknown,
+            timestamp: String::new(),
+            files: vec![LockedFile {
+                path: names[2].to_owned(),
+                size: stored[2].size,
+                sha256: stored[2].digest,
+                md5: Some(md5_of(names[2].as_bytes())),
+                url: link(names[2]).to_string(),
+                unpacks_to: None,
+            }],
+        };
+        let remotes = names
+            .iter()
+            .zip(&stored)
+            .map(|(name, stored)| Remote {
+                path: (*name).to_owned(),
+                size: Some(stored.size),
+                sha256: (*name == "pinned.csv").then_some(stored.digest),
+                md5: Some(md5_of(name.as_bytes())),
+                url: link(name),
+                named_by_server: false,
+                etag: None,
+                blob: None,
+            })
+            .collect();
+        (locked, remotes, stored)
+    }
+
+    /// in a cache others may write, a draft proves ahead the MD5 records of exactly the files it
+    /// asks about, a stated MD5 with neither a SHA-256 and its size nor a pin carried, and knows
+    /// each file as its stated record, its listing or data.lock does.
+    #[cfg(unix)]
+    #[test]
+    fn a_draft_proves_ahead_only_the_records_it_asks_about() {
+        use std::os::unix::fs::PermissionsExt;
+        let manifest = Manifest::parse("[datasets.d]\nref = \"https://example.org/d/\"\n").unwrap();
+        let entry = &manifest.datasets["d"];
+        let folder = tempfile::tempdir().unwrap();
+        let root = folder.path().join("cache");
+        let (locked, remotes, stored) = stated_three(&Cache::open(root.clone()).unwrap());
+        let by_url = HashMap::from([(locked.files[0].url.clone(), vec![&locked.files[0]])]);
+        let asked = stated_ahead(&remotes, &by_url, false);
+        assert_eq!(asked, [(md5_of(b"asked.csv"), remotes[0].url.as_str())]);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let shared = Cache::open(root.clone()).unwrap();
+        let proved = || {
+            remotes
+                .iter()
+                .zip(&stored)
+                .map(|(remote, stored)| shared.proved_md5(&remote.md5.unwrap(), &stored.digest))
+                .collect::<Vec<_>>()
+        };
+        prove_ahead(&shared, Threads::default(), &remotes, &by_url, false);
+        assert_eq!(proved(), [Some(true), None, None]);
+        let listing = Listing {
+            within: Vec::new(),
+            access: Access::Unknown,
+            unavailable: Vec::new(),
+            warnings: Vec::new(),
+            resolved: Reference::Url(Url::parse("https://example.org/d/").unwrap()),
+            title: None,
+            license: None,
+            doi: None,
+            files: remotes.clone(),
+            rounded: None,
+        };
+        let draft = Draft::proving(
+            "d",
+            entry,
+            &entry.source,
+            listing,
+            (Some(&locked), false),
+            &shared,
+            Threads::default(),
+        )
+        .unwrap();
+        assert_eq!(proved(), [Some(true), None, None]);
+        let mut known: Vec<_> = draft
+            .files
+            .iter()
+            .map(|file| (file.path.as_str(), file.known))
+            .collect();
+        known.sort_unstable();
+        let mut expected: Vec<_> = remotes
+            .iter()
+            .zip(&stored)
+            .map(|(remote, stored)| (remote.path.as_str(), Some((stored.digest, stored.size))))
+            .collect();
+        expected.sort_unstable();
+        assert_eq!(known, expected);
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]
