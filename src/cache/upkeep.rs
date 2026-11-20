@@ -116,11 +116,13 @@ pub(crate) struct Freed {
     pub(crate) forgotten: Vec<PathBuf>,
 }
 
-/// what freeing the objects of a fan folder asks: a sweep's `needed`, `unused` and `stop`.
+/// what freeing the objects of a fan folder asks: a sweep's `needed`, `unused` and `stop`, and the
+/// most threads it may take.
 struct Freeing<'f> {
     needed: &'f Needed,
-    unused: &'f dyn Fn(SystemTime) -> bool,
+    unused: &'f (dyn Fn(SystemTime) -> bool + Sync),
     stop: &'f Stop,
+    threads: Threads,
 }
 
 /// what freeing the objects of one fan folder did, as [`Freed`] counts it.
@@ -500,6 +502,7 @@ impl Cache {
             needed,
             unused: &unused,
             stop,
+            threads,
         };
         let objects = scan.objects;
         self.free_objects(&objects, &freeing, &mut freed)?;
@@ -548,8 +551,8 @@ impl Cache {
     }
 
     /// frees the objects no project needs that `freeing` ages out, a fan folder at a time and in
-    /// the scan's order, through one handle on each fan. the scan lists `objects` fan by fan, so
-    /// each fan is a run of them, freed where it lies.
+    /// the scan's order, through one handle on each fan and on several threads. the scan lists
+    /// `objects` fan by fan, so each fan is a run of them, freed where it lies.
     fn free_objects(
         &self,
         objects: &[Object],
@@ -563,10 +566,13 @@ impl Cache {
             !freeing.needed.objects.contains(&object.digest) && (freeing.unused)(object.changed)
         });
         let root = self.fan_root(removable);
-        let freed_fans: Vec<Result<FanFreed, Error>> = fans
-            .iter()
-            .map(|fan| self.free_fan(fan, freeing, root.as_ref()))
-            .collect();
+        let job = |fan: &&[Object]| self.free_fan(fan, freeing, root.as_ref());
+        // a pretend sweep keeps one thread, so the removals it records keep the scan's order
+        let freed_fans = if removable && !self.volume.is_pretending() {
+            crate::place::run_coarse(&fans, freeing.threads, FANS_PER_WORKER, job)
+        } else {
+            fans.iter().map(job).collect()
+        };
         for fan in freed_fans {
             let fan = fan?;
             freed.removed_objects += fan.removed_objects;
@@ -1316,8 +1322,8 @@ mod tests {
     }
 
     /// a sweep frees, keeps and counts what freeing one object after another in the scan's order
-    /// did, over hundreds of fan folders and with every object in one fan, and a pretend sweep
-    /// records those removals in that order.
+    /// did, over enough fan folders for several threads and with every object in one fan, and a
+    /// pretend sweep, which keeps one, records those removals in that order.
     #[test]
     fn a_sweep_frees_what_freeing_in_turn_frees() {
         let spread: Vec<String> = (0..600).map(|n| format!("object {n}")).collect();
