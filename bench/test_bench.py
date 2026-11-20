@@ -78,18 +78,20 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
                          sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "home"),
                                  ("s3", "lan"), ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"),
-                                 ("s7", "poor"), ("s8", "home"), ("s9", "lan")]))
+                                 ("s7", "poor"), ("s8", "home"), ("s9", "lan"), ("s10", "home")]))
         sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
         self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
         self.assertEqual(sized["s1", "poor"], (1, 64 * 1024 * 1024))
         self.assertEqual(sized["s7", "poor"], sized["s1", "poor"])
+        self.assertEqual(sized["s10", "home"], sized["s1", "home"])
         self.assertEqual(sized["s2r", "home"], (1000, 102400))
         self.assertEqual(sized["s2r", "poor"], (200, 102400))
         self.assertEqual(sized["s3", "home"], (10000, 4096))
         # the resume keeps its whole file in a smoke run, on every link it runs on
-        quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7"], True)}
+        quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7", "s10"], True)}
         self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,
-                                 ("s7", "home"): 256 * 1024 * 1024, ("s7", "poor"): 64 * 1024 * 1024})
+                                 ("s7", "home"): 256 * 1024 * 1024, ("s7", "poor"): 64 * 1024 * 1024,
+                                 ("s10", "home"): 256 * 1024 * 1024})
 
     def test_the_compressed_archive_runs_at_home_and_the_large_no_op_on_lan(self):
         cases = fixtures.case_specs(["lan", "home"], ["s8", "s9"], False)
@@ -113,6 +115,57 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(recorded["home"], dict(delay_ms=20, loss_percent=0, rate_mbit=100, queue_ms=500, limit_packets=4250))
         self.assertEqual(recorded["lan"]["limit_packets"], None)
         self.assertEqual(sorted(recorded), ["home", "lan", "poor"])
+
+    def test_a_dropped_link_loses_every_new_packet_both_ways_and_gets_its_own_loss_back(self):
+        server = ["ip", "netns", "exec", lab.NS]
+        for on, loss in ((True, "100%"), (False, "3%")):
+            with mock.patch.object(lab, "call") as call:
+                lab.blackhole("poor", on)
+            self.assertEqual([c.args[0] for c in call.call_args_list],
+                             [["tc", "qdisc", "change", "dev", lab.CLIENT, "root", "netem", "delay", "150ms", "loss", loss],
+                              [*server, "tc", "qdisc", "change", "dev", lab.SERVER, "root", "netem", "delay", "150ms", "loss", loss,
+                               "rate", "10mbit", "limit", "959"]])
+
+    def test_a_link_drop_comes_back_and_never_outlives_its_run(self):
+        import threading
+        import time
+
+        def watched(fail=None):
+            steps, dropped = [], threading.Event()
+
+            def hole(profile, on):
+                if on is fail:
+                    raise RuntimeError("tc failed")
+                steps.append((profile, on))
+                if on:
+                    dropped.set()
+            return steps, dropped, hole
+
+        # a run that ends during the drop gets its link back as it ends
+        steps, dropped, hole = watched()
+        drop = lab.LinkDrop("home", after=0, length=3600)
+        with mock.patch.object(lab, "blackhole", side_effect=hole):
+            drop.begin(time.monotonic())
+            self.assertTrue(dropped.wait(30))
+            drop.end()
+        self.assertEqual(steps, [("home", True), ("home", False)])
+        self.assertLessEqual(drop.record["dropped_at"], drop.record["restored_at"])
+        self.assertEqual((drop.record["after_seconds"], drop.record["length_seconds"], drop.record["error"]), (0, 3600, None))
+        # one that ends first never sees it
+        steps, dropped, hole = watched()
+        drop = lab.LinkDrop("home", after=3600, length=10)
+        with mock.patch.object(lab, "blackhole", side_effect=hole):
+            drop.begin(time.monotonic())
+            drop.end()
+        self.assertEqual((steps, drop.record["dropped_at"], drop.record["restored_at"]), ([], None, None))
+        # a link that cannot come back is said, for the run to fail on
+        steps, dropped, hole = watched(fail=False)
+        drop = lab.LinkDrop("home", after=0, length=3600)
+        with mock.patch.object(lab, "blackhole", side_effect=hole):
+            drop.begin(time.monotonic())
+            self.assertTrue(dropped.wait(30))
+            drop.end()
+        self.assertEqual((drop.record["restored_at"], drop.record["error"]), (None, "RuntimeError: tc failed"))
 
     def test_forgetting_connections_resets_only_the_lab(self):
         from unittest import mock
@@ -642,7 +695,7 @@ class ToolTests(unittest.TestCase):
     def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
         self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])
         flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")
-        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2r", "s3", "s4", "s7", "s8"])
+        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2r", "s3", "s4", "s7", "s8", "s10"])
         # curl itself still asks the server in the no-op cases
         self.assertTrue(all(plain.supports(dict(id=s)) for s in ("s6", "s9")))
 

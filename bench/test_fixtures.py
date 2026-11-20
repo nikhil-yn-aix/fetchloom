@@ -71,6 +71,11 @@ class CaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
             built = fixtures.build(dict(resume, size=8), 17)
         self.assertEqual(built["key"], "17-quick-home-s1-interrupt")
+        # the dropped link breaks into the same file, at the same size
+        [dropped] = fixtures.case_specs(["home"], ["s10"], True)
+        self.assertEqual((dropped["base"], dropped["size"]), ("s1", resume["size"]))
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+            self.assertEqual(fixtures.build(dict(dropped, size=8), 17)["key"], built["key"])
 
     def test_the_zip_holds_each_file_stored_and_dated_alike_so_its_bytes_repeat(self):
         import zipfile

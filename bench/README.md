@@ -63,7 +63,7 @@ full lab and live runs. ext4 runs every scenario on every link it applies to. xf
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" \
-  --profiles lan,home,poor --scenarios s1,s2r,s3,s4,s5,s6,s7,s8,s9 \
+  --profiles lan,home,poor --scenarios s1,s2r,s3,s4,s5,s6,s7,s8,s9,s10 \
   --fs ext4 --seed 1729 --out "$FL_BENCH_ROOT/results/full/lab-ext4"
 python3 bench/run.py --fetchloom "$benchmark_binary" \
   --profiles lan --scenarios s5,s6 \
@@ -74,7 +74,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" \
 
 there are 10 measured rounds on every link, plus one warmup per case. `--rounds N` overrides that count. the runner prints a planning estimate before fixture preparation, assuming a minute per run, which overstates lan cases; the estimate is for planning, not a promised completion time.
 
-smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 keeps its link's whole large file, 256 MiB at home and 64 MiB on the poor link, so it is still downloading when SIGINT arrives at 10 s.
+smoke tests use 12 files per set, csv tables of 64 KiB for s8, a 2 MiB large file and one measured round. s7 and s10 keep their link's whole large file, 256 MiB at home and 64 MiB on the poor link, so it is still downloading when SIGINT arrives or the link drops at 10 s.
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --quick \
@@ -85,9 +85,10 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 - every invocation needs a new output directory. a campaign may run in parts, one `--profiles`/`--scenarios` slice per `--out` folder under one results root; each case draws its own seeded order, and the renderer combines the parts as long as no case is measured twice.
 - `--only-tools fetchloom,curl` narrows the lab clients and `--services zenodo,huggingface` the live services. `curl+sync` is curl followed by a flush of what it wrote, to compare with fetchloom's durable writes, in the cases that write data: not the no-op cases s6 and s9. a fetchloom-only run needs no other client or python environment; only selected clients get native preparation and version checks.
-- unsupported combinations are left out: s1, s2r and s7 run at home and on the poor link, s3 at home and on lan, s4 and s8 at home, and s5, s6 and s9 on lan.
+- unsupported combinations are left out: s1, s2r and s7 run at home and on the poor link, s3 at home and on lan, s4, s8 and s10 at home, and s5, s6 and s9 on lan.
 - each measured command has a 20-minute timeout by default. `--timeout` must be finite and positive, and invalid settings are refused before a client starts. interruption and timeout deadlines include process startup, and a timer that fails to start kills and reaps the started group.
 - a failed command, timeout or wrong hash is a failed record, not a short timing.
+- in s10 the home link drops 10 s into s1's download, for 10 s: `tc qdisc change` sets netem's loss to 100% at both ends, so new packets are lost while those already queued still arrive, and nothing is stopped. each s10 run starts on the whole profile again. a run that finishes before the link comes back failed, since it measured no drop. the row keeps `link_drop`, and the renderer sets each tool's time against its own s1 on the same link.
 - in s2r each file's link goes through the redirect, for every tool: curl gets `-L` for each transfer, and DVC's remote and datalad's registered links go through it too. a run whose server log does not show both host names failed.
 - every tool keeps to 4 requests in flight to one host by its own flags: fetchloom's `FETCHLOOM_HOST_JOBS=4`, curl `--parallel-max 4`, aria2c `-j 4 -x 4`, DVC `-j 4` and datalad `-J 4`; pooch fetches one file at a time. nginx logs each request's host, protocol, connection, its number on that connection, how long it took and when it ended. each row records the connections, the most requests on one connection and, per host, the most requests and connections in flight at once, HTTP/2 streams included. a request counts as in flight from its arrival until nginx logged it, and for at least the link's round trip, less 2 ms for the log's millisecond clock, so on lan a request answered within 2 ms does not count. a run over the budget has `over_budget` set and stays a passed run.
 

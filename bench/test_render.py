@@ -418,6 +418,20 @@ class PageTests(Quiet):
                       "importing it took 420 ms more, and its whole process 3.10 s.", page)
         self.assertNotIn("fetchloom's times are", page)
 
+    def test_a_dropped_link_is_set_against_the_same_tools_unbroken_run(self):
+        rows = [lab_row(profile="home", wall_seconds=22), lab_row(profile="home", tool="curl", wall_seconds=24),
+                lab_row(scenario="s10", profile="home", wall_seconds=33, download_ratio=1.0),
+                lab_row(scenario="s10", profile="home", tool="curl", wall_seconds=41, download_ratio=1.02)]
+        page = self.render(rows, dict(kind="lab", quick=True))
+        self.assertIn("| tool | with the drop | unbroken, s1 on this link | added | bytes served / file size |", page)
+        self.assertIn("| fetchloom | 33.00 s | 22.00 s | +11.00 s | 1.000x |", page)
+        self.assertIn("| curl | 41.00 s | 24.00 s | +17.00 s | 1.020x |", page)
+
+    def test_a_dropped_link_without_the_same_file_unbroken_has_nothing_to_set_against(self):
+        rows = [lab_row(profile="home", file_size=2), lab_row(scenario="s10", profile="home", wall_seconds=33, download_ratio=1.0)]
+        page = self.render(rows, dict(kind="lab", quick=True))
+        self.assertIn("| fetchloom | 33.00 s | n/a | n/a | 1.000x |", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | bytes served / file size |\n|---|---:|\n| fetchloom | n/a |", page)

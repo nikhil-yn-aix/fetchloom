@@ -67,6 +67,34 @@ class TimerTests(unittest.TestCase):
             ended.assert_called_once_with(987654)
             self.assertEqual(handler.call_args, mock.call(signal.SIGALRM, previous))
 
+    def test_what_runs_beside_a_command_begins_as_it_starts_and_ends_before_its_result(self):
+        class Beside:
+            def __init__(self):
+                self.steps = []
+
+            def begin(self, start):
+                self.steps.append(("begin", isinstance(start, float)))
+
+            def end(self):
+                self.steps.append(("end",))
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            beside = Beside()
+            with mock.patch.object(run.os, "posix_spawn", return_value=987654), \
+                 mock.patch.object(run.os, "wait4", return_value=(987654, 0, USAGE)), \
+                 mock.patch.object(run.signal, "setitimer"):
+                run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log", during=beside)
+            self.assertEqual(beside.steps, [("begin", True), ("end",)])
+            # and ends even when the wait for the command fails
+            beside = Beside()
+            with mock.patch.object(run.os, "posix_spawn", return_value=987654), \
+                 mock.patch.object(run.os, "wait4", side_effect=[OSError("wait failed"), (987654, 0, USAGE)]), \
+                 mock.patch.object(run.os, "killpg"), mock.patch.object(run.signal, "setitimer"), \
+                 mock.patch.object(lab, "end_group"), self.assertRaisesRegex(OSError, "wait failed"):
+                run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log", during=beside)
+            self.assertEqual(beside.steps, [("begin", True), ("end",)])
+
     def test_spawn_failure_restores_cwd_and_leaves_no_usage_file(self):
         before = os.getcwd()
         with tempfile.TemporaryDirectory() as folder, \
@@ -481,7 +509,7 @@ class OneRunTests(unittest.TestCase):
                          dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, exit_code=0, timeout=False,
                               interruption_sent=False)])
 
-        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None):
+        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None):
             # a listing of the folder costs bytes too, but is no part of the file
             access = self.root / "access.jsonl"
             access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "bytes": 3}\n'
@@ -562,6 +590,45 @@ class OneRunTests(unittest.TestCase):
         self.assertEqual((row["clock"], row["wall_seconds"], row["user_seconds"], row["sys_seconds"], row["import_seconds"]),
                          ("call inside a warm interpreter", 2.0, .5, .25, .4))
         self.assertEqual((row["process"], row["maxrss_bytes"]), (dict(wall_seconds=3.0, user_seconds=1.0, sys_seconds=.5), 7))
+
+    def test_a_dropped_link_counts_only_when_the_download_outlasts_it(self):
+        drop = dict(after_seconds=10, length_seconds=10, dropped_at=10.02, restored_at=20.03, error=None)
+        for ended, said in ((31.5, []), (20.0, ["the download ended before the link came back"]),
+                            (9.0, ["the download ended before the link dropped"])):
+            self.assertEqual(run.dropped(drop, ended), said, ended)
+        self.assertEqual(run.dropped(dict(drop, dropped_at=None, restored_at=None), 31.5), ["the download ended before the link dropped"])
+        self.assertEqual(run.dropped(dict(drop, restored_at=None, error="RuntimeError: tc failed"), 31.5),
+                         ["the link drop failed: RuntimeError: tc failed"])
+
+    def test_a_run_whose_link_drops_starts_on_the_whole_profile_and_keeps_the_drop_record(self):
+        class Fetcher(tools.Tool):
+            name = "fetcher"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        made = []
+
+        class Drop:
+            def __init__(self, profile, after, length):
+                made.append((profile, after, length))
+                self.record = dict(after_seconds=after, length_seconds=length, dropped_at=10.0, restored_at=20.0, error=None)
+
+        shaped = []
+
+        def measured(*args, during=None, **kwargs):
+            shaped.append(("measured", during))
+            (self.root / "access.jsonl").write_text('{"request": "GET /key/a.bin HTTP/1.1", "status": 200, "bytes": 6}\n')
+            return dict(wall_seconds=33, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+        case = dict(self.case, id="s10", base="s1", profile="home")
+        with mock.patch.object(lab, "LinkDrop", Drop), mock.patch.object(lab, "profile", side_effect=lambda name: shaped.append(name)):
+            row = self.one_run(Fetcher("unused"), measured, case)
+        self.assertEqual(made, [("home", 10, 10)])
+        self.assertEqual([step if isinstance(step, str) else step[0] for step in shaped], ["home", "measured"])
+        self.assertIsInstance(shaped[1][1], Drop)
+        self.assertEqual((row["link_drop"]["dropped_at"], row["download_ratio"]), (10.0, 6 / 4))
+        self.assertNotIn("the download ended before the link came back", row["checks"])
 
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):

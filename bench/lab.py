@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import signal
 import subprocess
+import threading
 import time
 import urllib.request
 
@@ -247,6 +248,49 @@ def profile(name):
         shown = subprocess.check_output([*prefix, "tc", "qdisc", "show", "dev", dev, "root"], text=True)
         if not taken(shown, spec):
             raise RuntimeError(f"{dev} did not take the {name} profile: {shown.strip()}")
+
+
+def blackhole(name, on):
+    """drops every new packet at both ends of the link (on), or gives a profile its own loss back
+    (off). a change keeps the packets netem already holds, so those still arrive."""
+    client, server = shaping(name, loss=100 if on else None)
+    for prefix, dev, spec in (([], CLIENT, client), (["ip", "netns", "exec", NS], SERVER, server)):
+        call([*prefix, "tc", "qdisc", "change", "dev", dev, "root", *spec])
+
+
+class LinkDrop:
+    """a link that drops for `length` seconds from `after` seconds into a run, with nothing stopped;
+    `record` says when it dropped and came back, in seconds from the run's start."""
+
+    def __init__(self, profile, after=10, length=10):
+        self.profile, self.after, self.length = profile, after, length
+        self.record = dict(after_seconds=after, length_seconds=length, dropped_at=None, restored_at=None, error=None)
+        self.stopped = threading.Event()
+        self.thread = None
+
+    def begin(self, start):
+        """starts the clock of the drop at `start`, a time.monotonic() reading."""
+        self.thread = threading.Thread(target=self.drop, args=(start,), daemon=True)
+        self.thread.start()
+
+    def drop(self, start):
+        try:
+            if self.stopped.wait(max(0, start + self.after - time.monotonic())):
+                return
+            blackhole(self.profile, True)
+            self.record["dropped_at"] = time.monotonic() - start
+            # a run that ends first gets its link back at once: the drop never outlives it
+            self.stopped.wait(max(0, start + self.after + self.length - time.monotonic()))
+            blackhole(self.profile, False)
+            self.record["restored_at"] = time.monotonic() - start
+        except Exception as error:
+            self.record["error"] = f"{type(error).__name__}: {error}"
+
+    def end(self):
+        """waits until the link is back, cutting a drop short when the run ended first."""
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join()
 
 
 def forget_connections():

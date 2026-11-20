@@ -20,7 +20,9 @@ WARM = {"s5": "s2r", "s6": "s2r", "s9": "s3"}
 # the links each scenario runs on: the network cases on the links people have, the cases about the
 # machine's own work on lan, where the link adds nothing
 LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("home", "lan"), "s4": ("home",), "s5": ("lan",),
-         "s6": ("lan",), "s7": ("home", "poor"), "s8": ("home",), "s9": ("lan",)}
+         "s6": ("lan",), "s7": ("home", "poor"), "s8": ("home",), "s9": ("lan",), "s10": ("home",)}
+# the scenarios that break into s1's download, by ctrl-c or by the link dropping
+BROKEN = ("s7", "s10")
 ALL_SCENARIOS = tuple(LINKS)
 # the cases whose every link answers with a 302 to the storage host, the commonest shape of a
 # repository's downloads
@@ -67,14 +69,14 @@ def case_specs(profiles, scenarios, quick):
         for scenario in scenarios:
             if profile not in LINKS[scenario]:
                 continue
-            base = "s1" if scenario == "s7" else WARM.get(scenario, scenario)
+            base = "s1" if scenario in BROKEN else WARM.get(scenario, scenario)
             large, many = SIZES[profile]
             size = (large if base == "s1" else 102400 if base == "s2r"
                     else 1024 * 1024 if base == "s8" else 4096)
             count = 1 if base == "s1" else many if base == "s2r" else 100 if base == "s8" else 10000
             if quick:
-                # the resume keeps its whole file, so it is still downloading when it is stopped
-                if scenario != "s7":
+                # a broken download keeps its whole file, so it is still downloading when it breaks
+                if scenario not in BROKEN:
                     size = 2 * 1024 * 1024 if base == "s1" else 64 * 1024 if base == "s8" else size
                 count = min(count, 12)
             cases.append(dict(id=scenario, base=base, profile=profile, size=size,
@@ -119,7 +121,7 @@ def build(case, seed):
     """the case's files under www, written once per fixture signature; returns the case with its key,
     files and server folder."""
     key = f"{seed}-{'quick' if case['quick'] else 'full'}-{case['profile']}-{case['base']}"
-    if case["id"] == "s7" and case["quick"]:
+    if case["id"] in BROKEN and case["quick"]:
         key += "-interrupt"
     target = lab.ROOT / "www" / key
     manifest = target / "manifest.json"

@@ -13,7 +13,8 @@ from statistics import median
 LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network"}
 TITLES = {"s1": "one large file", "s2r": "many files through a redirect", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
-          "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files"}
+          "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files",
+          "s10": "the link drops for 10 s"}
 
 
 def summarize(rows):
@@ -130,7 +131,8 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s6": "{files} already in place, each tool confirms nothing changed",
            "s7": "a {size} download stopped at 10 s, then run again to finish",
            "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
-           "s9": "{files} already in place, each tool confirms nothing changed"}
+           "s9": "{files} already in place, each tool confirms nothing changed",
+           "s10": "a {size} download whose link drops at 10 s for 10 s, with nothing stopped"}
 
 # the site's stylesheet, whose colors the cli's themes share and the cards take
 STYLESHEET = Path(__file__).resolve().parents[1] / "docs-site/theme/assets/stylesheets/fetchloom.css"
@@ -346,6 +348,11 @@ def group(rows, metas):
         _, count, file_size = conditions[scenario, profile, fs]
         cases.append(dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
                           link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs])))
+    # a dropped link's cost is set against the same tool's s1, the same file on the same link
+    for case in cases:
+        if case["scenario"] == "s10" and conditions.get(("s1", case["profile"], case["filesystem"]), ())[1:] == (
+                case["count"], case["file_size"]):
+            case["unbroken"] = summaries(lab["s1", case["profile"], case["filesystem"]])
     services = {}
     for service in sorted(live):
         sample = next(iter(live[service].values()))[0]
@@ -516,6 +523,17 @@ def case_section(case):
             lines.append(f"\n{tool}'s times are its calls inside a warm interpreter, as a notebook makes them, and its CPU is "
                          f"theirs: importing it took {seconds(entry['import_seconds'])} more, and its whole process "
                          f"{seconds(entry['process'])}.")
+    if case["scenario"] == "s10":
+        unbroken = case.get("unbroken", {})
+        lines += ["", "| tool | with the drop | unbroken, s1 on this link | added | bytes served / file size |", "|---|---:|---:|---:|---:|"]
+        for tool, entry in summaries.items():
+            plain = unbroken.get(tool, {}).get("median")
+            added = f"{entry['median'] - plain:+.2f} s" if entry["median"] is not None and plain is not None else "n/a"
+            value = entry["download_ratio"]
+            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(plain)} | {added} | "
+                         f"{f'{value:.3f}x' if value is not None else 'n/a'} |")
+        lines.append("\nthe link drops at 10 s for 10 s, both ways, and nothing is stopped: new packets are lost while those "
+                     "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
     if case["scenario"] == "s7":
         lines += ["", "| tool | bytes served / file size |", "|---|---:|"]
         for tool, entry in summaries.items():

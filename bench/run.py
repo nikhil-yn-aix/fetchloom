@@ -21,6 +21,8 @@ import tools
 
 # measured rounds per profile, after one warmup; a verdict needs at least 10 pairs
 ROUNDS = {"lan": 10, "home": 10, "poor": 10}
+# s10's link drops this many seconds into the download, for this many seconds
+LINK_DROP = (10, 10)
 TIME = "/usr/bin/time"
 
 
@@ -58,9 +60,10 @@ def seconds_choice(value):
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
-def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None):
+def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None, during=None):
     """wall, cpu, peak memory and exit code of argv under GNU time in its own process group, SIGINT
-    at the deadline then SIGKILL, and whether it timed out or was interrupted."""
+    at the deadline then SIGKILL, and whether it timed out or was interrupted. `during`, such as a
+    lab.LinkDrop, begins as the command starts and ends before this returns, whatever happened."""
     timeout = positive_seconds(timeout)
     if interrupt_after is not None:
         interrupt_after = positive_seconds(interrupt_after)
@@ -123,6 +126,8 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
                 os.chdir(home)
             finally:
                 os.close(log)
+        if during is not None:
+            during.begin(start)
         signal.signal(signal.SIGALRM, alarm)
         handler_set = True
         deadline = min(timeout, interrupt_after) if interrupt_after is not None else timeout
@@ -145,11 +150,15 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
         usage_file.unlink(missing_ok=True)
         raise
     finally:
-        if handler_set:
-            try:
-                signal.setitimer(signal.ITIMER_REAL, 0)
-            finally:
-                signal.signal(signal.SIGALRM, previous_handler)
+        try:
+            if handler_set:
+                try:
+                    signal.setitimer(signal.ITIMER_REAL, 0)
+                finally:
+                    signal.signal(signal.SIGALRM, previous_handler)
+        finally:
+            if during is not None:
+                during.end()
     # a shell may exit before a child handles SIGINT; keep the next run isolated
     if signalled is not None:
         lab.end_group(pid, signalled + 5 - time.monotonic())
@@ -411,6 +420,9 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))
             lab.drop_caches(path for path in server_files if path.is_file())
+        if case["id"] == "s10":
+            # each run starts on the whole profile, whatever an earlier drop left behind
+            lab.profile(case["profile"])
         lab.forget_connections()
         access = lab.ROOT / "access.jsonl"
         access.write_text("")
@@ -423,7 +435,11 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             argv = tool.command(case, workdir)
             row["resume_command"] = exact_command(argv, workdir)
             row["resume_command"]["cwd"] = str(tool.cwd(workdir))
-        row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus), workdir))
+        drop = lab.LinkDrop(case["profile"], *LINK_DROP) if case["id"] == "s10" else None
+        row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus, during=drop),
+                              workdir))
+        if drop is not None:
+            row["link_drop"] = drop.record
         if case["id"] == "s7":
             row["user_seconds"] += first["user_seconds"]
             row["sys_seconds"] += first["sys_seconds"]
@@ -447,10 +463,12 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             unseen = [host for host in (lab.HOST, lab.STORE) if not row["hosts"].get(host)]
             if unseen:
                 row["checks"].append(f"the server log shows no request to {' or '.join(unseen)}")
-        if case["id"] == "s7":
+        if case["id"] in ("s7", "s10"):
             row["download_ratio"] = row["file_bytes_served"] / sum(item["size"] for item in case["files"])
-            if not first["interruption_sent"]:
-                row["checks"].append("first attempt ended before the prescribed interruption")
+        if case["id"] == "s7" and not first["interruption_sent"]:
+            row["checks"].append("first attempt ended before the prescribed interruption")
+        if drop is not None:
+            row["checks"] += dropped(drop.record, row.get("process", row)["wall_seconds"])
         if row["exit_code"] == 0 and not row["timeout"] and not row["checks"]:
             row["status"] = "passed"
     except Exception as error:
@@ -460,6 +478,18 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None):
             shutil.copyfile(workdir / "prepare.log", out / (label + "-prepare.log"))
     append(out / "runs.jsonl", row)
     return row
+
+
+def dropped(record, ended):
+    """what is wrong with a link drop that ended `ended` seconds into its run: one that failed, or one
+    the download did not outlast; empty when the run went on after the link came back."""
+    if record["error"]:
+        return [f"the link drop failed: {record['error']}"]
+    if record["dropped_at"] is None or ended < record["dropped_at"]:
+        return ["the download ended before the link dropped"]
+    if record["restored_at"] is None or ended < record["restored_at"]:
+        return ["the download ended before the link came back"]
+    return []
 
 
 def csv_choices(value, allowed):
