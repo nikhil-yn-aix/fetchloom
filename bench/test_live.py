@@ -183,6 +183,38 @@ class RecordTests(unittest.TestCase):
         self.assertEqual([dataset["service"] for dataset in meta["datasets"]], ["zenodo"])
         self.assertEqual([order["tools"] for order in meta["orders"]], [[row["tool"] for row in rows[1:3]]])
 
+    def test_a_full_campaign_runs_ten_rounds_in_alternating_order(self):
+        import json
+        from pathlib import Path
+        import random
+        from unittest import mock
+        import live
+        import run
+
+        def measured(argv, work, env, logfile, *args, **kwargs):
+            return dict(wall_seconds=1, exit_code=0, timeout=False)
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / "owned.json").write_text("{}")
+            out = root / "results"
+            code, _, _ = self.campaign(root, ["--services", "zenodo", "--out", str(out)],
+                                       catalog=mock.patch.object(live, "catalog", return_value=self.dataset()),
+                                       reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
+                                       measure=mock.patch.object(run, "measure", side_effect=measured),
+                                       fingerprint=mock.patch.object(live, "fingerprint", return_value={"input.bin": "digest"}))
+            rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
+            meta = json.loads((out / "meta.json").read_text())
+        self.assertEqual((code, meta["rounds"]), (0, 10))
+        ran = [row["tool"] for row in rows if row["kind"] == "live"]
+        first, second = ran[:2]
+        # A B, B A, A B and on: each tool goes first in every other round, as the record says
+        self.assertEqual(sorted(ran[:2]), ["fetchloom", "zenodo_get"])
+        self.assertEqual(ran, [first, second, second, first] * 5)
+        self.assertEqual([order["tools"] for order in meta["orders"]], [ran[at:at + 2] for at in range(0, 20, 2)])
+        # which tool starts comes from the seed, not from the code
+        self.assertEqual({live.abba(("a", "b"), 2, random.Random(seed))[0][0] for seed in range(20)}, {"a", "b"})
+
     def test_a_campaign_that_cannot_be_kept_apart_never_starts(self):
         from pathlib import Path
         from unittest import mock

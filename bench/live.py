@@ -18,6 +18,8 @@ import run
 import tools
 
 SERVICES = ("zenodo", "huggingface", "kaggle", "figshare", "dataverse")
+# rounds of a full campaign; quick runs one
+ROUNDS = 10
 PYTHON = str(lab.VENV / "bin" / "python")
 
 
@@ -228,6 +230,14 @@ def versions(services):
     return result
 
 
+def abba(pair, rounds, rng):
+    """each round's order of a pair: a seeded first round, then each round the other way round, so
+    the runs go A B B A A B and a service's slow minute meets both tools alike."""
+    first = list(pair)
+    rng.shuffle(first)
+    return [first if number % 2 == 0 else first[::-1] for number in range(rounds)]
+
+
 def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=None):
     """one measured run of a client against the reference; appends the row to runs.jsonl and
     returns it."""
@@ -307,7 +317,7 @@ def main():
         server_cpus = lab.pin_server(args.cpus)
         meta = run.metadata(args, {"fetchloom": tools.Fetchloom(args.fetchloom)})
         meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
-        meta.update(kind="live", datasets=[], rounds=1 if args.quick else 5)
+        meta.update(kind="live", datasets=[], rounds=1 if args.quick else ROUNDS)
         meta["tool_versions"].update(versions(args.services))
         run.write_metadata(args.out / "meta.json", meta)
         rng = random.Random(args.seed)
@@ -324,9 +334,7 @@ def main():
                 run.append(args.out / "runs.jsonl", dict(kind="live", service=service, status="skipped", reason=reason, quick=args.quick))
                 print(f"{service}: skipped: {reason}", flush=True)
                 continue
-            for number in range(1, meta["rounds"] + 1):
-                order = ["fetchloom", dataset["tool"]]
-                rng.shuffle(order)
+            for number, order in enumerate(abba(["fetchloom", dataset["tool"]], meta["rounds"], rng), 1):
                 meta["orders"].append(dict(service=service, round=number, tools=order))
                 run.write_metadata(args.out / "meta.json", meta)
                 pair = {}

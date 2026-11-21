@@ -102,7 +102,7 @@ The summary gives each case's failed runs and its time, CPU and peak memory rati
 
 ## Real services
 
-`bench/live.py` fetches public datasets with fetchloom and with each service's own tool, interleaved: 5 rounds, the two tools in a new random order each round, every run with empty caches.
+`bench/live.py` fetches public datasets with fetchloom and with each service's own tool, interleaved: 10 rounds, the first in a seeded random order and each after it the other way round (ABBA), every run with empty caches.
 
 | Service | Dataset | Other tool |
 |---|---|---|
@@ -114,7 +114,7 @@ The summary gives each case's failed runs and its time, CPU and peak memory rati
 
 `live.py` reads metadata, sizes and exact selections during preparation and downloads an independent reference before timing either client. Both clients keep archives packed; their file hashes are compared with the reference, and layout differences are reported apart from content differences. The hugging face and kaggle clients take no expected SHA-256, so their timed commands check it after the download, as curl's do. datahugger gets the explicit dataverse landing URL and an identified `fetchloom-benchmark/1 datahugger/0.13` User-Agent, since the [bench access notes](https://github.com/nikhil-yn-aix/fetchloom/blob/main/bench/README.md#run) record its DOI parser and default User-Agent being refused; its timed call uses `checksum=True` and `unzip=False`. In the full dataverse dataset fetchloom requests the original TSV and datahugger the ingested TAB, so the bytes differ and the run fails the shared check rather than counting as a speed result.
 
-A live service's speed changes from minute to minute, so live results give each tool's median and range, not ratios. Quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files no larger than 1 KiB in the figshare and dataverse datasets.
+A live service's speed changes from minute to minute, but a slow minute slows both tools of a round alike, so the results pair the rounds: the service's own tool's time over fetchloom's, with a 95% paired bootstrap interval, on this machine's datacenter link. These ratios hold for that campaign alone. They get no verdict and confirm none of the lab's rankings, which set other tools against each other, and a content difference stays a failure. Quick runs use the zenodo 3608990 iris record, hugging face `scikit-learn/iris` (`Iris.csv`), kaggle `uciml/iris` version 2 (`Iris.csv`), and files no larger than 1 KiB in the figshare and dataverse datasets.
 
 ## Metrics
 

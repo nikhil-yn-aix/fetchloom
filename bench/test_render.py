@@ -309,6 +309,30 @@ class LoadResultsTests(Quiet):
 
 
 class PageTests(Quiet):
+    def test_a_live_service_sets_its_own_tool_against_fetchloom_round_by_round(self):
+        expected = {"a": "1"}
+        datasets = [dict(service=service, bytes=3, expected_sha256=expected) for service in ("figshare", "zenodo")]
+
+        def live_row(service, tool, number, wall, status="passed"):
+            return dict(kind="live", service=service, tool=tool, round=number, quick=False, count=1, file_size=3,
+                        status=status, wall_seconds=wall, files=expected)
+
+        rows = []
+        for number in range(1, 11):
+            # a slow minute of the service slows both tools of its round alike
+            slow = 3 if number == 4 else 1
+            rows += [live_row("zenodo", "fetchloom", number, slow), live_row("zenodo", "zenodo_get", number, 2 * slow),
+                     live_row("figshare", "fetchloom", number, 1),
+                     live_row("figshare", "datahugger", number, 2, "failed" if number == 7 else "passed")]
+        page = self.render(rows, dict(kind="live", quick=False, datasets=datasets))
+        self.assertIn("## live services, on this machine's datacenter link\n", page)
+        self.assertIn("in alternating order (ABBA)", page)
+        self.assertNotIn("without ratios", page)
+        self.assertIn("| tool | median | min to max | time over fetchloom's, 95% interval | paired rounds | CPU |", page)
+        self.assertIn("| zenodo_get | 2.00 s | 2.00 s to 6.00 s | 2.00 [2.00, 2.00] | 10 |", page)
+        self.assertIn("| fetchloom | 1.00 s | 1.00 s to 3.00 s |  |  |", page)
+        self.assertIn("| datahugger | 2.00 s | 2.00 s to 2.00 s | failed 1 of 10 | 9 |", page)
+
     def render(self, rows, meta):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)

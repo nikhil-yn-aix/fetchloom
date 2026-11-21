@@ -515,8 +515,18 @@ def group(rows, metas):
     for service in sorted(live):
         sample = next(iter(live[service].values()))[0]
         services[service] = dict(count=sample["count"], file_size=sample["file_size"],
-                                 summaries=summaries(live[service]))
+                                 summaries=summaries(live[service]), judged=live_ratios(service, live[service]))
     return cases, services
+
+
+def live_ratios(service, runs):
+    """a live service's own tool's time over fetchloom's, rounds paired, with its 95% interval: a
+    ratio that holds for that campaign alone, so it gets no verdict."""
+    rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
+    base = rounds.get(ab.BASE, {})
+    return dict(comparisons={tool: dict(ab.paired(base, measured, seed=f"{SEED}/live/{service}/{tool}"), rounds=len(measured),
+                                        failed=sum(row.get("status") == "failed" for row in measured.values()))
+                             for tool, measured in rounds.items() if tool != ab.BASE})
 
 
 def check_chunks(campaigns):
@@ -602,7 +612,11 @@ def page(rows, metas, cases, services):
     for case in cases:
         lines += case_section(case)
     if any(row.get("kind") == "live" for row in rows):
-        lines += ["## live services\n", "live timings show ranges without ratios. file comparisons retain layout and content differences.\n"]
+        lines += ["## live services, on this machine's datacenter link\n",
+                  "each service's own tool runs beside fetchloom in every round, in alternating order (ABBA), so a service's "
+                  "slow minute meets both alike, and its time over fetchloom's pairs the rounds. the ratios hold for that "
+                  "campaign alone, so they get no verdict and confirm none of the lab's. file comparisons retain layout and "
+                  "content differences, and a content difference fails the run.\n"]
     for service, measured in services.items():
         lines += live_section(service, measured)
     lines += notes(rows)
@@ -767,10 +781,14 @@ def verdict_lines(case):
 
 
 def live_section(service, measured):
-    """a live service's heading, table of both clients and its card."""
-    lines = [f"### {service}\n", "| tool | median | min to max | CPU | peak memory | disk | requests | failures |", "|---|---:|---|---:|---:|---:|---:|---:|"]
+    """a live service's heading, table of both clients with the other's time over fetchloom's, and
+    its card."""
+    judged = measured["judged"]
+    lines = [f"### {service}\n", "| tool | median | min to max | time over fetchloom's, 95% interval | paired rounds | CPU | peak memory | disk | requests | failures |",
+             "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
     for name, entry in measured["summaries"].items():
-        lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
+        pairs = judged["comparisons"].get(name, {}).get("pairs", "")
+        lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(name, judged)} | {pairs} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
     return lines + ["", picture(f"live-{service}", service)]
 
 
