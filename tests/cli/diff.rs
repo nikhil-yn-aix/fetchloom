@@ -162,6 +162,53 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
     Ok(())
 }
 
+/// a hand edit of data.lock that moves a file's link to another host and keeps its SHA-256, as a
+/// pull request can, is told as that file at another link with both hosts, to a person and in
+/// `--json`, since a clone then asks that host first. `lock --check` still passes: it holds
+/// data.lock to what data.toml asks, which the edit left as it was.
+#[test]
+fn diff_names_a_link_a_hand_edit_moved() -> Result {
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let routes = source(&sandbox, &[("draws.csv", FIRST)])?;
+    let link = format!("{}/files/draws.csv", routes.url);
+    done(&sandbox, &work, &["add", &link, "--as", "sim"])?;
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
+    let lock = work.join("data.lock");
+    let pinned = fs::read_to_string(&lock)?;
+    let moved = "https://example.org/mirror/draws.csv";
+    let edited = pinned.replace(&format!("url = \"{link}\""), &format!("url = \"{moved}\""));
+    assert_ne!(edited, pinned, "{pinned}");
+    fs::write(&lock, edited)?;
+
+    let output = run(&sandbox, &work, &["diff"])?;
+    assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
+    assert_eq!(
+        text(&output.stdout)?,
+        "sim changed: 1 file at another link\n\
+         M  sim/draws.csv  20 B, the same bytes, link 127.0.0.1 \u{2192} example.org\n"
+    );
+    let document = json(&run(&sandbox, &work, &["--json", "diff"])?)?;
+    let sim = &document["result"]["datasets"][0];
+    assert_eq!(sim["relinked"], 1, "{document}");
+    assert_eq!(
+        sim["files"],
+        json!([{
+            "path": "draws.csv",
+            "change": "relinked",
+            "before": {"size": FIRST.len(), "sha256": sha256_hex(FIRST)},
+            "after": {"size": FIRST.len(), "sha256": sha256_hex(FIRST)},
+            "link": {"before": link, "after": moved},
+        }])
+    );
+    done(&sandbox, &work, &["lock", "--check"])?;
+    Ok(())
+}
+
 /// a revision is never read as an option, whatever it starts with, and a project outside any
 /// repository is told it has no commits to compare.
 #[test]

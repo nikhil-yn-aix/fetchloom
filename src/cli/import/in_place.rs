@@ -629,6 +629,8 @@ impl Changes {
                 }
                 Change::Added => changes.added.push((file.path, size(file.after))),
                 Change::Removed => changes.removed.push((file.path, size(file.before))),
+                // diff::files compares bytes alone, so it tells no file relinked
+                Change::Relinked => {}
             }
         }
         changes

@@ -53,8 +53,9 @@ fn told(datasets: &[Dataset]) -> Vec<String> {
         .collect()
 }
 
-/// a file changes with its bytes, never its link; a dataset whose pin is the same stays out, and
-/// one added or removed lists every file it pins.
+/// a file changes with its bytes, and one with the same bytes at another link, as a hand edit of
+/// data.lock leaves it, is told with the host it went to before and after; a dataset whose pin is
+/// the same stays out, and one added or removed lists every file it pins.
 #[test]
 fn each_dataset_and_file_that_differs_has_a_line() {
     let before = Lock {
@@ -66,6 +67,7 @@ fn each_dataset_and_file_that_differs_has_a_line() {
                     file("a.csv", b"same"),
                     file("b.csv", b"short"),
                     file("c.csv", b"four"),
+                    file("e.csv", b"e"),
                     file("gone.csv", b"x"),
                 ],
             ),
@@ -77,6 +79,10 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     };
     let mut moved = file("a.csv", b"same");
     moved.url = "https://mirror.example.org/a.csv".to_owned();
+    let mut changed = file("c.csv", b"FOUR");
+    changed.url = "https://mirror.example.org/c.csv".to_owned();
+    let mut along = file("e.csv", b"e");
+    along.url = "https://example.org/v2/e.csv".to_owned();
     let after = Lock {
         datasets: vec![
             fetched(
@@ -85,8 +91,9 @@ fn each_dataset_and_file_that_differs_has_a_line() {
                 vec![
                     moved,
                     file("b.csv", b"longer"),
-                    file("c.csv", b"FOUR"),
+                    changed,
                     file("d.csv", b"new"),
+                    along,
                 ],
             ),
             fetched("new", 3, vec![file("new.csv", b"fresh")]),
@@ -99,10 +106,12 @@ fn each_dataset_and_file_that_differs_has_a_line() {
     assert_eq!(
         told(&datasets),
         [
-            "iris changed: version zenodo:iris@1 \u{2192} zenodo:iris@2; 1 file added, 1 removed, 2 changed",
+            "iris changed: version zenodo:iris@1 \u{2192} zenodo:iris@2; 1 file added, 1 removed, 2 changed, 2 at other links",
+            "M  iris/a.csv  4 B, the same bytes, link example.org \u{2192} mirror.example.org",
             "M  iris/b.csv  5 B \u{2192} 6 B",
-            "M  iris/c.csv  4 B, other bytes",
+            "M  iris/c.csv  4 B, other bytes, link example.org \u{2192} mirror.example.org",
             "A  iris/d.csv  3 B",
+            "M  iris/e.csv  1 B, the same bytes at another link on example.org",
             "D  iris/gone.csv  1 B",
             "new added: zenodo:new@3; 1 file added, 5 B",
             "A  new/new.csv  5 B",
@@ -111,7 +120,18 @@ fn each_dataset_and_file_that_differs_has_a_line() {
         ]
     );
     let iris = &datasets[0];
-    assert_eq!((iris.added, iris.removed, iris.changed), (1, 1, 2));
+    assert_eq!(
+        (iris.added, iris.removed, iris.changed, iris.relinked),
+        (1, 1, 2, 2)
+    );
+    assert_eq!(
+        iris.files[0].link,
+        Some(Link {
+            before: "https://example.org/a.csv".to_owned(),
+            after: "https://mirror.example.org/a.csv".to_owned(),
+        })
+    );
+    assert_eq!(iris.files[1].link, None, "b.csv kept its link");
     assert_eq!(
         iris.fields,
         [Field {
@@ -124,7 +144,8 @@ fn each_dataset_and_file_that_differs_has_a_line() {
 }
 
 /// a dataset whose table data.toml renamed keeps its pin, so diff tells one rename, not a
-/// dataset removed and another added; one that changed besides stays both.
+/// dataset removed and another added; one that changed besides, its version or a file's link,
+/// stays both.
 #[test]
 fn a_renamed_dataset_is_told_as_one() {
     let files = vec![file("penguins.csv", b"species\n")];
@@ -144,7 +165,7 @@ fn a_renamed_dataset_is_told_as_one() {
         ["penguins renamed to birds; the same files"]
     );
     assert_eq!(datasets[0].renamed_from.as_deref(), Some("penguins"));
-    let mut other = fetched("penguins", 2, files);
+    let mut other = fetched("penguins", 2, files.clone());
     other.name = "birds".to_owned();
     let changed = Lock {
         datasets: vec![other],
@@ -152,6 +173,15 @@ fn a_renamed_dataset_is_told_as_one() {
     };
     let datasets = diffed(&before, &changed);
     assert_eq!(datasets.len(), 2, "{:?}", told(&datasets));
+    let mut moved = fetched("penguins", 1, files);
+    moved.name = "birds".to_owned();
+    moved.files[0].url = "https://mirror.example.org/penguins.csv".to_owned();
+    let relinked = Lock {
+        datasets: vec![moved],
+        ..Lock::default()
+    };
+    let datasets = diffed(&before, &relinked);
+    assert_eq!(datasets.len(), 2, "a link moved too: {:?}", told(&datasets));
 }
 
 /// a terminal shows a dataset's first file lines and counts the rest, naming the command that

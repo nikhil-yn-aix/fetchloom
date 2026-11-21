@@ -54,7 +54,9 @@ struct Dataset {
     added: u64,
     removed: u64,
     changed: u64,
-    /// each file added, removed or changed, by its path in the dataset, sorted.
+    /// files pinned with the same bytes at another link.
+    relinked: u64,
+    /// each file added, removed, changed or relinked, by its path in the dataset, sorted.
     files: Vec<File>,
     /// the sides, `from` or `to`, whose commit lacks the dataset's file list, so its files were
     /// not compared.
@@ -75,6 +77,8 @@ pub(in crate::cli) enum Change {
     Added,
     Removed,
     Changed,
+    /// the same bytes, at another link: where a clone connects is part of what data.lock says.
+    Relinked,
 }
 
 /// a field of a pin, as data.lock writes it, before and after; none on a side without it.
@@ -85,13 +89,41 @@ struct Field {
     after: Option<String>,
 }
 
-/// a file whose pin differs: its size and digests before and after, none on a side without it.
+/// a file whose pin differs: its size and digests before and after, none on a side without it,
+/// and its link before and after where both sides pin it at other links.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub(in crate::cli) struct File {
     pub(in crate::cli) path: String,
     pub(in crate::cli) change: Change,
     pub(in crate::cli) before: Option<Pinned>,
     pub(in crate::cli) after: Option<Pinned>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    link: Option<Link>,
+}
+
+/// a file's link before and after, as data.lock records them, a secret's value masked.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+struct Link {
+    before: String,
+    after: String,
+}
+
+impl Link {
+    /// the host before and after, as a line names them, when the link goes to another host now.
+    fn moved(&self) -> Option<String> {
+        let (before, after) = (host(&self.before), host(&self.after));
+        (before != after).then(|| {
+            let shown = |host: Option<String>| host.unwrap_or_else(|| "no host".to_owned());
+            format!("link {} \u{2192} {}", shown(before), shown(after))
+        })
+    }
+}
+
+/// the host `link` goes to, as a line shows it.
+fn host(link: &str) -> Option<String> {
+    url::Url::parse(link)
+        .ok()
+        .and_then(|url| url.host_str().map(|host| plain(host).into_owned()))
 }
 
 /// a file's pin: its size and SHA-256, or for a dataset not downloaded yet, the SHA-256 or MD5
@@ -404,6 +436,22 @@ impl<'a> Pin<'a> {
         ]
     }
 
+    /// each file it pins with its link, sorted by path.
+    fn links(self) -> Vec<(&'a str, &'a str)> {
+        match self {
+            Pin::Fetched(locked) => locked
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.url.as_str()))
+                .collect(),
+            Pin::Stated(stated) => stated
+                .files
+                .iter()
+                .map(|file| (file.path.as_str(), file.url.as_str()))
+                .collect(),
+        }
+    }
+
     /// each file it pins, sorted by path.
     fn files(self) -> Vec<(&'a str, Pinned)> {
         match self {
@@ -428,9 +476,10 @@ impl<'a> Pin<'a> {
     }
 }
 
-/// a dataset removed and another added with the same fields and files, which a rename of its
-/// table in data.toml makes, as one dataset renamed. the others stay as they are.
-fn renamed(datasets: Vec<Dataset>) -> Vec<Dataset> {
+/// a dataset removed and another added with the same fields, files and links, which a rename of
+/// its table in data.toml makes, as one dataset renamed, `before` and `after` being the locks the
+/// two come from. the others stay as they are.
+fn renamed(datasets: Vec<Dataset>, before: &Lock, after: &Lock) -> Vec<Dataset> {
     type Pins<'a> = (
         Vec<(&'a str, &'a Option<String>)>,
         Vec<(&'a str, Option<Pinned>)>,
@@ -469,7 +518,12 @@ fn renamed(datasets: Vec<Dataset>) -> Vec<Dataset> {
             continue;
         }
         let same = pinned(dataset);
-        let Some(at) = gone.iter().position(|old| pinned(old) == same) else {
+        let links = |lock, name| Pin::of(lock, name).map(Pin::links).unwrap_or_default();
+        let linked = links(after, &dataset.name);
+        let Some(at) = gone
+            .iter()
+            .position(|old| pinned(old) == same && links(before, &old.name) == linked)
+        else {
             continue;
         };
         let old = gone.remove(at);
@@ -480,6 +534,7 @@ fn renamed(datasets: Vec<Dataset>) -> Vec<Dataset> {
             added: 0,
             removed: 0,
             changed: 0,
+            relinked: 0,
             files: Vec::new(),
             unlisted: Vec::new(),
             said: Vec::new(),
@@ -520,7 +575,7 @@ fn compared(before: &Read, after: &Read) -> Vec<Dataset> {
             )
         })
         .collect();
-    renamed(datasets)
+    renamed(datasets, &before.lock, &after.lock)
 }
 
 /// how the pin of `name` differs from `before` to `after`, none when it does not. the files of a
@@ -539,10 +594,14 @@ fn dataset(
     };
     let fields = fields(before, after);
     let files = if unlisted.is_empty() {
-        files(
+        let changed = files(
             before.map(Pin::files).unwrap_or_default(),
             after.map(Pin::files).unwrap_or_default(),
-        )
+        );
+        match (before, after) {
+            (Some(before), Some(after)) => with_links(changed, before, after),
+            _ => changed,
+        }
     } else {
         Vec::new()
     };
@@ -557,6 +616,7 @@ fn dataset(
         added: count(Change::Added),
         removed: count(Change::Removed),
         changed: count(Change::Changed),
+        relinked: count(Change::Relinked),
         fields,
         files,
         unlisted,
@@ -638,7 +698,8 @@ fn fields(before: Option<Pin<'_>>, after: Option<Pin<'_>>) -> Vec<Field> {
 }
 
 /// the files added, removed and changed from `before` to `after`, each sorted by path, as data.lock
-/// keeps them: a file changes when its bytes do, as [`Pinned::same`] tells, not when its link does.
+/// keeps them: a file changes when its bytes do, as [`Pinned::same`] tells. [`with_links`] adds
+/// what a link changed for diff.
 pub(in crate::cli) fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinned)>) -> Vec<File> {
     let mut found = Vec::new();
     let mut was = before.into_iter().peekable();
@@ -674,9 +735,51 @@ pub(in crate::cli) fn files(before: Vec<(&str, Pinned)>, after: Vec<(&str, Pinne
             change,
             before,
             after,
+            link: None,
         });
     }
     found
+}
+
+/// `changed`, the files `before` and `after` pin otherwise, each with its link before and after
+/// where the two pin it at other links, and with each file pinned with the same bytes at another
+/// link, relinked, all sorted by path: a pull request may move a file's link alone, and a clone
+/// then asks that host first.
+fn with_links(mut changed: Vec<File>, before: Pin<'_>, after: Pin<'_>) -> Vec<File> {
+    let masked = |link: &str| crate::shown::mask_query(link).into_owned();
+    let now: std::collections::HashMap<&str, &str> = after.links().into_iter().collect();
+    let pins: std::collections::HashMap<&str, (Pinned, Pinned)> = {
+        let was: std::collections::HashMap<&str, Pinned> = before.files().into_iter().collect();
+        after
+            .files()
+            .into_iter()
+            .filter_map(|(path, pin)| Some((path, (*was.get(path)?, pin))))
+            .collect()
+    };
+    let mut relinked = Vec::new();
+    for (path, was) in before.links() {
+        let Some(&is) = now.get(path).filter(|is| **is != was) else {
+            continue;
+        };
+        let link = Some(Link {
+            before: masked(was),
+            after: masked(is),
+        });
+        if let Ok(at) = changed.binary_search_by(|file| file.path.as_str().cmp(path)) {
+            changed[at].link = link;
+        } else if let Some(&(before, after)) = pins.get(path) {
+            relinked.push(File {
+                path: path.to_owned(),
+                change: Change::Relinked,
+                before: Some(before),
+                after: Some(after),
+                link,
+            });
+        }
+    }
+    changed.extend(relinked);
+    changed.sort_by(|a, b| a.path.cmp(&b.path));
+    changed
 }
 
 /// the most file lines a terminal shows of one dataset; a pipe, or `-v`, has each.
@@ -776,7 +879,7 @@ fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
         Change::Changed if let Some(before) = &dataset.renamed_from => {
             format!("{} renamed to {name}; the same files", plain(before))
         }
-        Change::Changed => {
+        Change::Changed | Change::Relinked => {
             let mut said = dataset.said.clone();
             said.push(files);
             format!("{name} changed: {}", said.join("; "))
@@ -790,6 +893,14 @@ fn files_counted(dataset: &Dataset) -> String {
         (dataset.added, "added"),
         (dataset.removed, "removed"),
         (dataset.changed, "changed"),
+        (
+            dataset.relinked,
+            if dataset.relinked == 1 {
+                "at another link"
+            } else {
+                "at other links"
+            },
+        ),
     ]
     .into_iter()
     .filter(|(count, _)| *count > 0)
@@ -812,7 +923,7 @@ fn files_counted(dataset: &Dataset) -> String {
     match dataset.change {
         Change::Added => format!("{text}, {}", units::size(bytes(|file| file.after))),
         Change::Removed => format!("{text}, {}", units::size(bytes(|file| file.before))),
-        Change::Changed => text,
+        Change::Changed | Change::Relinked => text,
     }
 }
 
@@ -821,9 +932,28 @@ fn files_counted(dataset: &Dataset) -> String {
 fn line(dataset: &str, file: &File) -> String {
     let path = plain(&file.path);
     let dataset = plain(dataset);
+    let moved = file.link.as_ref().and_then(Link::moved);
+    let link = moved
+        .as_ref()
+        .map(|moved| format!(", {moved}"))
+        .unwrap_or_default();
     match (file.change, file.before, file.after) {
+        (Change::Relinked, _, Some(after)) => {
+            let at = match (
+                &moved,
+                file.link.as_ref().and_then(|link| host(&link.after)),
+            ) {
+                (Some(moved), _) => format!(", {moved}"),
+                (None, Some(host)) => format!(" at another link on {host}"),
+                (None, None) => " at another link".to_owned(),
+            };
+            format!(
+                "M  {dataset}/{path}  {}, the same bytes{at}",
+                units::size(after.size)
+            )
+        }
         (Change::Changed, Some(before), Some(after)) if before.size == after.size => format!(
-            "M  {dataset}/{path}  {}, {}",
+            "M  {dataset}/{path}  {}, {}{link}",
             units::size(after.size),
             if before.comparable(after) {
                 "other bytes"
@@ -832,7 +962,7 @@ fn line(dataset: &str, file: &File) -> String {
             }
         ),
         (Change::Changed, Some(before), Some(after)) => format!(
-            "M  {dataset}/{path}  {} \u{2192} {}",
+            "M  {dataset}/{path}  {} \u{2192} {}{link}",
             units::size(before.size),
             units::size(after.size)
         ),
