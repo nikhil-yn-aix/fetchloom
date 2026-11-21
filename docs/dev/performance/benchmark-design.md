@@ -49,9 +49,9 @@ Sizes are chosen so a transfer takes about 20 to 60 seconds on its link. A timin
 
 A cold run empties every tool's cache, writes out the lab's filesystems, drops the machine's page cache and reads the server's files back, so the server is warm like a real one. Every run, cold or warm, also starts without what Linux kept from earlier connections between client and server, such as its estimate of packet reordering: the lab clears the server namespace's TCP metrics and the host's entry for the server. A warm run keeps its caches. s5 and s6 first run s2r's workflow outside the clock, and s9 s3's. In s5 fetchloom and DVC get a new project and datalad a clone of the first, all made before the clock starts, and pooch returns paths in its shared cache.
 
-In s7 every tool gets ctrl-c (SIGINT) 10 seconds after its command starts, and a tool still running 5 seconds later gets SIGKILL. The same command then runs again, and its time is the one reported; curl continues with `-C -`.
+In s7 every tool gets ctrl-c (SIGINT) 10 seconds after its command starts, and a tool still running 5 seconds later gets SIGKILL. pooch's 10 seconds start at its first call, where its clock starts, so its import does not shorten the download it is stopped in. The same command then runs again, and its time is the one reported; curl continues with `-C -`.
 
-In s10 the link drops at both ends 10 seconds after the command starts and comes back 10 seconds later: netem's loss goes to 100% for new packets, while the packets already queued still arrive, and nothing is stopped or signalled. The report sets each tool's total time against its own s1 on the same link and file. A run that ends before the link comes back failed, since it measured no drop.
+In s10 the link drops at both ends 10 seconds after the command starts, or after pooch's first call starts, and comes back 10 seconds later: netem's loss goes to 100% for new packets, while the packets already queued still arrive, and nothing is stopped or signalled. The report sets each tool's total time against its own s1 on the same link and file. A run that ends before the link comes back failed, since it measured no drop.
 
 s7 and s10 also report server body bytes / dataset size: the body bytes of the server's whole and partial answers for the file, over its size. It says what a tool asked for again. The server cannot see packets the network sent twice, so it says nothing about the wire.
 
@@ -72,7 +72,7 @@ The lab runs on Linux against nginx serving HTTPS with HTTP/2 from a separate ne
 
 In s2r every tool's links start at `https://lab.flb/r/`, DVC's remote and the links registered with git-annex included, and curl follows them with `-L`. A run whose server log does not show both host names failed.
 
-pooch's script times its own calls: the wall time and the process's CPU time around them, written with the import time when it exits, even when stopped. The results label that boundary "call inside a warm interpreter" and keep the whole process's time beside it. Its peak memory is the whole process's.
+pooch's script times its own calls: the wall time and the process's CPU time around them, written with the import time when it exits, even when stopped. Just before its first call it writes the time on the machine's monotonic clock to a file, which s7's ctrl-c and s10's drop count from. The results label that boundary "call inside a warm interpreter" and keep the whole process's time beside it. Its peak memory is the whole process's.
 
 For s4 the downloaders run `unzip -q` after the check, in the same timed command, and for s8 `tar -xzf`. DVC and datalad track files rather than archives, so they sit s4 and s8 out. s8's members are csv tables from a seeded generator, rows a field survey might log, which gzip shrinks to about a fifth, as it does real tables; every other fixture is random bytes that no compressor shrinks, so s4's zip stores its members and only s8 times decompression. In s6 and s9 nginx answers a later `If-Modified-Since` with 304, since curl `-z` sends the time it downloaded the file.
 

@@ -107,6 +107,11 @@ class Tool:
         """a measured run's result, with the clock it covers."""
         return dict(result, clock=self.clock)
 
+    def anchor(self, workdir):
+        """what tells when a run's own work began, for a fault to count from, or None when that is
+        the command's start."""
+        return None
+
     def outputs(self, scenario, workdir):
         """each file a run must leave, with its sha256."""
         items = scenario["members"] or scenario["files"]
@@ -257,8 +262,9 @@ class Pooch(Tool):
     the script times the calls itself, wall and cpu, and the import beside them."""
     name = "pooch"
     clock = "call inside a warm interpreter"
-    # what the timed calls report, from inside the process
+    # what the timed calls report, from inside the process, and when they began
     CALLS = "calls.json"
+    BEGIN = "calls.begin"
 
     def version(self):
         return subprocess.check_output([str(lab.VENV / "bin" / "python"), "-c",
@@ -276,6 +282,9 @@ class Pooch(Tool):
                           "import pooch\n"
                           "imported = time.perf_counter()\n"
                           f"items = json.load(open({str(registry)!r}))\n"
+                          f"with open({str(workdir / self.BEGIN) + '.new'!r}, 'w') as mark:\n"
+                          "    mark.write(repr(time.monotonic()))\n"
+                          f"os.replace({str(workdir / self.BEGIN) + '.new'!r}, {str(workdir / self.BEGIN)!r})\n"
                           "before, begun = resource.getrusage(resource.RUSAGE_SELF), time.perf_counter()\n"
                           "try:\n"
                           "    for item in items:\n"
@@ -295,6 +304,7 @@ class Pooch(Tool):
         report, the whole process's beside them and the import time; the process's alone, with its
         clock, when the script left no report."""
         report = workdir / self.CALLS
+        (workdir / self.BEGIN).unlink(missing_ok=True)
         try:
             calls = json.loads(report.read_text())
             report.unlink()
@@ -303,6 +313,18 @@ class Pooch(Tool):
         process = {key: result[key] for key in ("wall_seconds", "user_seconds", "sys_seconds")}
         return dict(result, clock=self.clock, process=process, import_seconds=calls["import_seconds"],
                     **{key: calls[key] for key in ("wall_seconds", "user_seconds", "sys_seconds")})
+
+    def anchor(self, workdir):
+        """the moment the script marked as its calls began, a time.monotonic() reading every process
+        on the machine shares, so ctrl-c and a dropped link meet pooch's calls, not its import."""
+        mark = workdir / self.BEGIN
+
+        def began():
+            try:
+                return float(mark.read_text())
+            except (OSError, ValueError):
+                return None
+        return began
 
     def outputs(self, scenario, workdir):
         root = self.cache(workdir)

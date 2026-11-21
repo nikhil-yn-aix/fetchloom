@@ -72,7 +72,7 @@ class TimerTests(unittest.TestCase):
             def __init__(self):
                 self.steps = []
 
-            def begin(self, start):
+            def begin(self, start, anchor=None):
                 self.steps.append(("begin", isinstance(start, float)))
 
             def end(self):
@@ -138,6 +138,37 @@ class TimerTests(unittest.TestCase):
             self.assertEqual(timer.call_args_list[0], mock.call(signal.ITIMER_REAL, 18 if interrupt is None else 8))
             self.assertIn(mock.call(signal.ITIMER_REAL, 5), timer.call_args_list)
             self.assertIn(mock.call(signal.ITIMER_REAL, 1), timer.call_args_list)
+
+    def test_an_interruption_counts_from_the_commands_own_anchor(self):
+        for marks, times, said in [
+            # looked for once before the calls began, then 10 s after they did, 3 s into the run
+            ([None, 103.0], [100, 100.002, 100.01, 103.0, 113, 114, 114.5], dict(interruption_sent=True, timeout=False, anchor_seconds=3.0)),
+            # never began before the deadline, which is then a timeout
+            ([None], [100, 100.002, 120.5, 120.5, 121, 121.5], dict(interruption_sent=False, timeout=True, anchor_seconds=None)),
+        ]:
+            handler, looked = {}, iter(marks + [marks[-1]] * 5)
+
+            def wait(*args):
+                for _ in range(len(marks) + 1):
+                    handler[signal.SIGALRM](None, None)
+                return 987654, 2, USAGE
+
+            with self.subTest(marks=marks), tempfile.TemporaryDirectory() as folder, \
+                 mock.patch.object(run.os, "posix_spawn", return_value=987654), \
+                 mock.patch.object(run.os, "wait4", side_effect=wait), \
+                 mock.patch.object(run.os, "killpg") as kill, \
+                 mock.patch.object(run.signal, "signal", side_effect=handler.__setitem__), \
+                 mock.patch.object(run.signal, "setitimer") as timer, \
+                 mock.patch.object(run.time, "monotonic", side_effect=times), mock.patch.object(lab, "end_group"):
+                root = Path(folder)
+                result = run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log", 20, 10, anchor=lambda: next(looked))
+            self.assertEqual({key: result[key] for key in said}, said)
+            kill.assert_called_once_with(987654, signal.SIGINT)
+            delays = [call.args[1] for call in timer.call_args_list]
+            if said["anchor_seconds"]:
+                self.assertEqual([round(delay, 6) for delay in delays[:4]], [.008, .01, 10.0, 5])
+            else:
+                self.assertEqual([round(delay, 6) for delay in delays[:2]], [.008, 5])
 
     def test_a_command_gone_by_its_deadline_is_not_a_timeout(self):
         handler = {}
@@ -513,7 +544,7 @@ class OneRunTests(unittest.TestCase):
                          dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, exit_code=0, timeout=False,
                               interruption_sent=False)])
 
-        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None):
+        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None, anchor=None):
             # a listing of the folder costs bytes too, but is no part of the file
             access = self.root / "access.jsonl"
             access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "status": 206, "bytes": 3}\n'
@@ -648,6 +679,39 @@ class OneRunTests(unittest.TestCase):
         self.assertEqual([row["log"] for row in rows], logs)
         self.assertEqual(len({len(log) for log in logs}), 1, logs)
         self.assertNotEqual(*logs)
+
+    def test_a_resume_and_a_dropped_link_count_from_the_tools_own_anchor(self):
+        def began():
+            return None
+
+        class Library(tools.Tool):
+            name = "library"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+            def anchor(self, workdir):
+                return began
+
+        given = []
+
+        def measured(*args, during=None, anchor=None, interrupt_after=None, **kwargs):
+            given.append((interrupt_after, anchor))
+            return dict(wall_seconds=33, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False,
+                        interruption_sent=interrupt_after is not None)
+
+        self.one_run(Library("unused"), measured, dict(self.case, id="s7", base="s1", profile="home"))
+        # the first attempt's ctrl-c counts from the anchor; the resume runs to its end
+        self.assertEqual(given, [(10, began), (None, None)])
+        given.clear()
+
+        class Drop:
+            def __init__(self, *args):
+                self.record = dict(dropped_at=10.0, restored_at=20.0, error=None)
+
+        with mock.patch.object(lab, "LinkDrop", Drop), mock.patch.object(lab, "profile"):
+            self.one_run(Library("unused"), measured, dict(self.case, id="s10", base="s1", profile="home"))
+        self.assertEqual(given, [(None, began)])
 
     def test_dvc_bytes_count_by_the_paths_it_stores_files_under(self):
         class Dvc(tools.Tool):

@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -166,6 +167,27 @@ class FixtureTests(unittest.TestCase):
             self.assertTrue(dropped.wait(30))
             drop.end()
         self.assertEqual((drop.record["restored_at"], drop.record["error"]), (None, "RuntimeError: tc failed"))
+
+    def test_a_link_drop_counts_from_the_commands_own_anchor(self):
+        events, start = [], time.monotonic()
+        marks = iter([None, None, start])
+
+        def anchor():
+            mark = next(marks, start)
+            events.append(("looked", mark is not None))
+            return mark
+
+        def hole(profile, on):
+            events.append((profile, on))
+
+        drop = lab.LinkDrop("home", after=0, length=0)
+        with mock.patch.object(lab, "blackhole", side_effect=hole):
+            drop.begin(start, anchor)
+            drop.thread.join(30)
+            drop.end()
+        # it looked until the command's own work began, and only then dropped the link
+        self.assertEqual(events, [("looked", False), ("looked", False), ("looked", True), ("home", True), ("home", False)])
+        self.assertEqual(drop.record["anchor_at"], 0)
 
     def test_forgetting_connections_resets_only_the_lab(self):
         from unittest import mock
@@ -689,6 +711,11 @@ class ToolTests(unittest.TestCase):
         env = dict(os.environ, PYTHONPATH=str(stub), STEPS=str(steps), POOCH_CACHE=str(self.work / "cache"))
         ran = subprocess.run([sys.executable, argv[1]], env=env, capture_output=True, text=True)
         self.assertEqual(ran.returncode, 0, ran.stderr)
+        # the script marks when its calls began, on the clock every process shares, for faults to count from
+        began = tool.anchor(self.work)()
+        self.assertIsInstance(began, float)
+        self.assertLessEqual(began, time.monotonic())
+        self.assertIsNone(tools.Curl("unused").anchor(self.work))
         self.assertEqual(steps.read_text().splitlines(), ["imported"] + [
             f"{item['url']} sha256:{item['sha256']} {item['name']} {self.work / 'cache'} None" for item in self.FILES])
         calls = json.loads((self.work / "calls.json").read_text())
@@ -698,6 +725,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(result["process"], dict(wall_seconds=9.0, user_seconds=2.0, sys_seconds=1.0))
         self.assertEqual((result["clock"], result["maxrss_bytes"]), ("call inside a warm interpreter", 5))
         self.assertFalse((self.work / "calls.json").exists())
+        self.assertIsNone(tool.anchor(self.work)())
         # stopped in a call, as s7's first attempt is, the script still reports how long its calls ran
         env["STOP_AT"] = self.FILES[0]["name"]
         stopped = subprocess.run([sys.executable, argv[1]], env=env, capture_output=True, text=True)

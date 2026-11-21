@@ -25,6 +25,8 @@ ROUNDS = {"lan": 10, "home": 10, "poor": 10}
 # s10's link drops this many seconds into the download, for this many seconds
 LINK_DROP = (10, 10)
 TIME = "/usr/bin/time"
+# how often an interruption counted from a command's own anchor looks for it
+POLL = .01
 
 
 def verify(outputs):
@@ -61,10 +63,12 @@ def seconds_choice(value):
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
-def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None, during=None):
+def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None, during=None, anchor=None):
     """wall, cpu, peak memory and exit code of argv under GNU time in its own process group, SIGINT
     at the deadline then SIGKILL, and whether it timed out or was interrupted. `during`, such as a
-    lab.LinkDrop, begins as the command starts and ends before this returns, whatever happened."""
+    lab.LinkDrop, begins as the command starts and ends before this returns, whatever happened.
+    `anchor`, a callable giving the time.monotonic() reading a command's own work began at, or None
+    until it has, moves the interruption and `during` from the command's start to that moment."""
     timeout = positive_seconds(timeout)
     if interrupt_after is not None:
         interrupt_after = positive_seconds(interrupt_after)
@@ -83,9 +87,25 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
     waited = False
     handler_set = False
     previous_handler = signal.getsignal(signal.SIGALRM)
+    # an interruption counted from an anchor looks for it every POLL seconds until it is there
+    waiting = interrupt_after is not None and anchor is not None
+    anchored = None
 
     def alarm(_signal, _frame):
-        nonlocal interrupted, timed_out, signalled, stage
+        nonlocal interrupted, timed_out, signalled, stage, waiting, anchored
+        if waiting:
+            elapsed = time.monotonic() - start
+            at = anchor()
+            if at is None and elapsed < timeout:
+                signal.setitimer(signal.ITIMER_REAL, POLL)
+                return
+            waiting = False
+            if at is not None:
+                anchored = at - start
+                fire = min(anchored + interrupt_after, timeout)
+                if fire > elapsed:
+                    signal.setitimer(signal.ITIMER_REAL, fire - elapsed)
+                    return
         stage += 1
         if stage == 1:
             now = time.monotonic()
@@ -94,7 +114,10 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
             except ProcessLookupError:
                 return
             signalled = now
-            interrupted = interrupt_after is not None and interrupt_after < timeout
+            if anchor is not None and interrupt_after is not None:
+                interrupted = anchored is not None and anchored + interrupt_after < timeout
+            else:
+                interrupted = interrupt_after is not None and interrupt_after < timeout
             timed_out = not interrupted
             signal.setitimer(signal.ITIMER_REAL, 5)
         elif stage == 2:
@@ -128,10 +151,10 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
             finally:
                 os.close(log)
         if during is not None:
-            during.begin(start)
+            during.begin(start, anchor)
         signal.signal(signal.SIGALRM, alarm)
         handler_set = True
-        deadline = min(timeout, interrupt_after) if interrupt_after is not None else timeout
+        deadline = POLL if waiting else min(timeout, interrupt_after) if interrupt_after is not None else timeout
         signal.setitimer(signal.ITIMER_REAL, max(1e-6, deadline - (time.monotonic() - start)))
         _, status, usage = os.wait4(pid, 0)
         waited = True
@@ -166,7 +189,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
     result = dict(wall_seconds=now - start, user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime,
                   maxrss_bytes=None, exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
                   interruption_sent=interrupted, cpu_affinity=effective_cpus,
-                  timeout_seconds=timeout, interrupt_after_seconds=interrupt_after)
+                  timeout_seconds=timeout, interrupt_after_seconds=interrupt_after, anchor_seconds=anchored)
     try:
         report = usage_file.read_text().splitlines()
         usage_file.unlink()
@@ -433,14 +456,14 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
         row["free_before_bytes"] = before
         if case["id"] == "s7":
             first = tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10,
-                                       cpus=cpus), workdir)
+                                       cpus=cpus, anchor=tool.anchor(workdir)), workdir)
             row["first_attempt"] = first
             argv = tool.command(case, workdir)
             row["resume_command"] = exact_command(argv, workdir)
             row["resume_command"]["cwd"] = str(tool.cwd(workdir))
         drop = lab.LinkDrop(case["profile"], *LINK_DROP) if case["id"] == "s10" else None
-        row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus, during=drop),
-                              workdir))
+        row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus, during=drop,
+                                      anchor=tool.anchor(workdir) if drop is not None else None), workdir))
         if drop is not None:
             row["link_drop"] = drop.record
         if case["id"] == "s7":

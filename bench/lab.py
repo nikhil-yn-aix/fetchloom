@@ -260,27 +260,37 @@ def blackhole(name, on):
 
 class LinkDrop:
     """a link that drops for `length` seconds from `after` seconds into a run, with nothing stopped;
-    `record` says when it dropped and came back, in seconds from the run's start."""
+    `record` says when it dropped and came back, in seconds from the run's start, and when the
+    command's own work began when the drop counts from that."""
+    POLL = .01
 
     def __init__(self, profile, after=10, length=10):
         self.profile, self.after, self.length = profile, after, length
-        self.record = dict(after_seconds=after, length_seconds=length, dropped_at=None, restored_at=None, error=None)
+        self.record = dict(after_seconds=after, length_seconds=length, anchor_at=None, dropped_at=None, restored_at=None,
+                           error=None)
         self.stopped = threading.Event()
         self.thread = None
 
-    def begin(self, start):
-        """starts the clock of the drop at `start`, a time.monotonic() reading."""
-        self.thread = threading.Thread(target=self.drop, args=(start,), daemon=True)
+    def begin(self, start, anchor=None):
+        """starts the clock of the drop at `start`, a time.monotonic() reading, or once `anchor`, a
+        callable giving such a reading or None, gives one."""
+        self.thread = threading.Thread(target=self.drop, args=(start, anchor), daemon=True)
         self.thread.start()
 
-    def drop(self, start):
+    def drop(self, start, anchor):
         try:
-            if self.stopped.wait(max(0, start + self.after - time.monotonic())):
+            base = start
+            if anchor is not None:
+                while (base := anchor()) is None:
+                    if self.stopped.wait(self.POLL):
+                        return
+                self.record["anchor_at"] = base - start
+            if self.stopped.wait(max(0, base + self.after - time.monotonic())):
                 return
             blackhole(self.profile, True)
             self.record["dropped_at"] = time.monotonic() - start
             # a run that ends first gets its link back at once: the drop never outlives it
-            self.stopped.wait(max(0, start + self.after + self.length - time.monotonic()))
+            self.stopped.wait(max(0, base + self.after + self.length - time.monotonic()))
             blackhole(self.profile, False)
             self.record["restored_at"] = time.monotonic() - start
         except Exception as error:
