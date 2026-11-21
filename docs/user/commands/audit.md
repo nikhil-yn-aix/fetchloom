@@ -40,7 +40,7 @@ rows go to stdout: for each dataset with a file not served, not checked, or serv
     Changed iris · license cc-by-4.0 → cc0-1.0
 ```
 
-a dataset whose files are all served gets a line on stderr, as `Served iris · 1 file`. the closing line, hints and warnings go to stderr too; the hint names the command that takes a newer version, as ``hint: `fetchloom lock --upgrade iris` pins what their sources list now; check the change before you commit data.lock``. at a terminal each kind shows at most 20 files of a dataset, then how many more; `-v`, a pipe or a file shows them all.
+a dataset whose files are all served gets a line on stderr, as `Served iris · 1 file`, ending `· 1 answered without a size` when its server gave a file without saying its size, and the closing line then counts those apart from the files served at their pinned sizes. the closing line, hints and warnings go to stderr too; the hint names the command that takes a newer version, as ``hint: `fetchloom lock --upgrade iris` pins what their sources list now; check the change before you commit data.lock``. at a terminal each kind shows at most 20 files of a dataset, then how many more; `-v`, a pipe or a file shows them all.
 
 ## JSON
 

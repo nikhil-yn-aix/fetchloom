@@ -312,6 +312,10 @@ fn a_file_not_checked_is_never_called_lost() -> Result {
         told.contains("Served iris · 1 file · 1 answered without a size"),
         "{told}"
     );
+    assert!(
+        told.contains("Ok the file in data.lock is still served, without its size, and its source lists it as data.lock pins it"),
+        "{told}"
+    );
     for (status, code, kind) in [
         ("503 Service Unavailable", 20, "network.status"),
         ("403 Forbidden", 40, "auth.required"),

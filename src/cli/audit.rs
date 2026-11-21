@@ -781,16 +781,10 @@ fn tell(output: &Output, report: &Report) {
     let unasked = report.unasked().count();
     let moved = report.moved();
     if unserved == 0 && report.unchecked == 0 && gone + unasked + moved.len() == 0 {
-        // a size is all a first byte's answer can vouch for
-        let all = match report.files {
-            0 => "data.lock pins no file to ask about".to_owned(),
-            1 => "the file in data.lock is still served at its pinned size, and its source lists it as data.lock pins it".to_owned(),
-            files => format!(
-                "all {} files in data.lock are still served at their pinned sizes, and their sources list each dataset as data.lock pins it",
-                units::grouped(files)
-            ),
-        };
-        output.done("Ok", &format!("{all}{}", but_waiting(report)));
+        output.done(
+            "Ok",
+            &format!("{}{}", all_served(report), but_waiting(report)),
+        );
         return;
     }
     let of_all = |count: u64| {
@@ -928,6 +922,26 @@ fn helps(report: &Report) -> Vec<&str> {
         }
     }
     helps
+}
+
+/// the closing line of an audit whose every file is served, counting those served without a size
+/// apart: a size is all a first byte's answer can vouch for, and one served without it has less.
+fn all_served(report: &Report) -> String {
+    let no_size: u64 = report.datasets.iter().map(|dataset| dataset.no_size).sum();
+    match (report.files, no_size) {
+        (0, _) => "data.lock pins no file to ask about".to_owned(),
+        (1, 0) => "the file in data.lock is still served at its pinned size, and its source lists it as data.lock pins it".to_owned(),
+        (1, _) => "the file in data.lock is still served, without its size, and its source lists it as data.lock pins it".to_owned(),
+        (files, 0) => format!(
+            "all {} files in data.lock are still served at their pinned sizes, and their sources list each dataset as data.lock pins it",
+            units::grouped(files)
+        ),
+        (files, no_size) => format!(
+            "all {} files in data.lock are still served, {} of them without a size, and their sources list each dataset as data.lock pins it",
+            units::grouped(files),
+            units::grouped(no_size)
+        ),
+    }
 }
 
 /// a step on stderr for `dataset` when its sources serve every file, else a row on stdout for its
