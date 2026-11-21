@@ -325,20 +325,20 @@ fn two_changes_to_one_dataset_need_a_choice() {
     .unwrap_err();
     assert_eq!(error.kind, Kind::Unconfirmed);
     assert_eq!(error.message, "the merge needs a choice for version");
-    let pins = |bytes: &[u8]| {
+    // each side's digest as sha256sum begins it
+    let pins = |bytes: &[u8], short: &str| {
         format!(
-            "1 file \u{b7} {} B; version.csv \u{b7} {} B \u{b7} sha256 {}",
+            "1 file \u{b7} {} B; version.csv \u{b7} {} B \u{b7} sha256 {short}",
             bytes.len(),
             bytes.len(),
-            digest::sha256(bytes).short()
         )
     };
     assert_eq!(
         error.details,
         [
             "version: each side changed it its own way".to_owned(),
-            format!("version on ours: {}", pins(b"2,left")),
-            format!("version on theirs: {}", pins(b"3,right")),
+            format!("version on ours: {}", pins(b"2,left", "67db8319547a")),
+            format!("version on theirs: {}", pins(b"3,right", "bc2e179e0562")),
         ]
     );
     assert_eq!(
@@ -686,10 +686,8 @@ fn a_removal_waits_for_a_choice_when_the_other_side_pinned_anew() {
         [
             "beta: one side changed it and the other removed it".to_owned(),
             "beta on ours: not in data.lock".to_owned(),
-            format!(
-                "beta on theirs: 1 file \u{b7} 3 B; beta.csv \u{b7} 3 B \u{b7} sha256 {}",
-                digest::sha256(b"new").short()
-            ),
+            "beta on theirs: 1 file \u{b7} 3 B; beta.csv \u{b7} 3 B \u{b7} sha256 11507a0e2f5e"
+                .to_owned(),
         ]
     );
     let result = error.result.unwrap();
