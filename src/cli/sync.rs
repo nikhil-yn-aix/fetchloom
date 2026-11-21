@@ -2333,8 +2333,9 @@ impl<'a> Loop<'a> {
         })
     }
 
-    /// the error for the files of `import` an offline run lacks: no link fetches an import, so its
-    /// help offers only the folder it came from or a folder mirror.
+    /// the error for the files of `import` an offline run lacks: no link fetches an import, so it
+    /// is the error an online run gives, and its help offers only the folder the files came from or
+    /// a folder mirror.
     fn offline_imported(
         &self,
         manifest: &Manifest,
@@ -2343,7 +2344,7 @@ impl<'a> Loop<'a> {
     ) -> Error {
         let folder = plan::folder(manifest, import);
         let mirrored = !self.context.mirrors.mirrors.list.is_empty();
-        let message = local::imported_elsewhere(import, &folder, mirrored).message;
+        let elsewhere = local::imported_elsewhere(import, &folder, mirrored);
         let labels: Vec<String> = lacking
             .iter()
             .filter(|(dataset, file)| *dataset == import && file.url.is_empty())
@@ -2353,7 +2354,8 @@ impl<'a> Loop<'a> {
             "no link fetches an import, so going online does not help: copy its files from the folder they came from to {folder} by hand, then run `{}`, or sync with `--mirror <folder>` naming a folder mirror that holds them",
             super::project::command("sync")
         );
-        Error::new(Kind::OfflineMissing, message)
+        // going online supplies no import, so the run fails as it does online
+        Error::new(elsewhere.kind, elsewhere.message)
             .details_up_to(&labels, NAMED)
             .help(help)
     }

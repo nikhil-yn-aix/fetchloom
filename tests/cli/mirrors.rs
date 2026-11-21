@@ -394,7 +394,12 @@ fn an_import_file_a_mirror_lacks_is_named_as_a_download_is() -> Result {
             10,
             lacked.as_str(),
         ),
-        ("--offline", "offline.missing", 20, "flowers/sepals.csv"),
+        (
+            "--offline",
+            "reference.unresolved",
+            10,
+            "flowers/sepals.csv",
+        ),
         ("", "reference.unresolved", 10, lacked.as_str()),
     ] {
         let mut arguments = vec!["--json", "sync", "--locked"];

@@ -315,8 +315,9 @@ fn a_damaged_list_is_refused() -> Result {
     Ok(())
 }
 
-/// no link fetches an import, so the help offers only ways without a network and no rerun, and
-/// copying the files from the folder they came from, as it says, lets the sync work offline.
+/// no link fetches an import, so going online would not help: the run fails as it does online,
+/// its help offers only ways without a network and no rerun, and copying the files from the
+/// folder they came from, as it says, lets the sync work offline.
 #[test]
 fn an_import_missing_offline_is_never_offered_a_download() -> Result {
     let sandbox = Sandbox::new()?;
@@ -333,10 +334,10 @@ fn an_import_missing_offline_is_never_offered_a_download() -> Result {
             .output()
     };
     let output = sync()?;
-    assert_eq!(output.status.code(), Some(20), "{}", text(&output.stdout)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stdout)?);
     let document = crate::support::json(&output)?;
     let error = &document["errors"][0];
-    assert_eq!(error["kind"], "offline.missing");
+    assert_eq!(error["kind"], "reference.unresolved");
     assert_eq!(
         error["message"],
         "flowers was imported from files, and this machine's cache does not hold them"

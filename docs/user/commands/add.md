@@ -125,7 +125,7 @@ no source can list an import again. `fetchloom lock --upgrade <name>` refuses it
 
 ### a clone without the files
 
-a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, naming up to ten of the files it lacks. with `--json`, `fix` is null, since sync fails again until the files are there:
+a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, offline too, since going online cannot supply them, naming up to ten of the files it lacks. with `--json`, `fix` is null, since sync fails again until the files are there:
 
 ```text
 error: flowers was imported from files, and this machine's cache does not hold them
