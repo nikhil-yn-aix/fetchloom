@@ -76,6 +76,8 @@ an edit through a hardlink, after making the file writable, changes the cache's 
     Damaged data/iris/iris.csv · linked to the cache's copy, which was changed
 ```
 
+the change reaches every project that links that copy, so a hint, from status and from the sync that puts the file back, names the other projects on the cache that place the same files, up to three, and says that `fetchloom sync` in each puts them back. once a sync in one project gives the cache the pinned bytes again, a file elsewhere that still holds the changed bytes is linked to them no more, and its row says `was linked to the cache's copy, which was changed`.
+
 after that sync, status lists the kept copy as extra and says what to do with it:
 
 ```text

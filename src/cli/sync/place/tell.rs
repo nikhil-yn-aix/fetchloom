@@ -156,6 +156,9 @@ fn warn_restored(output: &Output, placement: &Placement) {
             output.warn_with(Warning::PlaceRestored, &said, &help);
         }
     }
+    if !placement.shared_with.is_empty() {
+        output.hint(&crate::cli::status::shared_hint(&placement.shared_with));
+    }
 }
 
 /// where the changed copy of `path` was kept, if sync kept it.

@@ -1462,6 +1462,49 @@ fn status_verify_counts_the_download_a_changed_link_needs() -> Result {
     Ok(())
 }
 
+/// an edit through one project's link changes the other's file too: status and the sync that puts
+/// it back name the project that shares the copy, and once the cache holds the pinned bytes again,
+/// the edited project's file is told as linked no more.
+#[test]
+fn a_change_through_a_shared_link_names_the_other_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    let shared = |project: &Path| {
+        format!(
+            "hint: {} places the same files from this cache, so a link there may hold the changed bytes too: `fetchloom sync` there puts them back",
+            project.display()
+        )
+    };
+    let status = sandbox
+        .command_in(&other, &["status", "--verify"])
+        .output()?;
+    let (stdout, stderr) = (text(&status.stdout)?, text(&status.stderr)?);
+    assert!(
+        stdout
+            .contains("Damaged data/iris/iris.csv · linked to the cache's copy, which was changed"),
+        "{stdout}"
+    );
+    assert!(stderr.contains(&shared(&sandbox.work())), "{stderr}");
+    let synced = sandbox.command_in(&other, &["sync", "--verify"]).output()?;
+    let stderr = text(&synced.stderr)?;
+    assert_eq!(synced.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(&shared(&sandbox.work())), "{stderr}");
+    let status = text(&sandbox.run(&["status"])?.stdout)?;
+    assert!(
+        status.contains(
+            "Damaged data/iris/iris.csv · was linked to the cache's copy, which was changed"
+        ),
+        "{status}"
+    );
+    Ok(())
+}
+
 /// an edit keeping the size and time shows in no listing, so the cache's mark is all the other
 /// project has. status, sync and path agree on it, and the copy sync keeps is all that differs.
 #[test]

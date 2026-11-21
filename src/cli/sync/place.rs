@@ -99,6 +99,10 @@ pub(crate) struct Placement {
     /// those of `restored` that were copies or reflinks, which only `--verify` finds changed.
     #[serde(skip)]
     pub(crate) repaired: HashSet<String>,
+    /// the other projects on the cache that place the files of `restored` that were linked to
+    /// its changed copy, whose links may hold the changed bytes too.
+    #[serde(skip)]
+    pub(crate) shared_with: Vec<PathBuf>,
     /// entries `--force` removed from the way of placed files, by path.
     #[serde(skip)]
     pub(crate) cleared: Vec<(String, Entry)>,
@@ -2107,6 +2111,7 @@ impl<'a> Placing<'a> {
         if let Some(error) = failure {
             return Err(ended(error));
         }
+        placement.shared_with = shared_with(project, cache, &targets, &placement, stop);
         tell(output, manifest, &tallies, &placement, told, &scope);
         Ok(placement)
     }
@@ -3233,6 +3238,33 @@ pub(crate) fn take_in_place(
         }
     }
     other
+}
+
+/// the other projects on `cache` that place a file of `targets` that `placement` put back as
+/// linked to the cache's changed copy; none when it put back none, so no project is read then.
+fn shared_with(
+    project: &Project,
+    cache: &Cache,
+    targets: &[Target<'_>],
+    placement: &Placement,
+    stop: &Stop,
+) -> Vec<PathBuf> {
+    if placement.restored.len() == placement.repaired.len() {
+        return Vec::new();
+    }
+    let linked: HashSet<Sha256> = targets
+        .iter()
+        .filter(|target| {
+            placement.restored.contains(&target.path) && !placement.repaired.contains(&target.path)
+        })
+        .map(|target| target.sha256)
+        .collect();
+    if linked.is_empty() {
+        return Vec::new();
+    }
+    crate::cli::cache::needing(cache, (&project.root, None), &linked, stop)
+        .map(|needing| needing.others)
+        .unwrap_or_default()
 }
 
 /// counts a replaced file as restored when no edit of this project's put it in the survey.

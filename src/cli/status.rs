@@ -134,6 +134,14 @@ pub(super) struct Status {
     /// damaged files linked to the cache's changed copy, for the reason the terminal gives.
     #[serde(skip)]
     linked: HashSet<String>,
+    /// those of `linked` that are still the cache's own copy, so the cache lacks their pinned
+    /// bytes too; the rest were, until a sync elsewhere gave the cache those bytes again.
+    #[serde(skip)]
+    cached_copy: HashSet<String>,
+    /// the other projects on this cache that place the files of `linked`, which changed with
+    /// them.
+    #[serde(skip)]
+    shared_with: Vec<PathBuf>,
     /// edited files placed as hardlinks, whose change every project sharing the link sees.
     #[serde(skip)]
     shared: HashSet<String>,
@@ -270,10 +278,41 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
 /// import.
 const FIRST: &str = "once the steps above are done, ";
 
+/// says which other `projects` on the cache place the files whose cache copy changed, since one
+/// edit through a link changes every link to that copy.
+pub(super) fn shared_hint(projects: &[PathBuf]) -> String {
+    const NAMED: usize = 3;
+    let mut named: Vec<String> = projects
+        .iter()
+        .take(NAMED)
+        .map(|root| units::path(root))
+        .collect();
+    if projects.len() > NAMED {
+        named.push(units::count(
+            (projects.len() - NAMED) as u64,
+            "more project",
+            "more projects",
+        ));
+    }
+    let (places, there) = if projects.len() == 1 {
+        ("places", "there")
+    } else {
+        ("place", "in each")
+    };
+    format!(
+        "{} {places} the same files from this cache, so a link {there} may hold the changed bytes too: `{}` {there} puts them back",
+        units::listed(&named, "and"),
+        super::project::command("sync")
+    )
+}
+
 /// how a sync with more than its plain run sets right what `status` found: hashing every file,
 /// replacing a person's file, or reading one this account could not.
 fn tell_repairs(output: &Output, status: &Status) {
     let first = if status.sync_refused { FIRST } else { "" };
+    if !status.shared_with.is_empty() {
+        output.hint(&shared_hint(&status.shared_with));
+    }
     if !status.hashed_only.is_empty() {
         output.hint(&format!(
             "{first}`{}` checks every file the same way and puts back those whose bytes changed",
@@ -773,7 +812,7 @@ fn check(
             paths.push(path.clone());
         }
     }
-    status.downloads = downloads(&status, &planned, (&cache, &project.root));
+    note_repairs(&mut status, &planned, (&cache, &project.root), stop)?;
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -920,14 +959,68 @@ fn is_cache_copy(file: &std::path::Path, object: &std::path::Path) -> bool {
     }
 }
 
-/// the files a sync of `status` would download, once each, by the link it starts at: one neither
-/// the cache nor the data folder below `root` holds, or the archive holding it when the cache
-/// lacks that too, and each archive never unpacked here that the cache lacks, which a sync
-/// downloads first.
-fn downloads(
+/// notes in `status` what putting its files back takes: the downloads, and which damaged files
+/// linked to the cache's changed copy below `root` are still that copy, with the other projects
+/// on `cache` that place any of their files, which changed with them.
+fn note_repairs(
+    status: &mut Status,
+    planned: &plan::Plan<'_>,
+    (cache, root): (&Cache, &std::path::Path),
+    stop: &Stop,
+) -> Result<(), Error> {
+    (status.cached_copy, status.shared_with) = linked_copies(status, planned, (cache, root), stop)?;
+    status.downloads = downloads(status, planned, cache);
+    Ok(())
+}
+
+/// which of the damaged files `status` finds linked to the cache's changed copy below `root` are
+/// still that copy, and the other projects on `cache` that place any of their files. none without
+/// such a file, so no project is read then.
+fn linked_copies(
     status: &Status,
     planned: &plan::Plan<'_>,
     (cache, root): (&Cache, &std::path::Path),
+    stop: &Stop,
+) -> Result<(HashSet<String>, Vec<PathBuf>), Error> {
+    if status.linked.is_empty() {
+        return Ok((HashSet::new(), Vec::new()));
+    }
+    let linked: Vec<&plan::Target<'_>> = planned
+        .targets
+        .iter()
+        .filter(|target| status.linked.contains(&target.path))
+        .collect();
+    let cached = linked
+        .iter()
+        .filter(|target| {
+            is_cache_copy(
+                &native(root, &target.path),
+                &cache.object_path(&target.sha256),
+            )
+        })
+        .map(|target| target.path.clone())
+        .collect();
+    let objects = linked.iter().map(|target| target.sha256).collect();
+    // the other projects only word a hint, so one that cannot be read leaves it out, but a stop
+    // ends status as anywhere else
+    let shared = match super::cache::needing(cache, (root, None), &objects, stop) {
+        Ok(needing) => needing.others,
+        Err(error) if error.kind == crate::error::Kind::Interrupted => return Err(error),
+        Err(error) => {
+            tracing::debug!(%error, "could not tell which projects share a changed copy");
+            Vec::new()
+        }
+    };
+    Ok((cached, shared))
+}
+
+/// the files a sync of `status` would download, once each, by the link it starts at: one neither
+/// the cache nor the data folder holds, or the archive holding it when the cache lacks that too,
+/// and each archive never unpacked here that the cache lacks, which a sync downloads first.
+fn downloads(
+    status: &Status,
+    planned: &plan::Plan<'_>,
+    cache: &Cache,
 ) -> Vec<(url::Url, Option<u64>)> {
     let placing: HashSet<&str> = status
         .missing
@@ -940,13 +1033,7 @@ fn downloads(
     let changed: HashSet<&Sha256> = planned
         .targets
         .iter()
-        .filter(|target| status.linked.contains(&target.path))
-        .filter(|target| {
-            is_cache_copy(
-                &native(root, &target.path),
-                &cache.object_path(&target.sha256),
-            )
-        })
+        .filter(|target| status.cached_copy.contains(&target.path))
         .map(|target| &target.sha256)
         .collect();
     let mut seen = HashSet::new();
@@ -1722,8 +1809,10 @@ fn list(output: &Output, status: &Status) {
         .map(|blocker| (format!("{} · {}", blocker.path, in_the_way(blocker)), 1));
     report_rows(output, "Blocked", blocked.collect(), shown);
     let damaged = status.damaged.iter().map(|path| {
-        let cause = if status.linked.contains(path) {
+        let cause = if status.cached_copy.contains(path) {
             "linked to the cache's copy, which was changed"
+        } else if status.linked.contains(path) {
+            "was linked to the cache's copy, which was changed"
         } else {
             "its bytes changed though its size and time did not"
         };
