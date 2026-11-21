@@ -2559,6 +2559,34 @@ fn a_body_of_unstated_length_stops_past_the_pinned_size() {
     );
 }
 
+/// a body of no stated length ends where its connection does, so one that ends before the size a
+/// pin states was cut on its way, and goes on from there as any other cut body does.
+#[test]
+fn a_body_of_unstated_length_cut_before_the_pinned_size_resumes() {
+    let cut = "HTTP/1.1 200 OK\r\nConnection: close\r\nETag: \"v1\"\r\n\r\naaaa";
+    let (url, asked) = serve(vec![
+        cut.as_bytes().to_vec(),
+        reply(
+            "206 Partial Content",
+            &[("Content-Range", "bytes 4-7/8"), ("ETag", "\"v1\"")],
+            b"bbbb",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetch = Fetch {
+        expect: pin(b"aaaabbbb"),
+        ..Fetch::new(url.clone())
+    };
+    let fetched = block_on(net(&url).download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"aaaabbbb"
+    );
+    let heads = asked.lock().unwrap();
+    assert!(heads[1].contains("range: bytes=4-"), "{heads:?}");
+}
+
 #[test]
 fn malformed_tags_do_not_enable_range_splitting() {
     let url = Url::parse("https://example.org/file").unwrap();

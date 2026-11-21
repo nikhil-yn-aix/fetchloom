@@ -1356,8 +1356,17 @@ impl Net {
         let capped = bounded(fetch, offset, on);
         let (writer, response, total, measured) = match watch {
             Some(total) if at_once => (writer, response, total, None),
+            // a body of no stated length ends with its connection, so one that ends before the
+            // pinned size was cut on its way, as a stated length would have shown
             _ => match self
-                .stream(from, writer, response, total, &capped, monitor)
+                .stream(
+                    from,
+                    writer,
+                    response,
+                    total.or(fetch.binding().size),
+                    &capped,
+                    monitor,
+                )
                 .await?
             {
                 Run::Whole(mut writer) => {
