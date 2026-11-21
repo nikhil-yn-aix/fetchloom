@@ -69,7 +69,7 @@ more: `fetchloom --help` lists every command
 docs: https://nikhil-yn-aix.github.io/fetchloom/
 ```
 
-bare `fetchloom` prints this outside a project, below its name and version; inside a project it shows the project's status. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/guides/scripts.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/python-helper.md).
+bare `fetchloom` prints this outside a project, below its name and version; inside a project it shows the project's status. `fetchloom add iris` shows a list to pick from, and the dataset takes its name from the one you pick, such as `iris-species` for kaggle's `uciml/iris`, so use the name its `Added` line gives, as in `fetchloom path iris-species`. [scripting](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/guides/scripts.md) covers JSON output and the [python helper](https://github.com/nikhil-yn-aix/fetchloom/blob/main/docs/user/reference/python-helper.md).
 
 ## docs
 
