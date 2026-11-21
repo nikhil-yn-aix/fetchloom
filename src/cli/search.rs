@@ -34,10 +34,9 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     }
     // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() && !piped {
-        let parts = parts(output, &report.candidates, output.width(), LIST_LEAD);
-        let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
-            .min(crate::output::REFERENCE_COLUMN);
-        for shown in &parts {
+        let table = parts(output, &report.candidates, output.width(), LIST_LEAD);
+        let pad = table.column;
+        for shown in &table.rows {
             if shown.title_below {
                 output.candidate_under(&shown.reference, &shown.title, &shown.facts);
             } else {
@@ -300,17 +299,24 @@ pub(super) async fn pick(
     let width = console::Term::stderr()
         .size_checked()
         .map(|(_, columns)| usize::from(columns));
-    let parts = parts(output, &report.candidates, width, LIST_LEAD);
-    let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
-        .min(crate::output::REFERENCE_COLUMN);
-    for shown in parts {
+    let table = parts(output, &report.candidates, width, LIST_LEAD);
+    for shown in table.rows {
+        if shown.title_below {
+            output.item(&shown.reference);
+            for under in [&shown.title, &shown.facts] {
+                if !under.is_empty() {
+                    output.item(&format!("  {under}"));
+                }
+            }
+            continue;
+        }
         // facts that do not fit beside the reference go on a line of their own under it
         if shown.below {
             output.item(&shown.reference);
             output.item(&format!("  {}", shown.facts));
             continue;
         }
-        output.item(&shown.line(pad));
+        output.item(&shown.line(table.column));
     }
     Err(error)
 }
@@ -542,29 +548,39 @@ impl Shown {
 const TITLE_LEAST: usize = 12;
 const TITLE_MOST: usize = 52;
 
-/// each candidate's reference, title and facts in columns all rows share, in `width` after `lead`:
-/// downloads give way first, then titles, a paper's byline before its title, the rest goes under.
-fn parts(
-    output: &Output,
-    candidates: &[Candidate],
-    width: Option<usize>,
-    lead: usize,
-) -> Vec<Shown> {
+/// the fewest columns a title cut short keeps on a row whose reference runs past its column, with
+/// what ends it, before that row shows none.
+const TITLE_SHORTEST: usize = 6;
+
+/// the columns a title keeps before the references' column gives way to longer references.
+const TITLE_ROOMY: usize = 20;
+
+/// the rows of a list of matches and the column their titles start at, after the references.
+struct Table {
+    rows: Vec<Shown>,
+    column: usize,
+}
+
+/// what a list of matches shows in its width: whether downloads and download times keep their
+/// columns, how wide the references' column is, and how wide a title may be, none once titles go
+/// under their references.
+struct Plan {
+    downloads: bool,
+    time: bool,
+    column: usize,
+    most: Option<usize>,
+}
+
+/// each candidate's reference, title and facts in columns all rows share, in `width` after `lead`.
+/// the title gives way last: downloads first, then download times, then the references' column
+/// narrows, a longer reference running past it with a shorter title, and only then do titles go
+/// under their references, a paper's byline before its title.
+fn parts(output: &Output, candidates: &[Candidate], width: Option<usize>, lead: usize) -> Table {
     let references: Vec<String> = candidates
         .iter()
         .map(|candidate| candidate.reference.to_string())
         .collect();
     let told = cells(candidates, true);
-    let reference_width =
-        widest(references.iter().map(String::as_str)).min(crate::output::REFERENCE_COLUMN);
-    // what a row leaves after its reference and two spaces, with the last column spare
-    let room = |reference: &str| {
-        width.map(|width| {
-            width.saturating_sub(
-                lead + console::measure_text_width(reference).max(reference_width) + 3,
-            )
-        })
-    };
     let given: Vec<String> = candidates
         .iter()
         .zip(&references)
@@ -579,59 +595,47 @@ fn parts(
                 .collect()
         })
         .collect();
-    let any_title = given.iter().any(|title| !title.is_empty());
-    let shared = room("");
-    let more = console::measure_text_width(output.more());
-    let mut plan = (false, None);
-    for downloads in [true, false] {
-        let facts_width = widest(facts(&told, downloads).iter().map(String::as_str));
-        let gap = if facts_width > 0 { 2 } else { 0 };
-        match shared {
-            None => {
-                plan = (downloads, Some(TITLE_MOST));
-                break;
-            }
-            Some(room) if any_title && room >= facts_width + gap + more + TITLE_LEAST => {
-                plan = (
-                    downloads,
-                    Some((room - facts_width - gap - more).min(TITLE_MOST)),
-                );
-                break;
-            }
-            Some(room) if !any_title && facts_width <= room => {
-                plan = (downloads, Some(TITLE_MOST));
-                break;
-            }
-            Some(_) => {}
-        }
-    }
-    let (downloads, most) = plan;
-    // once titles give way, papers keep theirs and leave out their author lines
-    let facts = match most {
-        Some(_) => facts(&told, downloads),
-        None => facts(&cells(candidates, false), downloads),
+    let plan = plan(output, (&references, &given), &told, width, lead);
+    let column = plan.column;
+    // what a row leaves after its reference and two spaces, with the last column spare
+    let room = |reference: &str| {
+        width.map(|width| {
+            width.saturating_sub(lead + console::measure_text_width(reference).max(column) + 3)
+        })
     };
-    let titles: Vec<String> = given
-        .iter()
-        .map(|title| most.map_or_else(String::new, |most| output.clip(title, most)))
-        .collect();
-    let title_width = widest(titles.iter().map(String::as_str));
-    references
+    let more = console::measure_text_width(output.more());
+    // once titles give way, papers keep theirs and leave out their author lines
+    let facts = match plan.most {
+        Some(_) => facts(&told, plan.downloads, plan.time),
+        None => facts(&cells(candidates, false), plan.downloads, plan.time),
+    };
+    let (titles, title_width) = match plan.most {
+        Some(most) => fitted_titles(output, (&references, &given), column, (most, width)),
+        None => (vec![String::new(); given.len()], 0),
+    };
+    let rows = references
         .into_iter()
         .zip(titles)
         .zip(facts)
-        .zip(candidates.iter().zip(&given))
-        .map(|(((reference, title), facts), (candidate, given))| {
+        .zip(&given)
+        .map(|(((reference, title), facts), given)| {
             let facts = facts.trim_end().to_owned();
-            if most.is_none() && candidate.reference.is_paper() && !given.is_empty() {
+            let under = width.map_or(TITLE_MOST, |width| width.saturating_sub(lead + 1 + more));
+            if plan.most.is_none() && !given.is_empty() {
                 let beside = room(&reference);
-                let under = width.map_or(TITLE_MOST, |width| width.saturating_sub(lead + 1 + more));
                 return paper_row(output, (reference, given), facts, beside, under);
             }
+            // a reference so far past the column that none of its title fits beside it, as a
+            // paper's can be, keeps its title under it
+            if title.is_empty() && !given.is_empty() {
+                return paper_row(output, (reference, given), facts, None, under);
+            }
+            // a reference past the column takes its room from its own title, so the facts line up
+            let past = console::measure_text_width(&reference).saturating_sub(column);
             let title = if facts.is_empty() {
                 title
             } else {
-                pad(&title, title_width, false)
+                pad(&title, title_width.saturating_sub(past), false)
             };
             let rest = [title.as_str(), facts.as_str()]
                 .iter()
@@ -648,7 +652,148 @@ fn parts(
                 title_below: false,
             }
         })
-        .collect()
+        .collect();
+    Table { rows, column }
+}
+
+/// what a list of the matches whose `references` and `given` titles these are shows in `width`
+/// after `lead`, as [`parts`] gives way: the first of downloads and download times to go that
+/// leaves titles [`TITLE_LEAST`] beside the widest reference, else the references' column that
+/// shows the most of the titles, else titles under their references.
+fn plan(
+    output: &Output,
+    (references, given): (&[String], &[String]),
+    told: &[[String; 4]],
+    width: Option<usize>,
+    lead: usize,
+) -> Plan {
+    let any_title = given.iter().any(|title| !title.is_empty());
+    // a reference whose row has no title lines up its facts past the titles' column instead
+    let titled: Vec<&str> = references
+        .iter()
+        .zip(given)
+        .filter(|(_, title)| !title.is_empty() || !any_title)
+        .map(|(reference, _)| reference.as_str())
+        .collect();
+    let full = widest(titled.iter().copied()).min(crate::output::REFERENCE_COLUMN);
+    let more = console::measure_text_width(output.more());
+    // what titles and the references' column share: the line, less the lead, the gaps, the facts
+    // and the last column
+    let spare = |width: usize, facts: usize| {
+        let gap = if facts > 0 { 2 } else { 0 };
+        width.saturating_sub(lead + 3 + facts + gap + more)
+    };
+    for (downloads, time) in [(true, true), (false, true), (false, false)] {
+        let facts_width = widest(facts(told, downloads, time).iter().map(String::as_str));
+        let shown = |most| Plan {
+            downloads,
+            time,
+            column: full,
+            most,
+        };
+        match width {
+            None => return shown(Some(TITLE_MOST)),
+            Some(width) if !any_title => {
+                if width.saturating_sub(lead + full + 3) >= facts_width {
+                    return shown(Some(TITLE_MOST));
+                }
+            }
+            Some(width) => {
+                let spare = spare(width, facts_width);
+                if spare >= full + TITLE_LEAST {
+                    return shown(Some((spare - full).min(TITLE_MOST)));
+                }
+            }
+        }
+    }
+    let narrowest = Plan {
+        downloads: false,
+        time: false,
+        column: full,
+        most: None,
+    };
+    let Some(width) = width.filter(|_| any_title) else {
+        return narrowest;
+    };
+    let spare = spare(
+        width,
+        widest(facts(told, false, false).iter().map(String::as_str)),
+    );
+    // the widest column that leaves the titles a good part of the line, else the narrowest that
+    // leaves them their least: a longer reference runs past it, so the shorter ones line up
+    let columns: Vec<usize> = titled
+        .iter()
+        .map(|reference| console::measure_text_width(reference))
+        .filter(|column| *column <= full)
+        .collect();
+    let roomy = columns
+        .iter()
+        .copied()
+        .filter(|column| spare >= column + TITLE_ROOMY)
+        .max();
+    let least = columns
+        .iter()
+        .copied()
+        .min()
+        .filter(|column| spare >= column + TITLE_LEAST);
+    match roomy.or(least) {
+        Some(column) => Plan {
+            downloads: false,
+            time: false,
+            column,
+            most: Some((spare - column).min(TITLE_MOST)),
+        },
+        None => narrowest,
+    }
+}
+
+/// each row's title in a list whose references' column is `column` wide and whose titles are at
+/// most `most`, with the widest title: on a terminal `width` wide, a row whose reference runs past
+/// the column cuts its title by as much, so its facts still line up, and shows none where too
+/// little is left.
+fn fitted_titles(
+    output: &Output,
+    (references, given): (&[String], &[String]),
+    column: usize,
+    (most, width): (usize, Option<usize>),
+) -> (Vec<String>, usize) {
+    let more = console::measure_text_width(output.more());
+    let past = |reference: &str| console::measure_text_width(reference).saturating_sub(column);
+    let lined: Vec<String> = references
+        .iter()
+        .zip(given)
+        .map(|(reference, title)| {
+            if title.is_empty() || past(reference) > 0 {
+                String::new()
+            } else {
+                output.clip(title, most)
+            }
+        })
+        .collect();
+    let title_width = widest(lined.iter().map(String::as_str));
+    let titles = references
+        .iter()
+        .zip(given)
+        .zip(lined)
+        .map(|((reference, title), lined)| {
+            let past = past(reference);
+            if past == 0 {
+                return lined;
+            }
+            if width.is_none() {
+                return output.clip(title, most);
+            }
+            let room = title_width.saturating_sub(past);
+            if title.is_empty() || room < TITLE_SHORTEST {
+                String::new()
+            } else if console::measure_text_width(title) <= room {
+                title.clone()
+            } else {
+                output.clip(title, room - more)
+            }
+        })
+        .collect();
+    (titles, title_width)
 }
 
 /// each row's size, download time, downloads and note, with a paper's author line before its
@@ -678,8 +823,9 @@ fn cells(candidates: &[Candidate], bylines: bool) -> Vec<[String; 4]> {
         .collect()
 }
 
-/// a paper's row once titles give way: its title in the `beside` columns by the reference, its note
-/// under it when both do not fit, else the title on a line below, cut to `under` columns.
+/// a row whose title has no room in the titles' column, as a paper's with its long reference: its
+/// title in the `beside` columns by the reference, its note under it when both do not fit, else
+/// the title on a line below, cut to `under` columns.
 fn paper_row(
     output: &Output,
     (reference, title): (String, &str),
@@ -703,8 +849,15 @@ fn paper_row(
             title_below: false,
         };
     }
+    // the title leaves room for the facts after it, so a picker's line under the reference holds
+    // both
+    let noted = if facts.is_empty() {
+        0
+    } else {
+        2 + console::measure_text_width(&facts)
+    };
     Shown {
-        title: output.clip(title, under),
+        title: output.clip(title, under.saturating_sub(noted).max(TITLE_LEAST)),
         reference,
         facts,
         below: false,
@@ -712,9 +865,9 @@ fn paper_row(
     }
 }
 
-/// each row's facts in their columns: size, download time, then downloads where `downloads`
-/// keeps them, then the access note, numbers to the right.
-fn facts(cells: &[[String; 4]], downloads: bool) -> Vec<String> {
+/// each row's facts in their columns: size, download time where `time` keeps it, then downloads
+/// where `downloads` keeps them, then the access note, numbers to the right.
+fn facts(cells: &[[String; 4]], downloads: bool, time: bool) -> Vec<String> {
     let widths: Vec<usize> = (0..4)
         .map(|column| widest(cells.iter().map(|row| row[column].as_str())))
         .collect();
@@ -724,7 +877,9 @@ fn facts(cells: &[[String; 4]], downloads: bool) -> Vec<String> {
             row.iter()
                 .zip(&widths)
                 .enumerate()
-                .filter(|(column, (_, width))| **width > 0 && (downloads || *column != 2))
+                .filter(|(column, (_, width))| {
+                    **width > 0 && (downloads || *column != 2) && (time || *column != 1)
+                })
                 .map(|(column, (cell, width))| pad(cell, *width, column == 0 || column == 2))
                 .collect::<Vec<_>>()
                 .join("  ")
@@ -763,10 +918,12 @@ fn rows(
     width: Option<usize>,
     lead: usize,
 ) -> Vec<String> {
-    let parts = parts(output, candidates, width, lead);
-    let width = widest(parts.iter().map(|shown| shown.reference.as_str()))
-        .min(crate::output::REFERENCE_COLUMN);
-    parts.iter().map(|shown| shown.line(width)).collect()
+    let table = parts(output, candidates, width, lead);
+    table
+        .rows
+        .iter()
+        .map(|shown| shown.line(table.column))
+        .collect()
 }
 
 #[cfg(test)]
@@ -1001,8 +1158,147 @@ mod tests {
         )
     }
 
+    /// the matches `add iris` listed: each reference, title, size and the minutes its download
+    /// takes, where this machine knows them.
+    const IRIS: [(&str, &str, Option<u64>, Option<u64>); 12] = [
+        ("kaggle:uciml/iris", "Iris Species", Some(3687), None),
+        (
+            "hf:datasets/scikit-learn/iris",
+            "scikit-learn/iris",
+            Some(18_534),
+            Some(1),
+        ),
+        (
+            "hf:datasets/Hebrish/Irish-English-Sentences",
+            "Hebrish/Irish-English-Sentences",
+            Some(76 << 20),
+            Some(2),
+        ),
+        (
+            "zenodo:23233774",
+            "IRIS: ICESat-2 River Surface Slope, a global river slope dataset",
+            Some(1_181_116_006),
+            Some(15),
+        ),
+        (
+            "geo:GSE318345",
+            "Early eye organoids demonstrate cadherin and integrin",
+            None,
+            None,
+        ),
+        (
+            "openneuro:ds001037",
+            "The brain of Chris",
+            Some(8_600_815),
+            None,
+        ),
+        (
+            "kaggle:himanshunakrani/iris-dataset",
+            "Iris dataset",
+            Some(1006),
+            None,
+        ),
+        (
+            "zenodo:1319069",
+            "Iris flower data set",
+            Some(3687),
+            Some(1),
+        ),
+        ("geo:GSE311178", "Single cell atlas of the iris", None, None),
+        (
+            "openneuro:ds007046",
+            "Vision for action",
+            Some(71_568_032_567),
+            Some(600),
+        ),
+        (
+            "hf:datasets/fatdove/Iris_Database",
+            "fatdove/Iris_Database",
+            Some(87_727_000_000),
+            Some(700),
+        ),
+        (
+            "kaggle:arshid/iris-flower-dataset",
+            "Iris Flower Dataset",
+            Some(1010),
+            None,
+        ),
+    ];
+
+    /// `add iris` at 80 columns once listed `zenodo:23233774` and `geo:GSE318345` with no title,
+    /// since one long hugging face id set the column, and the titles came and went with known
+    /// download times: at 80 and 100 columns every match a title names keeps one, the column
+    /// narrowing and the times giving way first, and every line fits.
+    #[test]
+    fn titles_stay_at_eighty_and_a_hundred_columns() {
+        use crate::net::estimate::{Bound, Time};
+        let candidate =
+            |reference: &str, title: &str, size: Option<u64>, minutes: Option<u64>| Candidate {
+                reference: Reference::parse(reference).unwrap().reference,
+                title: title.to_owned(),
+                source: "test",
+                size,
+                downloads: size.map(|_| 2400),
+                byline: None,
+                note: reference
+                    .contains("Hebrish")
+                    .then(|| "needs access".to_owned()),
+                time: minutes.map(|minutes| Time {
+                    bound: Bound::About,
+                    seconds: minutes * 60,
+                }),
+                files: None,
+                largest: None,
+            };
+        let listed = |timed: bool| -> Vec<Candidate> {
+            IRIS.iter()
+                .map(|(reference, title, size, minutes)| {
+                    candidate(reference, title, *size, minutes.filter(|_| timed))
+                })
+                .collect()
+        };
+        let (iris, untimed) = (listed(true), listed(false));
+        let output = quiet_output();
+        for (width, lead) in [
+            (80, picker_lead(iris.len())),
+            (80, LIST_LEAD),
+            (100, LIST_LEAD),
+        ] {
+            let table = parts(&output, &iris, Some(width), lead);
+            for (shown, candidate) in table.rows.iter().zip(&iris) {
+                let named = ["zenodo:", "geo:", "openneuro:"]
+                    .iter()
+                    .any(|site| shown.reference.starts_with(site));
+                assert!(
+                    !named || shown.title.chars().count() > 6,
+                    "{width} {lead}: {} lost its title: {shown:?}",
+                    candidate.reference
+                );
+                let line = if shown.below || shown.title_below {
+                    shown.reference.clone()
+                } else {
+                    shown.line(table.column)
+                };
+                assert!(
+                    console::measure_text_width(&line) < width - lead,
+                    "{width} {lead}: {line:?}"
+                );
+            }
+            // a time this machine learned after a first download once cost every title
+            let titles = |table: &Table| -> Vec<String> {
+                table.rows.iter().map(|shown| shown.title.clone()).collect()
+            };
+            assert_eq!(
+                titles(&table),
+                titles(&parts(&output, &untimed, Some(width), lead)),
+                "{width} {lead}"
+            );
+        }
+    }
+
     /// at 60, 80 and 100 columns every row keeps its reference, access note and size whole,
-    /// dropping downloads, then the title, and moves note and size under it when they do not fit.
+    /// dropping downloads, then download times, and moves note and size under it when they do not
+    /// fit; a title with no room beside its reference goes under it.
     #[test]
     fn narrow_rows_keep_the_access_note_and_the_size_whole() {
         let candidate = |reference: &str, title: &str, size, downloads, gated: bool| Candidate {
@@ -1050,11 +1346,17 @@ mod tests {
         let output = quiet_output();
         for width in [60, 80, 100] {
             for lead in [LIST_LEAD, picker_lead(candidates.len())] {
-                let parts = parts(&output, &candidates, Some(width), lead);
-                let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
-                for (shown, candidate) in parts.iter().zip(&candidates) {
+                let table = parts(&output, &candidates, Some(width), lead);
+                let column = table.column;
+                for (shown, candidate) in table.rows.iter().zip(&candidates) {
                     assert_eq!(shown.reference, candidate.reference.to_string());
-                    let lines = if shown.below {
+                    let lines = if shown.title_below {
+                        vec![
+                            shown.reference.clone(),
+                            shown.title.clone(),
+                            shown.facts.clone(),
+                        ]
+                    } else if shown.below {
                         vec![shown.reference.clone(), shown.facts.clone()]
                     } else {
                         let mut line = format!("{:column$}", shown.reference);
@@ -1083,13 +1385,51 @@ mod tests {
                 }
             }
         }
-        let wide = parts(&output, &candidates, Some(200), LIST_LEAD);
+        let wide = parts(&output, &candidates, Some(200), LIST_LEAD).rows;
         assert!(wide.iter().all(|shown| shown.facts.contains("downloads")));
         assert!(
             wide[1].title.starts_with("Iris dataset"),
             "{}",
             wide[1].title
         );
+    }
+
+    /// at 80 columns a zenodo match beside a paper with a 40-hex reference once narrowed the column
+    /// to the short reference and left the paper none of its title: a title with no room beside its
+    /// reference goes under it.
+    #[test]
+    fn a_paper_past_a_narrowed_column_keeps_its_title_under_it() {
+        let candidate = |reference: &str, title: &str, byline: Option<&str>| Candidate {
+            reference: Reference::parse(reference).unwrap().reference,
+            title: title.to_owned(),
+            source: "test",
+            size: Some(3687),
+            downloads: None,
+            byline: byline.map(str::to_owned),
+            note: None,
+            time: None,
+            files: None,
+            largest: None,
+        };
+        let candidates = [
+            candidate("zenodo:1", "Iris", None),
+            candidate(
+                "s2:649def34f8be52c8b66281af98ae884c09aef38b",
+                "Attention Is All You Need",
+                Some("Vaswani 2017"),
+            ),
+        ];
+        let output = quiet_output();
+        for lead in [LIST_LEAD, picker_lead(candidates.len())] {
+            let table = parts(&output, &candidates, Some(80), lead);
+            for (shown, candidate) in table.rows.iter().zip(&candidates) {
+                let kept = shown.title.trim_end_matches(output.more());
+                assert!(
+                    kept.len() > 3 && candidate.title.starts_with(kept),
+                    "{lead}: {shown:?}"
+                );
+            }
+        }
     }
 
     /// a narrow terminal drops a paper's author line before its title, which stays beside the
@@ -1130,9 +1470,9 @@ mod tests {
         ];
         let output = quiet_output();
         for width in [40, 50, 60] {
-            let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
-            let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
-            for (shown, candidate) in parts.iter().zip(&candidates) {
+            let table = parts(&output, &candidates, Some(width), LIST_LEAD);
+            let column = table.column;
+            for (shown, candidate) in table.rows.iter().zip(&candidates) {
                 let kept = shown.title.trim_end_matches(output.more());
                 assert!(
                     kept.len() > 3 && candidate.title.starts_with(kept),
@@ -1166,7 +1506,7 @@ mod tests {
                 }
             }
         }
-        let wide = parts(&output, &candidates, Some(200), LIST_LEAD);
+        let wide = parts(&output, &candidates, Some(200), LIST_LEAD).rows;
         for (shown, candidate) in wide.iter().zip(&candidates) {
             assert!(!shown.below && !shown.title_below, "{shown:?}");
             assert!(
@@ -1202,7 +1542,7 @@ mod tests {
         ];
         let output = quiet_output();
         for width in [80, 100, 120] {
-            let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
+            let parts = parts(&output, &candidates, Some(width), LIST_LEAD).rows;
             for shown in &parts {
                 let line = format!("{:17}  {}  {}", shown.reference, shown.title, shown.facts);
                 assert!(!shown.below, "{width}: {line:?}");
@@ -1261,8 +1601,8 @@ mod tests {
                 false,
             );
             for width in 90..=110 {
-                let parts = parts(&output, &candidates, Some(width), LIST_LEAD);
-                let column = widest(parts.iter().map(|shown| shown.reference.as_str()));
+                let table = parts(&output, &candidates, Some(width), LIST_LEAD);
+                let (column, parts) = (table.column, table.rows);
                 for shown in &parts {
                     let line = format!(
                         "{:column$}  {}  {}",

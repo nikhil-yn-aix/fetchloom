@@ -1122,7 +1122,8 @@ fn a_match_without_a_file_count_spreads_over_the_hosts_downloads() -> Result {
 }
 
 /// a match has a time once this machine remembers its host's speed, at a terminal and in
-/// `--json`, other sites' staying blank, and the rows still fit 80 columns.
+/// `--json`, other sites' staying blank; at 80 columns the times give way to the titles and the
+/// rows still fit.
 #[test]
 fn a_remembered_host_times_its_sites_matches() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1157,24 +1158,33 @@ fn a_remembered_host_times_its_sites_matches() -> Result {
         assert!(found["time"]["seconds"].is_u64(), "{found}");
     }
     #[cfg(target_os = "linux")]
-    {
+    for columns in [120, 80] {
         let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
         let command = catalogs.command(&sandbox, &["search", "iris"]);
-        let Some((_, screen)) =
-            crate::support::typed(&sandbox.work(), &command, "rows 40 cols 80", "", "")?
+        let size = format!("rows 40 cols {columns}");
+        let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, &size, "", "")?
         else {
             return Ok(());
         };
         let rows: Vec<&str> = screen
             .lines()
             .map(|line| line.trim_matches('\r'))
-            .filter(|line| line.trim_start().starts_with("hf:"))
+            .filter(|line| line.starts_with("            ") && line.contains(':'))
             .collect();
         assert!(!rows.is_empty(), "{screen}");
-        assert!(rows.iter().all(|row| row.chars().count() <= 80), "{screen}");
+        assert!(
+            rows.iter().all(|row| row.chars().count() <= columns),
+            "{screen}"
+        );
         assert!(
             rows.iter()
+                .any(|row| row.contains("zenodo:23233774") && row.contains("IRIS")),
+            "{columns}: {screen}"
+        );
+        assert_eq!(
+            rows.iter()
                 .any(|row| row.contains(" about ") || row.contains(" under 10 s")),
+            columns == 120,
             "{screen}"
         );
     }

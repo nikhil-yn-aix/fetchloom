@@ -273,11 +273,10 @@ fn window(heights: &[usize], cursor: usize, top: usize, room: usize) -> (usize, 
 
 /// a row for each option, the one at `cursor` marked.
 fn listed(options: &[String], cursor: usize, style: Style, width: usize) -> Vec<String> {
-    let column = column(options);
     options
         .iter()
         .enumerate()
-        .map(|(index, option)| row(option, (index, options.len()), cursor, style, width, column))
+        .map(|(index, option)| row(option, (index, options.len()), cursor, style, width))
         .collect()
 }
 
@@ -285,17 +284,6 @@ fn listed(options: &[String], cursor: usize, style: Style, width: usize) -> Vec<
 /// option's number, padded to the widest so every row lines up.
 pub(crate) fn lead(count: usize) -> usize {
     5 + count.to_string().len()
-}
-
-/// where the titles start: after the widest reference, so a row with a blank title keeps its
-/// columns.
-fn column(options: &[String]) -> usize {
-    options
-        .iter()
-        .map(|option| reference(option).chars().count() + 2)
-        .max()
-        .unwrap_or_default()
-        .min(super::REFERENCE_COLUMN + 2)
 }
 
 fn reference(option: &str) -> &str {
@@ -337,32 +325,31 @@ fn nothing_chosen(kind: Kind) -> Error {
         .help("run it again to choose, or give a link or an id instead")
 }
 
-/// one option: its number of `count`, its reference, then from `column` its title and facts, dim
-/// unless the cursor is on it. the reference is never cut; the rest gives way on a narrow
-/// terminal, or goes on the line under it when it fits only there.
+/// one option: its number of `count`, its reference, then its title and facts where the list
+/// laid them out, dim unless the cursor is on it. the reference is never cut; the rest gives way
+/// on a narrow terminal, or goes on the line under it when it fits only there.
 fn row(
     option: &str,
     (index, count): (usize, usize),
     cursor: usize,
     style: Style,
     width: usize,
-    column: usize,
 ) -> String {
     let text = plain(option);
     let reference = reference(&text);
-    let long = reference.chars().count() + 2 > column;
-    let rest: String = text
-        .chars()
-        .skip(column.max(reference.chars().count()))
-        .collect();
-    let rest = if long { rest.trim() } else { rest.trim_end() };
-    // the padding that lines the titles up, kept apart from the bold reference
-    let pad = " ".repeat(column.saturating_sub(reference.chars().count() + 2));
+    let after = &text[reference.len()..];
+    let rest = after.trim_start();
+    // the spaces that line the titles up, as the list laid them out, kept apart from the bold
+    // reference
+    let pad = &after[..after.len() - rest.len()];
+    let rest = rest.trim_end();
     let lead = lead(count);
-    let room = width.saturating_sub(column.max(reference.chars().count() + 2) + lead + 1);
+    let room = width.saturating_sub(reference.chars().count() + pad.chars().count() + lead + 1);
     let more = if style.unicode { "\u{2026}" } else { "..." };
     let wide = console::measure_text_width(rest);
-    let below = !rest.is_empty() && wide > room && wide <= width.saturating_sub(lead + 1);
+    let under = width.saturating_sub(lead + 1);
+    // what has no room beside the reference goes on the line under it, cut there if it must be
+    let below = !rest.is_empty() && wide > room && (wide <= under || room < 8);
     let beside = if below || room < 8 {
         String::new()
     } else {
@@ -375,16 +362,17 @@ fn row(
     let line = if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
         let cyan = paint(style.color, accent().bold());
-        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}  {beside}")
+        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}{beside}")
             .trim_end()
             .to_owned()
     } else {
-        format!("    {dim}{number}{dim:#} {reference}{pad}  {dim}{beside}{dim:#}")
+        format!("    {dim}{number}{dim:#} {reference}{pad}{dim}{beside}{dim:#}")
             .trim_end()
             .to_owned()
     };
     if below {
-        let rest = super::shown(rest, style.unicode);
+        let rest =
+            super::shown(&console::truncate_str(rest, under, more), style.unicode).into_owned();
         format!("{line}\n{:lead$}{dim}{rest}{dim:#}", "")
     } else {
         line
@@ -536,17 +524,17 @@ mod tests {
 
     #[test]
     fn rows_highlight_the_cursor_and_escape_untrusted_titles() {
-        let selected = row("iris", (0, 2), 0, style(false, false), 80, 6);
+        let selected = row("iris", (0, 2), 0, style(false, false), 80);
         assert_eq!(selected, "  > 1 iris");
         assert_eq!(
-            row("other", (1, 2), 0, style(false, true), 80, 7),
+            row("other", (1, 2), 0, style(false, true), 80),
             "    2 other"
         );
-        let colored = row("iris", (0, 2), 0, style(true, true), 80, 6);
+        let colored = row("iris", (0, 2), 0, style(true, true), 80);
         assert!(colored.contains('\u{203a}'));
         assert!(colored.contains("\x1b["));
         assert!(colored.contains("iris"));
-        let unsafe_text = row("iris\x1b[2J\nnext", (0, 2), 0, style(false, false), 80, 6);
+        let unsafe_text = row("iris\x1b[2J\nnext", (0, 2), 0, style(false, false), 80);
         assert!(!unsafe_text.contains(char::is_control));
         assert!(unsafe_text.contains("\\u{1b}"));
         let narrow = row(
@@ -555,7 +543,6 @@ mod tests {
             0,
             style(false, false),
             30,
-            10,
         );
         assert!(console::measure_text_width(&narrow) <= 30, "{narrow}");
         assert!(narrow.contains("zenodo:1"), "the reference is never cut");
@@ -565,7 +552,6 @@ mod tests {
             0,
             style(false, false),
             30,
-            39,
         );
         assert!(
             tight.contains("kaggle:owner/a-very-long-dataset-name"),
@@ -687,6 +673,27 @@ mod tests {
         assert_eq!(window(&[1; 9], 3, 4, 5), (3, 8));
     }
 
+    /// at 40 columns a title and size too long for the line under their reference once vanished,
+    /// leaving the reference alone: they go under it cut to fit.
+    #[test]
+    fn what_fits_no_line_goes_under_its_reference_cut() {
+        let option = format!(
+            "{:35}  IRIS: ICESat-2 River Surface Slope, a global dataset  1.1 GiB",
+            "zenodo:23233774"
+        );
+        let shown = row(&option, (2, 9), 0, style(false, false), 40);
+        let lines: Vec<&str> = shown.lines().collect();
+        assert_eq!(lines[0], "    3 zenodo:23233774", "{shown}");
+        assert!(lines[1].starts_with("      IRIS: ICESat-2"), "{shown}");
+        assert!(lines[1].ends_with("..."), "{shown}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| console::measure_text_width(line) <= 40),
+            "{shown}"
+        );
+    }
+
     #[test]
     fn a_blank_title_keeps_the_facts_in_their_column() {
         let titled = row(
@@ -695,7 +702,6 @@ mod tests {
             1,
             style(false, false),
             80,
-            11,
         );
         let blank = row(
             "zenodo:22        5.0 KiB",
@@ -703,7 +709,6 @@ mod tests {
             0,
             style(false, false),
             80,
-            11,
         );
         assert_eq!(titled, "    1 zenodo:1   Iris  3.6 KiB");
         assert_eq!(blank, "    2 zenodo:22        5.0 KiB");
