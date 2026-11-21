@@ -1365,11 +1365,17 @@ mod tests {
     #[test]
     fn a_sweep_frees_what_freeing_in_turn_frees() {
         let spread: Vec<String> = (0..600).map(|n| format!("object {n}")).collect();
-        let crowded: Vec<String> = (0..)
+        // a search without end would hang rather than fail were hashing broken
+        let crowded: Vec<String> = (0..1 << 16)
             .map(|n| format!("crowded {n}"))
             .filter(|body| crate::digest::sha256(body.as_bytes()).bytes()[0] == 0)
             .take(40)
             .collect();
+        assert_eq!(
+            crowded.len(),
+            40,
+            "bodies whose digest starts with a zero byte"
+        );
         for (bodies, pretend, grace) in [
             (&spread, false, Duration::ZERO),
             (&spread, true, Duration::ZERO),

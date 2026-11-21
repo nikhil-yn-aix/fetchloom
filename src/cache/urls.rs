@@ -513,11 +513,14 @@ mod tests {
 
     /// `count` links whose keys start with `start`, so their records share a shard.
     fn crowded(count: usize, start: &str) -> Vec<String> {
-        (0..)
+        // a search without end would hang rather than fail were hashing broken
+        let urls: Vec<String> = (0..1 << 17)
             .map(|n| format!("https://example.org/{n}"))
             .filter(|url| digest::sha256(url.as_bytes()).hex().starts_with(start))
             .take(count)
-            .collect()
+            .collect();
+        assert_eq!(urls.len(), count, "links whose keys start with {start}");
+        urls
     }
 
     fn rewrite(shards: &Shards, root: &Path, keep: &dyn Fn(&UrlRecord) -> bool) {
