@@ -231,11 +231,11 @@ def standing(base, measured, comparison):
 
 def judge(case, runs, comparator=None):
     """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
-    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict, against
-    the comparator frozen before the runs in a headline case and against the fastest other tool that
-    passed every run elsewhere, or the reason there is none. a reason that holds for the whole case,
-    such as a noisy machine or a campaign cut short of the rounds it planned, withholds every tool's
-    verdict in it."""
+    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the one verdict, a
+    headline case's against the comparator frozen before its runs, or the reason there is none. every
+    other comparison only describes, as a case outside the headline set does against the fastest
+    other tool that passed every run. a reason that holds for the whole case, such as a noisy
+    machine, a campaign cut short of the rounds it planned or no frozen comparator, withholds it."""
     key = (case["filesystem"], case["profile"], case["scenario"])
     headline = key in HEADLINE
     level = FAMILY if headline else .95
@@ -270,11 +270,10 @@ def judge(case, runs, comparator=None):
         withheld = f"the a/a arm {aa['unmet']}, so it cannot measure this machine's noise"
     elif case["profile"] in GATED and not (AA_GATE[0] <= aa["interval"][0] and aa["interval"][1] <= AA_GATE[1]):
         withheld = f"the a/a arm's 95% interval, {bounds(aa)}, is not inside {AA_GATE[0]} to {AA_GATE[1]}, so the machine was too noisy"
+    elif headline and comparator is None:
+        withheld = "no comparator was frozen for it before its runs"
     else:
         withheld = None
-    for tool, comparison in comparisons.items():
-        comparison["word"] = (word(comparison["interval"], tool) if withheld is None and comparison["unmet"] is None
-                              and not tool.startswith(ab.BASE + "+") else None)
     summaries = case["summaries"]
     rivals = [tool for tool, comparison in comparisons.items()
               if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
@@ -283,8 +282,6 @@ def judge(case, runs, comparator=None):
     named = f"{rival}, the frozen comparator," if headline else rival
     if withheld:
         reason = withheld
-    elif headline and comparator is None:
-        reason = "no comparator was frozen for it before its runs"
     elif rival is None:
         reason = "no other tool passed every run"
     elif rival not in comparisons:
@@ -293,6 +290,9 @@ def judge(case, runs, comparator=None):
         reason = f"{named} {comparisons[rival]['unmet']}"
     else:
         reason = None
+    # only the frozen comparator's verdict is one of the six the 5% family error covers
+    for tool, comparison in comparisons.items():
+        comparison["word"] = word(comparison["interval"], tool) if headline and reason is None and tool == rival else None
     return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason, withheld=withheld,
                 rival=rival if reason is None else None, comparator=comparator if headline else None)
 
@@ -767,8 +767,9 @@ def over(tool, judged):
 
 
 def said(tool, judged):
-    """what a tool's interval says against fetchloom, in the table's verdict column: withheld when the
-    whole case has no verdict, as the line under the table says why."""
+    """what a tool's interval says against fetchloom, in the table's verdict column: the verdict, or
+    why there is none, for a headline case's frozen comparator alone; withheld when the whole case
+    has no verdict, as the line under the table says why; descriptive for every other tool."""
     comparison = judged["comparisons"].get(tool)
     if comparison is None or comparison["failed"]:
         return ""
@@ -778,24 +779,26 @@ def said(tool, judged):
         return "fetchloom variant, never a rival"
     if judged["withheld"]:
         return "withheld"
-    return comparison["word"] or comparison["unmet"]
+    if judged["headline"] and tool == judged["comparator"]:
+        return comparison["word"] or comparison["unmet"]
+    return "descriptive"
 
 
 def verdict_lines(case):
-    """the case's verdict, the seconds before the ratio, or why it has none, and what the a/a arm saw."""
+    """the case's verdict, the seconds before the ratio, or why it has none, and what the a/a arm saw;
+    a case outside the headline set describes its fastest other tool instead, with no verdict."""
     judged = case["judged"]
     rival = judged["rival"]
-    kind = (f"headline, {percent(judged['level'])} interval" if judged["headline"]
-            else f"descriptive, {percent(judged['level'])} interval, not a claim")
     if rival is None:
         lines = [f"\nno verdict: {judged['reason']}."]
     else:
         comparison = judged["comparisons"][rival]
         chosen = "the comparator frozen before these runs" if judged["headline"] else "the fastest other tool that passed every run"
-        lines = [f"\nverdict ({kind}): fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against "
-                 f"{seconds(case['summaries'][rival]['median'])} for {rival}, {chosen}; "
-                 f"{rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, interval {bounds(comparison)}: "
-                 f"{comparison['word']}."]
+        compared = (f"fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against {seconds(case['summaries'][rival]['median'])} "
+                    f"for {rival}, {chosen}; {rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, "
+                    f"interval {bounds(comparison)}")
+        lines = [f"\nverdict (headline, {percent(judged['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
+                 else f"\ndescriptive, {percent(judged['level'])} interval, no verdict: {compared}."]
     aa = judged["aa"]
     if aa is not None and aa["interval"] is not None:
         noise = "" if case["profile"] in GATED else ", on this lossy link the network's own randomness"

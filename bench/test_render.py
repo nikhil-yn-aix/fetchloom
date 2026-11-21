@@ -512,6 +512,8 @@ class PageTests(Quiet):
         page = self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
         self.assertIn("| time over fetchloom's, 99.2% interval | verdict |", page)
         self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
+        # faster in these runs, but not the comparator frozen before them, so it only describes
+        self.assertIn("| aria2c | 1.50 s | 1.50 s to 1.50 s | 1.50 [1.50, 1.50] | descriptive |", page)
         self.assertIn("| fetchloom+aa | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | a/a arm, never a rival |", page)
         # against the comparator frozen before the runs, though aria2c was faster in them
         self.assertIn("\nverdict (headline, 99.2% interval): fetchloom 1.00 s against 2.00 s for curl, the comparator frozen "
@@ -561,7 +563,6 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual((aria2c["pairs"], aria2c["word"]), (10, "fetchloom faster"))
         self.assertEqual([round(value, 9) for value in (aria2c["median_ratio"], *aria2c["interval"])], [1.5, 1.5, 1.5])
         self.assertEqual((judged["comparisons"]["pooch"]["failed"], judged["comparisons"]["pooch"]["word"]), (1, None))
-        self.assertEqual(judged["comparisons"]["curl"]["word"], "fetchloom faster")
 
     def test_the_aa_arm_is_never_a_rival_and_its_noise_withholds_a_verdict_on_lan_and_home(self):
         # on the poor link fetchloom against itself may spread as the network does, and is still no rival
@@ -627,7 +628,6 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual((judged["rival"], judged["reason"]), (None, "aria2c, the frozen comparator, went over the budget in 1 of 10 runs"))
         self.assertEqual((aria2c["word"], render.said("aria2c", judged), round(aria2c["median_ratio"], 9)),
                          (None, "went over the budget in 1 of 10 runs", 1.5))
-        self.assertEqual(judged["comparisons"]["curl"]["word"], "fetchloom faster")
         own = self.judged([dict(row, over_budget=row["tool"] == "fetchloom" and row["round"] == 7) for row in rows], comparator="curl")
         self.assertEqual((own["rival"], own["reason"]),
                          (None, "fetchloom went over the budget in 1 of 10 runs, so no comparison is at the same politeness"))
@@ -655,11 +655,30 @@ class VerdictTests(unittest.TestCase):
                                         dict(cases=measured("s2r"), comparators={"ext4/home/s1": "curl", "ext4/home/s2r": "aria2c"})]),
                          {"ext4/home/s2r": "aria2c"})
 
-    def test_a_case_outside_the_headline_set_is_judged_at_95_percent(self):
-        judged = self.judged(headline_rows(scenario="s3", profile="lan", curl=.5), scenario="s3", profile="lan")
-        self.assertEqual((judged["headline"], judged["level"], judged["rival"]), (False, .95, "curl"))
-        self.assertEqual(judged["comparisons"]["curl"]["word"], "curl faster")
+    def test_only_the_frozen_comparator_gets_a_verdict_and_every_other_tool_describes(self):
+        rows = headline_rows(curl=2, aria2c=1.5, pooch=.5)
+        judged = self.judged(rows, comparator="curl")
+        self.assertEqual({tool: comparison["word"] for tool, comparison in judged["comparisons"].items()},
+                         {"fetchloom+aa": None, "curl": "fetchloom faster", "aria2c": None, "pooch": None})
+        self.assertEqual([render.said(tool, judged) for tool in ("curl", "aria2c", "pooch")], ["fetchloom faster", "descriptive", "descriptive"])
+        # a headline case with no comparator frozen before its runs has no verdict at all, nor any row
+        unfrozen = self.judged(rows)
+        self.assertEqual((unfrozen["rival"], unfrozen["withheld"]), (None, "no comparator was frozen for it before its runs"))
+        self.assertEqual({comparison["word"] for comparison in unfrozen["comparisons"].values()}, {None})
+        self.assertEqual({render.said(tool, unfrozen) for tool in ("curl", "aria2c", "pooch")}, {"withheld"})
+        self.assertIsNone(render.hero(dict(scenario="s1", profile="home", summaries={}, judged=unfrozen)))
+
+    def test_a_case_outside_the_headline_set_describes_its_fastest_tool_with_no_verdict(self):
+        rows = headline_rows(scenario="s3", profile="lan", curl=.5, aria2c=.8)
+        judged = self.judged(rows, scenario="s3", profile="lan")
+        self.assertEqual((judged["headline"], judged["level"], judged["rival"], judged["reason"]), (False, .95, "curl", None))
+        self.assertEqual({comparison["word"] for comparison in judged["comparisons"].values()}, {None})
+        self.assertEqual([render.said(tool, judged) for tool in ("curl", "aria2c")], ["descriptive", "descriptive"])
         self.assertIsNone(render.hero(dict(scenario="s3", profile="lan", summaries={}, judged=judged)))
+        case = dict(scenario="s3", profile="lan", summaries=render.summaries({"fetchloom": rows[:1], "curl": rows[2:3]}), judged=judged)
+        self.assertEqual(render.verdict_lines(case)[0],
+                         "\ndescriptive, 95% interval, no verdict: fetchloom 1.00 s against 500 ms for curl, the fastest other tool "
+                         "that passed every run; curl's time over fetchloom's is 0.50, interval 0.50 to 0.50.")
 
 
 class WordingTests(unittest.TestCase):
