@@ -12,7 +12,8 @@ pub(super) const MARK: &str = if cfg!(windows) { " `" } else { " \\" };
 
 /// `text` with each line wider than `width` wrapped between words, colors kept, going on under its
 /// own text as [`hanging`] finds it. a command in backticks or a name in double quotes is never
-/// split, and a word too wide goes whole onto a line of its own, for the terminal to wrap.
+/// split, and a word too wide for the room under that text starts at the first column, where it
+/// fits whole or the terminal wraps it from the same column.
 pub(super) fn fit(text: &str, width: usize) -> String {
     text.split('\n')
         .map(|line| fit_line(line, width))
@@ -36,11 +37,11 @@ fn fit_line(line: &str, width: usize) -> String {
     }
     let mut fitted = String::with_capacity(line.len() + breaks.len() * (indent + 1));
     let mut from = 0;
-    for at in breaks {
+    for (at, column) in breaks {
         let (offset, _) = shown[at];
         fitted.push_str(&line[from..offset]);
         fitted.push('\n');
-        fitted.push_str(&" ".repeat(indent));
+        fitted.push_str(&" ".repeat(column));
         // the spaces the break replaces, the run of them where there are several
         from = offset;
         while line[from..].starts_with(' ') {
@@ -52,12 +53,41 @@ fn fit_line(line: &str, width: usize) -> String {
 }
 
 /// the indexes in `shown`, the characters a line shows, of the spaces it breaks at to fit
-/// `width`, each line after the first going on at `indent`. a number keeps its unit.
-fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<usize> {
+/// `width`, each with the column the line after it starts at: `indent`, or the first column for a
+/// word too wide for the room past `indent`. a number keeps its unit.
+fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, usize)> {
+    let breakable = breakable(shown, indent);
+    let after = widths_after(shown, &breakable);
     let mut breaks = Vec::new();
     let mut column = 0;
     // the last space a line may break at, and the column it stands at
     let mut last: Option<(usize, usize)> = None;
+    for (at, &(_, c)) in shown.iter().enumerate() {
+        if breakable[at] {
+            last = Some((at, column));
+        }
+        column += console::measure_text_width(c.encode_utf8(&mut [0; 4]));
+        if column > width
+            && c != ' '
+            && let Some((space, before)) = last.take()
+        {
+            let start = if after[space] > width - indent {
+                0
+            } else {
+                indent
+            };
+            breaks.push((space, start));
+            column = start + column - before - 1;
+        }
+    }
+    breaks
+}
+
+/// whether each of `shown` is a space a line may break at: past `indent`, the first of a run of
+/// spaces, outside backticks and double quotes, and not between a number and its unit.
+fn breakable(shown: &[(usize, char)], indent: usize) -> Vec<bool> {
+    let mut breakable = vec![false; shown.len()];
+    let mut column = 0;
     let (mut ticked, mut quoted) = (false, false);
     // whether the word before this character is a number, such as the 2.0 of 2.0 MiB
     let mut number = false;
@@ -72,7 +102,7 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<usize> {
                 && at > 0
                 && shown[at - 1].1 != ' ' =>
             {
-                last = Some((at, column));
+                breakable[at] = true;
             }
             _ => {}
         }
@@ -82,15 +112,28 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<usize> {
             _ => false,
         };
         column += console::measure_text_width(c.encode_utf8(&mut [0; 4]));
-        if column > width
-            && c != ' '
-            && let Some((space, before)) = last.take()
-        {
-            breaks.push(space);
-            column = indent + column - before - 1;
+    }
+    breakable
+}
+
+/// for each space a line may break at, the columns of what would start the line after it: the
+/// characters up to the next such space, without the spaces the break takes.
+fn widths_after(shown: &[(usize, char)], breakable: &[bool]) -> Vec<usize> {
+    let mut after = vec![0; shown.len()];
+    // read from the end, the spaces seen since the last character count once one comes before them
+    let (mut word, mut spaces) = (0, 0);
+    for (at, &(_, c)) in shown.iter().enumerate().rev() {
+        if breakable[at] {
+            after[at] = word;
+            (word, spaces) = (0, 0);
+        } else if c == ' ' {
+            spaces += 1;
+        } else {
+            word += spaces + console::measure_text_width(c.encode_utf8(&mut [0; 4]));
+            spaces = 0;
         }
     }
-    breaks
+    after
 }
 
 /// each character `line` shows, with where it starts in `line`, leaving out the escapes that
@@ -314,8 +357,39 @@ mod tests {
         let link = format!("https://example.org/{}", "a".repeat(60));
         assert_eq!(
             fit(&format!("  help: open {link} in a browser"), 40),
-            format!("  help: open\n        {link}\n        in a browser")
+            format!("  help: open\n{link}\n        in a browser")
         );
         assert_eq!(fit("short\n  also short", 60), "short\n  also short");
+    }
+
+    /// a path or a command too wide for the room past the indent once started there and ran on
+    /// at the first column, as the terminal wrapped it: it starts at the first column instead,
+    /// where it fits whole, and the line after it goes on under the text again.
+    #[test]
+    fn a_word_too_wide_for_its_indent_starts_at_the_first_column() {
+        let path = "bart/sub-01/func/sub-01_task-balloonanalogrisktask_run-01_bold.nii.gz";
+        assert_eq!(
+            fit(&format!("      Would fetch {path} · 45.1 MiB"), 80),
+            format!("      Would fetch\n{path} · 45.1 MiB")
+        );
+        let command =
+            "`fetchloom settings set data_links /datadisk/lab/p5-adversary/work/victim/dir`";
+        assert_eq!(
+            fit(
+                &format!(
+                    "  help: if you made it to keep data on another disk, list that folder with {command} first"
+                ),
+                80
+            ),
+            format!(
+                "  help: if you made it to keep data on another disk, list that folder with\n{command}\n        first"
+            )
+        );
+        let fits = "bart/sub-01/func/sub-01_task-balloonanalogrisktask_run-01_events.tsv";
+        assert_eq!(
+            fit(&format!("      Would fetch {fits} · 8.4 KiB"), 80),
+            format!("      Would fetch\n            {fits}\n            · 8.4 KiB"),
+            "a path that fits past the indent stays there"
+        );
     }
 }
