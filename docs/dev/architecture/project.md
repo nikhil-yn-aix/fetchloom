@@ -9,6 +9,7 @@
 - a tree hash pins archive contents without expanding the lock to one record per member.
 - root discovery uses the nearest manifest. nested projects are distinct roots. a folder holding `.git`, a folder or a file, ends the search once its own manifest is checked, so a manifest above a repository needs `-C`; `ignored_in_git` uses the same repository test.
 - path checks reject traversal and links in protected directory chains, but do not make a sandbox against another process swapping directories during a run.
+- read `data.toml` and `data.lock` only through `Project::manifest_text`, `Project::lock_text` or `Project::read_own`, which open them with `volume::read_unfollowed`: never through a link, which a clone can point at any file, so a parse error could print its lines; never waiting on a fifo or a device; and never past `MANIFEST_MOST`, 256 MiB, or `LOCK_MOST`, 1 GiB.
 
 ## tests
 

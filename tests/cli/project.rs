@@ -1347,6 +1347,88 @@ fn a_linked_gitignore_is_never_read_or_edited() -> Result {
     Ok(())
 }
 
+/// data.toml or data.lock as a link, as a cloned repository may hold one to a file of keys that
+/// reads as TOML, is refused before a byte of what it names is read, by every command that reads
+/// the project and in `--json` too: a refused line of data.toml, which an error shows, never
+/// shows that file's text. `lock`, which reads both files before it merges, stops at once.
+#[cfg(unix)]
+#[test]
+fn a_linked_data_toml_or_data_lock_is_refused_unread() -> Result {
+    const SECRET: &str = "SEKRIT_A1";
+    let sandbox = Sandbox::new()?;
+    let work = sandbox.work();
+    let keys = sandbox.folder("outside")?.join("secrets.toml");
+    fs::write(&keys, format!("token = \"{SECRET}\"\n"))?;
+    let elsewhere = sandbox.folder("elsewhere")?;
+    fs::write(elsewhere.join("a.csv"), "a\n")?;
+    let mirror = sandbox.folder("mirror")?;
+    let commands: [&[&str]; 13] = [
+        &["status"],
+        &["sync"],
+        &["lock"],
+        &["lock", "--check"],
+        &["list"],
+        &["path", "x"],
+        &["export"],
+        &["audit"],
+        &["remove", "x"],
+        &["drop", "x"],
+        &["exclude", "data/x/a.csv"],
+        &["push", "--to", &mirror.to_string_lossy()],
+        &["add", &elsewhere.to_string_lossy(), "--as", "y"],
+    ];
+    for name in ["data.toml", "data.lock"] {
+        fs::write(
+            work.join("data.toml"),
+            "[datasets.x]\nref = \"https://example.org/x.csv\"\n",
+        )?;
+        let link = work.join(name);
+        let _ = fs::remove_file(&link);
+        std::os::unix::fs::symlink(&keys, &link)?;
+        let refused = format!(
+            "{} is a link, and fetchloom does not follow it",
+            link.display()
+        );
+        for command in commands {
+            for scripted in [false, true] {
+                let mut args = command.to_vec();
+                if scripted {
+                    args.insert(0, "--json");
+                }
+                let output = sandbox.run(&args)?;
+                let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+                assert!(!said.contains(SECRET), "{name}, {args:?}: {said}");
+                assert_eq!(output.status.code(), Some(50), "{name}, {args:?}: {said}");
+                if scripted {
+                    let document = json(&output)?;
+                    assert_eq!(
+                        document["errors"][0]["message"],
+                        refused.as_str(),
+                        "{document}"
+                    );
+                    assert_eq!(document["errors"][0]["kind"], "project.invalid");
+                } else {
+                    assert!(said.contains(&refused), "{name}, {args:?}: {said}");
+                    assert!(
+                        said.contains(&format!(
+                            "help: replace {name} with the file it names before running this command"
+                        )),
+                        "{said}"
+                    );
+                }
+            }
+        }
+        assert_eq!(fs::read_link(&link)?, keys, "{name} stays the link it was");
+        assert!(!work.join("data").exists(), "{name}");
+        fs::remove_file(&link)?;
+    }
+    assert_eq!(
+        fs::read_to_string(&keys)?,
+        format!("token = \"{SECRET}\"\n")
+    );
+    Ok(())
+}
+
 /// each command that places files makes the .gitignore of a dataset folder that lost it, and
 /// says so inside git: `add` of a dataset data.toml has, `sync`, whose dry run says so first, and
 /// `path`, which places the files it answers with first.

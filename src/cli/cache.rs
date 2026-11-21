@@ -1134,10 +1134,13 @@ fn needed_focused(
 }
 
 /// the text of the data.toml of `project`, a registered one, or none when it is gone, as from a
-/// folder that moved: an error when it cannot be read, or when the project is out of reach.
+/// folder that moved: an error when it cannot be read, or when the project is out of reach. it is
+/// read as [`Project::read_own`] reads it: a commit pulled into a clone, or anyone sharing the
+/// cache in their own project, can make it a link, a fifo or a huge file, which every walk of the
+/// projects reads: gc, the cache report, and every unpack in any project.
 fn manifest_of(cache: &Cache, project: &Project) -> Result<Option<Vec<u8>>, Error> {
     let manifest = project.manifest_path();
-    match read_manifest(&manifest) {
+    match project.read_own(crate::project::manifest::FILE) {
         Ok(text) => Ok(Some(text)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => {
             if cache.out_of_reach(&project.root) {
@@ -1196,53 +1199,6 @@ fn owner_besides(root: &Path, me: u32) -> Option<u32> {
         .chain(root.ancestors())
         .find_map(crate::cache::owner_of)?;
     (owner != me).then_some(owner)
-}
-
-/// the most bytes a registered project's data.toml may hold for gc to read it: far more than any
-/// written by hand or by `fetchloom add`, and far less than would take a machine's memory.
-const MANIFEST_MOST: u64 = 256 << 20;
-
-/// the bytes of a registered project's data.toml at `path`: a file of [`MANIFEST_MOST`] bytes at
-/// most, opened without waiting on a fifo. a commit pulled into a clone, or anyone sharing the
-/// cache in their own project, can make it a fifo or a link to /dev/zero, which every walk of the
-/// projects reads: gc, the cache report, and every unpack in any project.
-fn read_manifest(path: &Path) -> io::Result<Vec<u8>> {
-    use std::io::Read as _;
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        rustix::fs::OFlags::NONBLOCK.bits().cast_signed(),
-    );
-    let file = options.open(path)?;
-    let found = file.metadata()?;
-    if !found.is_file() {
-        let what = if found.is_dir() {
-            "it is a folder, not a file"
-        } else {
-            "it is a special file, not a file"
-        };
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, what));
-    }
-    let too_large = || {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "it is larger than {}, more than gc reads of any data.toml",
-                units::size(MANIFEST_MOST)
-            ),
-        )
-    };
-    if found.len() > MANIFEST_MOST {
-        return Err(too_large());
-    }
-    let mut bytes = Vec::new();
-    file.take(MANIFEST_MOST + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MANIFEST_MOST {
-        return Err(too_large());
-    }
-    Ok(bytes)
 }
 
 /// adds what one lock needs. an archive keeps its own bytes while this machine never unpacked it
@@ -1852,8 +1808,8 @@ mod tests {
     }
 
     /// a registered project's data.toml that a clone or someone sharing the cache made a fifo, a
-    /// link to /dev/zero or to a huge file is refused at once by every walk of the projects, as
-    /// gc's, never waited on for a writer or read without end.
+    /// link or a huge file is refused at once by every walk of the projects, as gc's, never waited
+    /// on for a writer, read without end or followed to the file a link names.
     #[cfg(unix)]
     #[test]
     fn a_registered_data_toml_that_is_no_plain_file_is_refused_at_once() {
@@ -1870,6 +1826,10 @@ mod tests {
         };
         let special = Err(format!(
             "cannot read {}: it is a special file, not a file",
+            manifest.display()
+        ));
+        let linked = Err(format!(
+            "cannot read {}: it is a link, and fetchloom does not follow it",
             manifest.display()
         ));
 
@@ -1894,15 +1854,19 @@ mod tests {
 
         fs::remove_file(&manifest).unwrap();
         std::os::unix::fs::symlink("/dev/zero", &manifest).unwrap();
-        assert_eq!(walk(), special, "a link to /dev/zero");
+        assert_eq!(walk(), linked, "a link to /dev/zero");
 
         fs::remove_file(&manifest).unwrap();
-        let huge = folder.path().join("huge");
-        fs::File::create(&huge)
+        let elsewhere = folder.path().join("data.toml");
+        fs::write(&elsewhere, "[datasets]\n").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &manifest).unwrap();
+        assert_eq!(walk(), linked, "a link to a data.toml");
+
+        fs::remove_file(&manifest).unwrap();
+        fs::File::create(&manifest)
             .unwrap()
             .set_len((256 << 20) + 1)
             .unwrap();
-        std::os::unix::fs::symlink(&huge, &manifest).unwrap();
         let refused = walk().unwrap_err();
         assert!(refused.contains("larger than"), "{refused}");
     }

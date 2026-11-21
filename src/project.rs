@@ -34,9 +34,12 @@ const DESCRIPTION_READ: u64 = 1 << 20;
 /// the most of a .gitignore fetchloom reads to look for a line hiding a folder, many times what a
 /// person writes.
 const GITIGNORE_CAP: u64 = 1 << 20;
-/// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file, or
-/// a link to a huge one, is refused before it fills memory.
+/// the most bytes of data.lock a read takes, far past what fetchloom writes: a planted file is
+/// refused before it fills memory.
 const LOCK_MOST: u64 = 1 << 30;
+/// the most bytes of data.toml a read takes: far more than any written by hand or by `fetchloom
+/// add`, and far less than would take a machine's memory, so a planted one is refused first.
+const MANIFEST_MOST: u64 = 256 << 20;
 /// in fetchloom's folder, the data.lock a command writes after data.toml, below a [`Pending`]
 /// line, from before the first write until the second is done.
 const PENDING: &str = "pending-lock";
@@ -375,21 +378,33 @@ impl Project {
         Ok((text, manifest))
     }
 
-    /// data.toml's text, not yet parsed.
+    /// data.toml's text, not yet parsed, read as [`open_own`] opens it and up to
+    /// [`MANIFEST_MOST`] bytes.
     pub(crate) fn manifest_text(&self) -> Result<String, Error> {
-        let path = self.manifest_path();
-        refuse_unreadable(
-            &path,
-            "move it aside, then put the project's data.toml file there, or run the command in another folder",
-        )?;
-        fs::read_to_string(&path).map_err(|err| {
-            if err.kind() == io::ErrorKind::InvalidData {
-                Error::new(Kind::ProjectInvalid, "data.toml is not UTF-8 text")
-                    .help("save it as UTF-8, then run the command again")
-            } else {
-                self.unreadable(manifest::FILE, &err)
-            }
-        })
+        let help = "move it aside, then put the project's data.toml file there, or run the command in another folder";
+        let (file, found) = open_own(&self.manifest_path())
+            .map_err(|err| self.refusal(manifest::FILE, &err, help))?;
+        if found.len() > MANIFEST_MOST {
+            return Err(Error::new(
+                Kind::ProjectInvalid,
+                format!(
+                    "data.toml is {}, more than the {} fetchloom reads of one",
+                    crate::units::size(found.len()),
+                    crate::units::size(MANIFEST_MOST)
+                ),
+            )
+            .help(help));
+        }
+        let mut text = String::with_capacity(usize::try_from(found.len()).unwrap_or_default());
+        match file.take(MANIFEST_MOST).read_to_string(&mut text) {
+            Ok(_) => Ok(text),
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => Err(Error::new(
+                Kind::ProjectInvalid,
+                "data.toml is not UTF-8 text",
+            )
+            .help("save it as UTF-8, then run the command again")),
+            Err(err) => Err(self.unreadable(manifest::FILE, &err)),
+        }
     }
 
     /// [`Manifest::parse`] of data.toml's `text`, naming an unfinished merge in place of the
@@ -487,27 +502,20 @@ impl Project {
         Ok((lock, text))
     }
 
-    /// data.lock's text, or none when the project has none. it is opened once, without waiting
-    /// on a fifo, and refused before a byte is read when it is no plain file, or larger than
-    /// [`LOCK_MOST`] or the room a container leaves: gc reads every registered project's, so a
-    /// planted one must not hang or fill another person's run.
+    /// data.lock's text, or none when the project has none. it is opened once, as [`open_own`]
+    /// opens it, and refused before a byte is read when it is a link or no plain file, or larger
+    /// than [`LOCK_MOST`] or the room a container leaves: gc reads every registered project's, so
+    /// a planted one must not hang or fill another person's run.
     pub(crate) fn lock_text(&self) -> Result<Option<String>, Error> {
-        let path = self.root.join(lock::FILE);
-        let file = match open_waitless(&path) {
-            Ok(file) => file,
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
-            Err(err) => return Err(self.unreadable(lock::FILE, &err)),
-        };
-        let found = file
-            .metadata()
-            .map_err(|err| self.unreadable(lock::FILE, &err))?;
         let help = format!(
             "move it aside, then restore data.lock from git, or run `{}`, which resolves every dataset again",
             crate::suggested::command("lock")
         );
-        if let Some(error) = no_file(&path, &found, &help) {
-            return Err(error);
-        }
+        let (file, found) = match open_own(&self.root.join(lock::FILE)) {
+            Ok(opened) => opened,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(self.refusal(lock::FILE, &err, &help)),
+        };
         if found.len() > LOCK_MOST {
             return Err(Error::new(
                 Kind::ProjectInvalid,
@@ -674,7 +682,8 @@ impl Project {
                 return false;
             };
             let ours = Folder::written_here(head.folder.as_ref(), here.as_ref(), Untold::Elsewhere);
-            ours && fs::read(self.manifest_path())
+            ours && self
+                .read_own(manifest::FILE)
                 .is_ok_and(|bytes| crate::digest::sha256(&bytes).hex() == head.manifest)
         });
         if let Some((_, lock)) = written {
@@ -689,7 +698,7 @@ impl Project {
     /// pin, or pins it by another list: only that list, once it is back, says what it pins. every
     /// writer keeps such a pin as it was read, so this stops only a mistake.
     fn keeps_waiting(&self, bytes: &[u8]) -> Result<(), Error> {
-        let Ok(old) = fs::read_to_string(self.root.join(lock::FILE)) else {
+        let Some(old) = self.own_text(lock::FILE) else {
             return Ok(());
         };
         let waiting = lock::missing_lists(&old, &self.root);
@@ -749,11 +758,7 @@ impl Project {
 
     /// the lists data.lock on disk names, by the SHA-256 of each; none when it is no file.
     fn named_lists(&self) -> std::collections::HashSet<crate::digest::Sha256> {
-        let path = self.root.join(lock::FILE);
-        if !fs::metadata(&path).is_ok_and(|found| found.is_file()) {
-            return std::collections::HashSet::new();
-        }
-        fs::read_to_string(&path)
+        self.own_text(lock::FILE)
             .map(|text| lock::named_lists(&text))
             .unwrap_or_default()
     }
@@ -1430,6 +1435,121 @@ impl Project {
             err,
         )
     }
+
+    /// the refusal of the project file `name`, which [`open_own`] could not open with `err`: a
+    /// link, as the refusal of a linked `.fetchloom` words it, a folder or a special file, told
+    /// with `help`, or the system's own error.
+    fn refusal(&self, name: &str, err: &io::Error, help: &str) -> Error {
+        let path = self.root.join(name);
+        match in_place_of_file(&path) {
+            Some(Standing::Link) => {
+                Error::new(Kind::ProjectInvalid, format!("{} {LINKED}", path.display()))
+                    .help(replace_link(name))
+            }
+            Some(standing) => Error::new(
+                Kind::LocalIo,
+                format!("{} is {}, not a file", path.display(), standing.said()),
+            )
+            .help(help),
+            None => self.unreadable(name, err),
+        }
+    }
+
+    /// the bytes of the project file `name`, data.toml or data.lock, opened as [`open_own`] opens
+    /// it and read up to the most fetchloom reads of it, [`MANIFEST_MOST`] or [`LOCK_MOST`]: a
+    /// link, a folder, a special file or a larger file is refused with an error saying which.
+    pub(crate) fn read_own(&self, name: &str) -> io::Result<Vec<u8>> {
+        let path = self.root.join(name);
+        let most = if name == lock::FILE {
+            LOCK_MOST
+        } else {
+            MANIFEST_MOST
+        };
+        let refused = |cause: io::Error, words: String, help: Option<String>| {
+            io::Error::new(cause.kind(), crate::error::Explained { words, help, cause })
+        };
+        let (file, found) = open_own(&path).map_err(|err| match in_place_of_file(&path) {
+            Some(Standing::Link) => refused(err, format!("it {LINKED}"), Some(replace_link(name))),
+            Some(standing) => refused(err, format!("it is {}, not a file", standing.said()), None),
+            None => err,
+        })?;
+        let too_large = || {
+            refused(
+                io::ErrorKind::FileTooLarge.into(),
+                format!(
+                    "it is larger than {}, more than fetchloom reads of any {name}",
+                    crate::units::size(most)
+                ),
+                None,
+            )
+        };
+        if found.len() > most {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::with_capacity(usize::try_from(found.len()).unwrap_or_default());
+        file.take(most + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > most {
+            return Err(too_large());
+        }
+        Ok(bytes)
+    }
+
+    /// the text of the project file `name`, as [`Project::read_own`] reads it, or none when it
+    /// cannot be read or is no UTF-8 text.
+    pub(crate) fn own_text(&self, name: &str) -> Option<String> {
+        String::from_utf8(self.read_own(name).ok()?).ok()
+    }
+}
+
+/// what stands where a project file should be, when it is no plain file.
+#[derive(Clone, Copy)]
+enum Standing {
+    Link,
+    Folder,
+    Special,
+}
+
+impl Standing {
+    fn said(self) -> &'static str {
+        match self {
+            Standing::Link => "a link",
+            Standing::Folder => "a folder",
+            Standing::Special => "a special file",
+        }
+    }
+}
+
+/// what fetchloom says of a project file that is a link, after its name.
+const LINKED: &str = "is a link, and fetchloom does not follow it";
+
+/// what to do about the project file `name`, a link.
+fn replace_link(name: &str) -> String {
+    format!("replace {name} with the file it names before running this command")
+}
+
+/// what stands at `path` in place of a plain file: a link, which fetchloom never follows to a
+/// project file, a folder or a special file. none for a plain file, or nothing there at all.
+fn in_place_of_file(path: &Path) -> Option<Standing> {
+    let found = fs::symlink_metadata(path).ok()?.file_type();
+    if found.is_symlink() {
+        Some(Standing::Link)
+    } else if found.is_dir() {
+        Some(Standing::Folder)
+    } else if found.is_file() {
+        None
+    } else {
+        Some(Standing::Special)
+    }
+}
+
+/// the project file at `path`, data.toml or data.lock, opened to read as every project file is,
+/// with what the opened file is: never through a link, since a link a clone holds would have the
+/// file it names read, and printed where it does not parse, and never waiting on a fifo or a
+/// device. a link, a folder or a special file is refused before a byte is read.
+fn open_own(path: &Path) -> io::Result<(File, fs::Metadata)> {
+    let file = crate::volume::read_unfollowed(path)?;
+    let found = file.metadata()?;
+    Ok((file, found))
 }
 
 /// the file at `path`, a path in the project with `/` between names, below `root` and written with
@@ -1499,35 +1619,6 @@ pub(crate) fn read_gitignore(path: &Path) -> io::Result<String> {
     String::from_utf8(bytes).map_err(|err| io::Error::new(io::ErrorKind::InvalidData, err))
 }
 
-/// refuses the project file at `path` when it is a folder or a special file, as a link a clone
-/// holds to a device or a pipe, which a read would fail on or never finish. `help` says what to do.
-fn refuse_unreadable(path: &Path, help: &str) -> Result<(), Error> {
-    match fs::metadata(path) {
-        Ok(found) => no_file(path, &found, help).map_or(Ok(()), Err),
-        Err(_) => Ok(()),
-    }
-}
-
-/// the refusal of `path`, which `found` shows is a folder or a special file rather than a file,
-/// with `help`; none for a file.
-fn no_file(path: &Path, found: &fs::Metadata, help: &str) -> Option<Error> {
-    if found.is_file() {
-        return None;
-    }
-    let what = if found.is_dir() {
-        "a folder"
-    } else {
-        "a special file"
-    };
-    Some(
-        Error::new(
-            Kind::LocalIo,
-            format!("{} is {what}, not a file", path.display()),
-        )
-        .help(help),
-    )
-}
-
 /// the text of the plain file at `path`, read without following a link, up to `most` bytes.
 fn read_capped(path: &Path, most: u64) -> io::Result<String> {
     let mut text = String::new();
@@ -1535,18 +1626,6 @@ fn read_capped(path: &Path, most: u64) -> io::Result<String> {
         .take(most)
         .read_to_string(&mut text)?;
     Ok(text)
-}
-
-/// `path` opened to read, without waiting on a fifo or a device, which a read then refuses.
-fn open_waitless(path: &Path) -> io::Result<File> {
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::custom_flags(
-        &mut options,
-        rustix::fs::OFlags::NONBLOCK.bits().cast_signed(),
-    );
-    options.open(path)
 }
 
 /// the error for project file `name` when its `text` holds git's conflict lines at a line start,
@@ -2993,26 +3072,60 @@ mod tests {
         );
     }
 
-    /// data.lock gets the check data.toml gets: a folder or a special file there, as a link a
-    /// clone holds to a device or a pipe, is refused before a read that would fail or never end.
+    /// data.toml and data.lock are read only as plain files: a link, which a clone can hold to any
+    /// file of the person's, is refused unfollowed, and a folder or a special file, as a fifo a
+    /// clone holds, before a read that would fail or never end.
     #[cfg(unix)]
     #[test]
-    fn a_data_lock_that_is_no_file_is_refused_unread() {
-        let (_dir, project) = project(&[("data.toml", "")]);
-        let path = project.root.join("data.lock");
-        std::os::unix::fs::symlink("/dev/null", &path).unwrap();
-        let error = project.lock().unwrap_err();
-        assert_eq!(error.kind, Kind::LocalIo);
-        assert_eq!(
-            error.message,
-            format!("{} is a special file, not a file", path.display())
-        );
-        fs::remove_file(&path).unwrap();
-        fs::create_dir(&path).unwrap();
-        assert_eq!(
-            project.lock().unwrap_err().message,
-            format!("{} is a folder, not a file", path.display())
-        );
+    fn a_project_file_that_is_no_plain_file_is_refused_unread() {
+        type Refused = fn(&Project) -> Option<Error>;
+        let read: [(&str, Refused); 2] = [
+            (manifest::FILE, |project| project.manifest().err()),
+            (lock::FILE, |project| project.lock().err()),
+        ];
+        for (name, read) in read {
+            let (dir, project) = project(&[("data.toml", "")]);
+            let path = project.root.join(name);
+            let elsewhere = dir.path().join("elsewhere.toml");
+            fs::write(&elsewhere, "version = 1\n").unwrap();
+            let _ = fs::remove_file(&path);
+            std::os::unix::fs::symlink(&elsewhere, &path).unwrap();
+            let linked = read(&project).unwrap();
+            assert_eq!(linked.kind, Kind::ProjectInvalid, "{name}");
+            assert_eq!(
+                linked.message,
+                format!(
+                    "{} is a link, and fetchloom does not follow it",
+                    path.display()
+                )
+            );
+            assert_eq!(
+                linked.help.as_deref(),
+                Some(
+                    format!("replace {name} with the file it names before running this command")
+                        .as_str()
+                )
+            );
+            assert!(linked.details.is_empty(), "{name}: {:?}", linked.details);
+            fs::remove_file(&path).unwrap();
+            let made = std::process::Command::new("mkfifo")
+                .arg(&path)
+                .status()
+                .unwrap();
+            assert!(made.success());
+            let special = read(&project).unwrap();
+            assert_eq!(special.kind, Kind::LocalIo, "{name}");
+            assert_eq!(
+                special.message,
+                format!("{} is a special file, not a file", path.display())
+            );
+            fs::remove_file(&path).unwrap();
+            fs::create_dir(&path).unwrap();
+            assert_eq!(
+                read(&project).unwrap().message,
+                format!("{} is a folder, not a file", path.display())
+            );
+        }
     }
 
     #[test]

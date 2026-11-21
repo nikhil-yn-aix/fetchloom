@@ -96,7 +96,7 @@ impl AddProject {
     /// whether the project file `name` no longer holds `found`, what the add read of it, or
     /// exists when the add found none.
     fn differs(&self, name: &str, found: Option<&str>) -> bool {
-        match std::fs::read(self.project.root.join(name)) {
+        match self.project.read_own(name) {
             Ok(bytes) => found.is_none_or(|text| text.as_bytes() != bytes),
             Err(err) => found.is_some() || err.kind() != std::io::ErrorKind::NotFound,
         }
@@ -1518,7 +1518,7 @@ fn unwrite_lists(context: &Context, project: &Project) {
     if written.is_empty() {
         return;
     }
-    let text = std::fs::read_to_string(project.root.join(lock::FILE)).unwrap_or_default();
+    let text = project.own_text(lock::FILE).unwrap_or_default();
     let named: std::collections::HashSet<String> = lock::listed(&text)
         .into_iter()
         .flat_map(|(_, parts)| parts)
@@ -1679,7 +1679,7 @@ fn restore(
     let mut complete = true;
     let mut restored = Vec::new();
     for file in &saved.files {
-        let now = std::fs::read(project.root.join(file.name));
+        let now = project.read_own(file.name);
         let unchanged = match (&file.before, &now) {
             (BeforeFile::Saved { text, .. }, Ok(bytes)) => bytes == text.as_bytes(),
             (BeforeFile::Absent, Err(err)) => err.kind() == std::io::ErrorKind::NotFound,

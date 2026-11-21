@@ -54,9 +54,7 @@ pub(super) fn merge(
     args: &args::Lock,
 ) -> Result<Option<Report>, Error> {
     let choices = choices(args)?;
-    let Some(conflicted) = read(project)? else {
-        return Ok(None);
-    };
+    let conflicted = read(project)?;
     let program = git::on_path();
     if conflicted.manifest_sides.is_none() && conflicted.lock_sides.is_none() {
         if choices.is_empty() {
@@ -205,24 +203,22 @@ fn choices(args: &args::Lock) -> Result<Choices, Error> {
     Ok(choices)
 }
 
-/// none when data.toml cannot be read, which the usual reader then explains.
-fn read(project: &Project) -> Result<Option<Conflicted>, Error> {
-    let Ok(manifest) = std::fs::read_to_string(project.manifest_path()) else {
-        return Ok(None);
-    };
-    let lock = std::fs::read_to_string(project.root.join(lock::FILE)).ok();
+/// data.toml and data.lock as the usual readers read them, never through a link, and their sides.
+fn read(project: &Project) -> Result<Conflicted, Error> {
+    let manifest = project.manifest_text()?;
+    let lock = project.lock_text()?;
     let manifest_sides = markers::split(&manifest, manifest::FILE)?;
     let lock_sides = lock
         .as_deref()
         .map(|text| markers::split(text, lock::FILE))
         .transpose()?
         .flatten();
-    Ok(Some(Conflicted {
+    Ok(Conflicted {
         manifest,
         lock,
         manifest_sides,
         lock_sides,
-    }))
+    })
 }
 
 /// data.lock's sides come whole from git's index when `git` has them, so no pin mixes both sides.

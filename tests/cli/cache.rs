@@ -1932,6 +1932,67 @@ fn gc_names_each_project_it_forgets() -> Result {
     Ok(())
 }
 
+/// a registered project whose data.toml a pull made a link, as a clone can hold one to any file,
+/// stops gc before it frees anything, even what only a forgotten project needed, naming the link
+/// it does not follow; the cache report warns of it and goes on.
+#[cfg(unix)]
+#[test]
+fn gc_frees_nothing_while_a_registered_data_toml_is_a_link() -> Result {
+    let sandbox = Sandbox::new()?;
+    let iris = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    let wine = Server::start("/wine.csv", vec![file(WINE, "\"v1\"")])?;
+    let linked = sandbox.folder("linked")?;
+    let moved = sandbox.folder("moved")?;
+    for (project, url) in [(&linked, &iris.url), (&moved, &wine.url)] {
+        let added = sandbox.command_in(project, &["add", url]).output()?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    fs::remove_file(moved.join("data.toml"))?;
+    let manifest = linked.join("data.toml");
+    let named = sandbox.folder("outside")?.join("data.toml");
+    fs::rename(&manifest, &named)?;
+    std::os::unix::fs::symlink(&named, &manifest)?;
+    let refused = format!(
+        "cannot read {}: it is a link, and fetchloom does not follow it",
+        manifest.display()
+    );
+
+    let gc = sandbox.run(&["--json", "cache", "gc", "--now"])?;
+    let document = json(&gc)?;
+    assert_eq!(gc.status.code(), Some(50), "{document}");
+    assert_eq!(
+        document["errors"][0]["message"],
+        refused.as_str(),
+        "{document}"
+    );
+    assert_eq!(
+        document["errors"][0]["help"],
+        "replace data.toml with the file it names before running this command"
+    );
+    for (bytes, which) in [
+        (IRIS, "the linked project's"),
+        (WINE, "the forgotten one's"),
+    ] {
+        assert!(
+            crate::support::object(&sandbox.cache(), bytes).exists(),
+            "{which} file was freed"
+        );
+    }
+    assert_eq!(fs::read_dir(sandbox.cache().join("projects"))?.count(), 2);
+
+    let report = sandbox.run(&["--json", "cache"])?;
+    let document = json(&report)?;
+    assert_eq!(report.status.code(), Some(0), "{document}");
+    let warned = document["warnings"]
+        .as_array()
+        .ok_or("no warnings")?
+        .iter()
+        .filter_map(|warning| warning["message"].as_str())
+        .any(|message| message.starts_with(&format!("{refused};")));
+    assert!(warned, "{document}");
+    Ok(())
+}
+
 /// bytes a download kept without their record, as one stopped before its first record leaves,
 /// are continued only by a run that knows the file's hash, which checks them, so the report says
 /// so rather than promise to continue them.
