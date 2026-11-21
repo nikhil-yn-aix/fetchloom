@@ -2759,7 +2759,7 @@ fn first_pin(
             estimate::Size::Unknown => total.sizes_unknown += 1,
         }
     }
-    facts.push(total.facts(false));
+    facts.push(total.facts());
     format!(
         "{}, new in {}: {}",
         locked.name,

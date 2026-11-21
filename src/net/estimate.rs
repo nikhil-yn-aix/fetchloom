@@ -264,9 +264,8 @@ impl Total {
 
     /// the facts after what downloads: `1.2 GiB · about 3 min`, with `and 2 of unknown size` when
     /// some sizes are not known, and `about 1.2 GiB` when a listing rounds some. without grounds
-    /// for a time, `live` says a bar will show one, as `1.2 GiB · the time shows once it starts`;
-    /// elsewhere the size stands alone.
-    pub(crate) fn facts(&self, live: bool) -> String {
+    /// for a time the size stands alone.
+    pub(crate) fn facts(&self) -> String {
         let size = match (self.sizes_unknown, self.is_sized()) {
             (0, _) => self.size().words(),
             (_, false) => "size unknown".to_owned(),
@@ -276,10 +275,9 @@ impl Total {
                 units::grouped(unknown)
             ),
         };
-        match (self.time, live) {
-            (Some(time), _) => format!("{size} · {}", time.words()),
-            (None, true) => format!("{size} · the time shows once it starts"),
-            (None, false) => size,
+        match self.time {
+            Some(time) => format!("{size} · {}", time.words()),
+            None => size,
         }
     }
 }
@@ -471,7 +469,7 @@ mod tests {
         let host = known(2, 3 * MIB, 2 * MIB, A_MIB, 0.0);
         let total = Total::of(&[host], LIMITS);
         assert_eq!(total.files, 2);
-        assert_eq!(total.facts(false), "3.0 MiB · under 10 s");
+        assert_eq!(total.facts(), "3.0 MiB · under 10 s");
         let unknown = Host {
             files: Some(3),
             bytes: MIB,
@@ -480,11 +478,7 @@ mod tests {
             ..Host::default()
         };
         let total = Total::of(&[unknown], LIMITS);
-        assert_eq!(
-            total.facts(true),
-            "1.0 MiB and 2 of unknown size · the time shows once it starts"
-        );
-        assert_eq!(total.facts(false), "1.0 MiB and 2 of unknown size");
+        assert_eq!(total.facts(), "1.0 MiB and 2 of unknown size");
     }
 
     /// a `rate` cap of 1 MiB/s holds every download together: 16 files of 4.1 GiB in all, over
@@ -521,14 +515,14 @@ mod tests {
             ..known(2, 3 * MIB, 2 * MIB, A_MIB, 0.0)
         };
         let total = Total::of(std::slice::from_ref(&rounded), LIMITS);
-        assert_eq!(total.facts(false), "about 3.0 MiB · under 10 s");
+        assert_eq!(total.facts(), "about 3.0 MiB · under 10 s");
         let unsure = Host {
             files: Some(3),
             unknown: 1,
             ..rounded
         };
         assert_eq!(
-            Total::of(&[unsure], LIMITS).facts(false),
+            Total::of(&[unsure], LIMITS).facts(),
             "about 3.0 MiB and 1 of unknown size"
         );
         assert_eq!(Size::Bytes(1).and(Size::About(2)), Size::About(3));

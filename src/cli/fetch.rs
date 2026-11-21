@@ -1536,10 +1536,11 @@ pub(super) fn size_of(job: &Job) -> estimate::Size {
 }
 
 /// what `total` brings and about how long it takes, as `3 files · 1.2 GiB · about 3 min`, which
-/// [`all`] tells after `Downloading` once a download goes ahead. a total with no size known has
-/// nothing to say yet.
+/// [`all`] tells after `Downloading` once a download goes ahead, where no bar shows: a bar at a
+/// terminal says it as the downloads run, so no line stays above the closing one saying they are
+/// still to come. a total with no size known has nothing to say yet.
 pub(super) fn planned_line(output: &Output, what: &str, total: &estimate::Total) -> Option<String> {
-    is_told(total).then(|| format!("{what} · {}", total.facts(output.shows_bars())))
+    (!output.shows_bars() && is_told(total)).then(|| format!("{what} · {}", total.facts()))
 }
 
 /// after the downloads whose plan [`planned_line`] gave as `what` and `total`, a line when
@@ -1564,7 +1565,7 @@ pub(super) fn tell_found(
 /// it: once there are several files, or a time to add to the one file's own line.
 pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
     if total.files > 1 || total.time.is_some() {
-        tell_total(output, "Would download", what, total, false);
+        tell_total(output, "Would download", what, total);
     }
 }
 
@@ -1582,7 +1583,7 @@ pub(super) fn tell_would_fetch<D: std::borrow::Borrow<super::sync::place::Downlo
     if !one_by_one(output, downloads.len()) {
         output.step(
             "Would download",
-            &format!("{what} · {} · `-v` lists them", total.facts(false)),
+            &format!("{what} · {} · `-v` lists them", total.facts()),
         );
         return;
     }
@@ -1609,10 +1610,9 @@ pub(super) fn foreseen(job: &Job) -> String {
     }
 }
 
-/// `live` says a bar will show the time once the downloads start.
-fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total, live: bool) {
+fn tell_total(output: &Output, verb: &str, what: &str, total: &estimate::Total) {
     if is_told(total) {
-        output.step(verb, &format!("{what} · {}", total.facts(live)));
+        output.step(verb, &format!("{what} · {}", total.facts()));
     }
 }
 
@@ -2558,6 +2558,37 @@ mod tests {
             tell_found(&output, "4 files", total, fetched);
             assert_eq!(output.said(), said, "{total:?}");
         }
+    }
+
+    /// `Downloading 2 files · 15.0 KiB · the time shows once it starts` once stayed above the
+    /// closing `Downloaded` line at a terminal, still to come once it was done: there the bars say
+    /// it as the downloads run, and a log, where none shows, gets the line.
+    #[test]
+    fn the_line_a_download_starts_with_is_for_a_log_alone() {
+        let total = estimate::Total {
+            files: 2,
+            bytes: 15_360,
+            ..estimate::Total::default()
+        };
+        let terminal = Output::on_screen(crate::output::screen::Screen::default());
+        assert_eq!(planned_line(&terminal, "2 files", &total), None);
+        let log = Output::new(
+            Style {
+                color: false,
+                unicode: true,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        );
+        assert_eq!(
+            planned_line(&log, "2 files", &total).as_deref(),
+            Some("2 files · 15.0 KiB")
+        );
     }
 
     /// a dry run names each of a few dozen downloads, then their total; past that the total alone

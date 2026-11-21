@@ -181,7 +181,7 @@ fn a_locked_sync_tells_its_downloads_beside_json() -> Result {
 /// the lines a terminal `columns` wide shows once it has drawn `text`, as from `script`: each
 /// `\n` starts a line, and a character past the last column moves to the next line first.
 #[cfg(target_os = "linux")]
-fn shown_on(text: &str, columns: usize) -> Vec<String> {
+pub(crate) fn shown_on(text: &str, columns: usize) -> Vec<String> {
     let mut lines: Vec<Vec<char>> = vec![Vec::new()];
     let (mut row, mut column, mut wrapping) = (0_usize, 0_usize, false);
     let mut characters = text.chars().peekable();

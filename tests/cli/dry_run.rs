@@ -1064,16 +1064,17 @@ fn a_dry_run_times_its_downloads_once_a_host_is_known() -> Result {
     Ok(())
 }
 
-/// a download with no time to give says one shows once it starts only where a bar shows it: at a
-/// terminal, never in a pipe or a log.
+/// `Downloading a/a.bin · 1.0 MiB · the time shows once it starts` once stayed on a terminal above
+/// the closing line, still to come once it was done: the line a download starts with goes to a
+/// pipe or a log, where no bar shows, and at a terminal, once the bar is gone, the closing line
+/// alone stays.
 #[cfg(target_os = "linux")]
 #[test]
-fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
+fn only_a_log_keeps_the_line_a_download_starts_with() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Routes::start(vec![("/a.bin".to_owned(), file(&[b'a'; 1 << 20], "\"a\""))])?;
     sandbox.allow(&server.url);
     crate::support::ok(&sandbox.run(&["add", &format!("{}/a.bin", server.url)])?)?;
-    let later = "the time shows once it starts";
     crate::support::delete(&sandbox.speeds())?;
     let (piped, cache) = crate::mirrors::cold(&sandbox, "piped")?;
     let mut sync = sandbox.command_in(&piped, &["sync"]);
@@ -1083,7 +1084,6 @@ fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
         stderr.contains("Downloading a/a.bin · 1.0 MiB\n"),
         "{stderr}"
     );
-    assert!(!stderr.contains(later), "{stderr}");
     crate::support::delete(&sandbox.speeds())?;
     let (shown, cache) = crate::mirrors::cold(&sandbox, "shown")?;
     let shown = shown.to_string_lossy();
@@ -1092,7 +1092,17 @@ fn only_a_terminal_hears_that_the_time_shows_once_it_starts() -> Result {
     let Some(screen) = sandbox.on_a_terminal_running(&sync)? else {
         return Ok(());
     };
-    assert!(screen.contains(later), "{screen}");
+    let lines = crate::progress::shown_on(&screen, 80);
+    assert!(
+        !lines.iter().any(|line| line.contains("Downloading")),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with(" Downloaded 1 file · 1.0 MiB")),
+        "{lines:#?}"
+    );
     Ok(())
 }
 
