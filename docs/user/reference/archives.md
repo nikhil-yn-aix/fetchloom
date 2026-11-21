@@ -53,7 +53,7 @@ a big dataset may come as one archive cut into parts, such as `scans.zip.001` to
 parts belong together only inside one dataset and one folder, after the name of an archive fetchloom unpacks and with a counter as `split` or 7-Zip writes it, such as `aa`, `00`, `000` or `001`, so `weights.bin.001` and `data.tar.gz.1` stay files; [split archives in data.lock](#split-archives) gives the exact rules. stderr from `fetchloom add ../zipped`, a folder holding `headers.zip.00` to `.02` that `split -b 256K -d` made of a zip of 300 files:
 
 ```text
-   Imported zipped · 3 files · 748.6 KiB, copied into the cache; ../zipped is unchanged
+   Imported zipped · 3 files · 748.6 KiB, copied into the cache; ../zipped stays where it is
    Unpacked zipped/headers.zip.00 · 300 files · 2.2 MiB in 522 ms
 ```
 

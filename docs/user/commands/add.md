@@ -86,7 +86,7 @@ a path, such as `./flowers`, `../shared/flowers`, `/data/flowers`, `~/flowers`, 
 the files are copied into the cache and hashed as they are copied, as many at once as [`FETCHLOOM_THREADS`](../reference/environment.md) allows. on linux, a disk that clones files, such as btrfs or xfs, gets a clone that shares the file's blocks; elsewhere the cache holds a copy, so on ext4 the files take their room twice until you remove the folder. your files are only read, never changed, moved or linked, since a link to the cache's copy would make them read-only. an import bigger than the free space on the cache's disk asks first, as a big download does. everyone who can read the cache can read what you import, which is only you unless you made it [one cache for a whole lab](../guides/clusters.md#one-cache-for-a-whole-lab). stderr from a project whose data.toml already existed:
 
 ```text
-   Imported flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
+   Imported flowers · 2 files · 32 B, copied into the cache; ../flowers stays where it is
       Added flowers, its files are in data/flowers
   hint: scripts can find it with `fetchloom path flowers`
 ```
@@ -153,7 +153,7 @@ error: a-very-long-dataset-name-for-testing and tiny were imported from files, a
 `add <folder> --as <name>`, naming an import data.toml has, supplies its files instead of adding a dataset. the paths and sizes are compared with data.lock first, then the bytes as they are copied; other files stop it with `local.io`, exit 50, as `<folder> does not hold the files data.lock pins for <name>`, naming the first difference, and leave data.toml and data.lock as they were. supply the folder the files came from, or remove the dataset and import the new files. matching files change neither:
 
 ```text
-   Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers is unchanged
+   Supplied flowers · 2 files · 32 B, copied into the cache; ../flowers stays where it is
          Ok flowers is in data.toml and data.lock as it was, its files are in data/flowers
 ```
 
