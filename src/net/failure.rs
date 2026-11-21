@@ -730,7 +730,12 @@ pub(super) fn classify(
             .downcast_ref::<hyper::Error>()
             .filter(|err| err.is_parse())
         {
-            return garbled(url, carrier, &parse.to_string());
+            let said = parse.to_string();
+            // hyper tells this cause apart by its words alone, without its server feature
+            if said == "message head is too large" && carrier.is_none() {
+                return Failure::Final(oversized(url));
+            }
+            return garbled(url, carrier, &said);
         }
         if let Some(reason) = current.downcast_ref::<address::Refused>() {
             return Failure::Final(refused(url, reason));
@@ -966,6 +971,23 @@ fn garbled(url: &Url, carrier: Option<&address::Carrier>, said: &str) -> Failure
         .detail(said.to_owned())
         .help("check the link, its http or https and its port too. if the link is right, the server is broken, and only whoever runs it can fix it"),
     )
+}
+
+/// a reply whose head is larger than the http client reads, which its server sends the same on
+/// every try: valid http, though far past what servers send.
+fn oversized(url: &Url) -> Error {
+    Error::new(
+        Kind::NetworkStatus,
+        format!(
+            "{} sent a reply whose head is larger than fetchloom reads",
+            host(url)
+        ),
+    )
+    .detail(format!(
+        "more than {} header lines, or a head too long to hold",
+        super::MOST_HEADERS
+    ))
+    .help("check the link and its port. if the link is right, the server sends far more than servers do before a file, and only whoever runs it can fix that")
 }
 
 /// the error's text, with the link reqwest puts in it shown the way messages show links.
@@ -1995,6 +2017,36 @@ mod tests {
         );
         let help = error.help.unwrap_or_default();
         assert!(!help.contains("connection"), "{help}");
+        assert_eq!(asked.lock().unwrap().len(), 1);
+    }
+
+    /// a reply with more header lines than the client reads is valid http all the same: the error
+    /// says its head is too large, not that it is no http, and asks once.
+    #[test]
+    fn a_reply_with_too_many_headers_says_its_head_is_too_large() {
+        use std::fmt::Write as _;
+
+        use crate::net::api::Api;
+        use crate::net::scripted::serve;
+
+        let mut head = String::from("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n");
+        for line in 0..150 {
+            let _ = write!(head, "X-Line-{line}: v\r\n");
+        }
+        let reply = format!("{head}\r\nok").into_bytes();
+        let (url, asked) = serve(vec![reply; (RETRIES + 1) as usize]);
+        let net = telling(Arc::new(|_| {}));
+        net.typed(&url);
+        let error = crate::source::recorded::block_on(net.get(&url)).unwrap_err();
+        assert_eq!(error.kind, Kind::NetworkStatus, "{}", error.message);
+        assert_eq!(
+            error.message,
+            "127.0.0.1 sent a reply whose head is larger than fetchloom reads"
+        );
+        assert_eq!(
+            error.details,
+            ["more than 100 header lines, or a head too long to hold"]
+        );
         assert_eq!(asked.lock().unwrap().len(), 1);
     }
 

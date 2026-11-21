@@ -68,6 +68,9 @@ use crate::work::Work;
 
 /// how long a connection may take to open, unless `FETCHLOOM_TIMEOUT` asks for longer.
 const CONNECT: Duration = Duration::from_secs(45);
+/// the header lines of an answer the http client reads, hyper's own count, named so that a reply
+/// with more says so.
+pub(crate) const MOST_HEADERS: usize = 100;
 const REDIRECTS: usize = 10;
 /// the most of a refusal's body read to learn why it refused: S3's error documents take a few
 /// hundred bytes.
@@ -435,6 +438,7 @@ impl Wire {
             .dns_resolver(Arc::new(self.resolver(reach)))
             // `send` follows redirects itself, so that each hop is checked before it goes out
             .redirect(reqwest::redirect::Policy::none())
+            .http1_max_headers(MOST_HEADERS)
             // earthdata's archives sign a person in through a redirect to urs.earthdata.nasa.gov,
             // which hands back a cookie the archive then asks for. cookies live for this run only
             .cookie_provider(self.cookies.clone());
