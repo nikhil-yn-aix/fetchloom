@@ -2001,10 +2001,22 @@ mod tests {
             panic!("an untrusted certificate would be tried again: {err:?}");
         };
         assert_eq!(error.kind, Kind::NetworkUnreachable);
-        assert_eq!(
-            error.message,
-            "127.0.0.1 sent a certificate this machine does not trust: no authority this machine trusts signed it, as with one a server signs itself"
-        );
+        // macos holds a server's certificate to apple's rules before it asks who signed it, and
+        // the fixture, valid for a century, breaks them, so there only the start is the same
+        if cfg!(target_os = "macos") {
+            assert!(
+                error
+                    .message
+                    .starts_with("127.0.0.1 sent a certificate this machine does not trust: "),
+                "{}",
+                error.message
+            );
+        } else {
+            assert_eq!(
+                error.message,
+                "127.0.0.1 sent a certificate this machine does not trust: no authority this machine trusts signed it, as with one a server signs itself"
+            );
+        }
         assert_eq!(error.help.as_deref(), Some(UNSIGNED_HELP));
     }
 
