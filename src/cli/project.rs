@@ -987,7 +987,10 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
         &before,
         &lock,
         false,
-        &std::collections::HashSet::new(),
+        (
+            &std::collections::HashSet::new(),
+            &std::collections::HashMap::new(),
+        ),
     );
     work.tell_versions_kept(&manifest, &before, &lock, &upgrade);
     let pins = engine::repinned(&before, &lock);
@@ -1154,7 +1157,13 @@ async fn preview_lock(
             &engine::sizeless(&dry.jobs),
         );
     }
-    engine::tell_upgrades(output, &dry.before, &dry.lock, true, &dry.guessed);
+    engine::tell_upgrades(
+        output,
+        &dry.before,
+        &dry.lock,
+        true,
+        (&dry.guessed, &dry.stated),
+    );
     let download: Vec<Download> = dry
         .jobs
         .iter()

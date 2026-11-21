@@ -1034,11 +1034,16 @@ impl<'a> Loop<'a> {
             jobs.extend(draft.jobs(&self.cache).into_iter().map(|(_, job)| job));
         }
         let now = crate::units::timestamp(SystemTime::now());
-        let mut guessed = HashSet::new();
+        let (mut guessed, mut stated) = (HashSet::new(), HashMap::new());
         let mut drafted = Vec::with_capacity(drafts.len() + pinned.len());
         for draft in drafts {
             let (locked, stood_in) = draft.stand_in(&now)?;
-            guessed.extend(stood_in);
+            for (label, digest) in stood_in {
+                if let Some(digest) = digest {
+                    stated.insert(label.clone(), digest);
+                }
+                guessed.insert(label);
+            }
             drafted.push(locked);
         }
         for mut locked in pinned {
@@ -1055,6 +1060,7 @@ impl<'a> Loop<'a> {
             jobs,
             unpack,
             guessed,
+            stated,
         })
     }
 
@@ -2400,6 +2406,9 @@ pub(super) struct DryRelock {
     pub(super) unpack: Vec<String>,
     /// files, as `<dataset>/<path>`, whose hash in `lock` is a stand-in.
     pub(super) guessed: HashSet<String>,
+    /// the SHA-256 the source of each of `guessed` states for it, where it states one with no
+    /// size, which tells whether its bytes changed before any download.
+    pub(super) stated: HashMap<String, Sha256>,
 }
 
 /// data.lock's entries as relocking sorts them, before it resolves anything.
@@ -3215,13 +3224,14 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
 /// prints each dataset that moved to another version since `before`, and returns their names:
 /// `Upgraded` where its ref is the one it was pinned for, so its source moved on, and `Moved`
 /// where data.toml names another version, which may be older; `Would` ones for a `dry_run`. files
-/// `guessed` by a dry run never count as changed.
+/// `guessed` by a dry run count as changed only by the SHA-256 their source `stated`, as only
+/// their download tells otherwise.
 pub(super) fn tell_upgrades(
     output: &Output,
     before: &Before,
     new: &Lock,
     dry_run: bool,
-    guessed: &HashSet<String>,
+    (guessed, stated): (&HashSet<String>, &HashMap<String, Sha256>),
 ) -> Vec<String> {
     let mut moved = Vec::new();
     for dataset in &new.datasets {
@@ -3239,13 +3249,18 @@ pub(super) fn tell_upgrades(
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let (was, now) = (paths(before), paths(dataset));
-        let unsure = |path: &str| guessed.contains(&format!("{}/{path}", dataset.name));
+        let label = |path: &str| format!("{}/{path}", dataset.name);
+        let unsure = |path: &str| {
+            let label = label(path);
+            guessed.contains(&label) && !stated.contains_key(&label)
+        };
         let added = now.keys().filter(|path| !was.contains_key(*path)).count();
         let removed = was.keys().filter(|path| !now.contains_key(*path)).count();
         let changed = now
             .iter()
             .filter(|(path, sha256)| {
-                !unsure(path) && was.get(*path).is_some_and(|before| before != *sha256)
+                let sha256 = stated.get(&label(path)).unwrap_or(sha256);
+                !unsure(path) && was.get(*path).is_some_and(|before| before != sha256)
             })
             .count();
         if before.resolved == dataset.resolved
@@ -3863,7 +3878,7 @@ mod tests {
                 &Before::whole(Some(old.clone())),
                 &new,
                 false,
-                &HashSet::new()
+                (&HashSet::new(), &HashMap::new())
             ),
             ["changed", "revision"]
         );
@@ -3873,7 +3888,7 @@ mod tests {
                 &Before::whole(Some(old.clone())),
                 &old,
                 false,
-                &HashSet::new()
+                (&HashSet::new(), &HashMap::new())
             ),
             Vec::<String>::new()
         );
@@ -3992,7 +4007,7 @@ mod tests {
                 &Before::whole(Some(old)),
                 &new,
                 true,
-                &guessed
+                (&guessed, &HashMap::new())
             ),
             ["moved"],
             "only a new version is told when the bytes are a guess"

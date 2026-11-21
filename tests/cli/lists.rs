@@ -160,6 +160,43 @@ fn files_a_list_gives_one_sha256_are_one_download() -> Result {
     Ok(())
 }
 
+/// a list that states another SHA-256 for a file data.lock pins tells the change before any
+/// download: the dry run of an upgrade says it would upgrade the file, as the upgrade then says it
+/// did, though only that download learns the file's size.
+#[test]
+fn a_dry_upgrade_tells_the_file_a_list_states_anew() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = served(&[("SHA256SUMS", gnu())])?;
+    sandbox.allow(&server.url);
+    let list = format!("{}/data/SHA256SUMS", server.url);
+    let added = sandbox.run(&["add", &list, "--as", "listed"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let new: &[u8] = b"sepal,petal\n6.3,4.9\n";
+    let sums = format!(
+        "{}  iris.csv\n{}  sub/tips.csv\n",
+        sha256_hex(new),
+        sha256_hex(TIPS)
+    );
+    server.change(vec![
+        ("/data/iris.csv".to_owned(), file(new, "\"i2\"")),
+        (
+            "/data/SHA256SUMS".to_owned(),
+            file(sums.as_bytes(), "\"l2\""),
+        ),
+    ]);
+    let line = format!("upgrade listed \u{b7} list:{list} \u{b7} 1 file changed");
+    let dry = text(&sandbox.run(&["lock", "--upgrade", "--dry-run"])?.stderr)?;
+    assert!(dry.contains(&format!("Would {line}")), "{dry}");
+    let upgraded = sandbox.run(&["lock", "--upgrade"])?;
+    let stderr = text(&upgraded.stderr)?;
+    assert_eq!(upgraded.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("Upgraded {}", &line["upgrade ".len()..])),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// an MD5SUMS line checks the first download: other bytes are refused, naming the file, and the
 /// project stays as it was.
 #[test]

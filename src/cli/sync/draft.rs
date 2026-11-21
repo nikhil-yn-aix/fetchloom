@@ -84,6 +84,10 @@ fn by_link(previous: Option<&Locked>, versions: bool) -> HashMap<String, Vec<&Lo
     by_url
 }
 
+/// a file a dry run stands a hash in for, as `<dataset>/<path>`, with the SHA-256 its source
+/// states, as a list does with no size.
+pub(super) type Guess = (String, Option<Sha256>);
+
 impl Draft {
     /// [`Draft::proving`] on the default threads, as tests draft a dataset.
     #[cfg(test)]
@@ -755,8 +759,9 @@ impl Draft {
 
     /// the entry a dry run plans with, never written: [`Draft::finish`] with a stand-in matching no
     /// cached object for each hash only a download or unpacking learns, and the files, as
-    /// `<dataset>/<path>`, whose hash is one. a file an upgrade asks about again keeps its pin.
-    pub(super) fn stand_in(mut self, now: &str) -> Result<(Locked, Vec<String>), Error> {
+    /// `<dataset>/<path>`, whose hash is one, each with the SHA-256 its source states, as a list
+    /// does with no size. a file an upgrade asks about again keeps its pin.
+    pub(super) fn stand_in(mut self, now: &str) -> Result<(Locked, Vec<Guess>), Error> {
         let mut guessed = Vec::new();
         for file in &mut self.files {
             if file.known.is_none() {
@@ -767,7 +772,7 @@ impl Draft {
                     let label = format!("{}/{}", self.name, file.path);
                     let size = file.remote.size.unwrap_or_default();
                     file.known = Some((stand_in(&label), size));
-                    guessed.push(label);
+                    guessed.push((label, file.remote.sha256));
                 }
             }
         }
