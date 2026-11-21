@@ -792,6 +792,7 @@ impl Reference {
             Reference::Kaggle(dataset) => Some(dataset.page()),
             Reference::InternetArchive(item) => Some(item.page()),
             Reference::Folder(folder) => Some(folder.link().to_string()),
+            Reference::Geo(accession) => Some(accession.page()),
             _ => None,
         }
     }

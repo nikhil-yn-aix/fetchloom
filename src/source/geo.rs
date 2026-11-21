@@ -67,6 +67,14 @@ impl Accession {
         valid.then_some(Accession { id })
     }
 
+    /// the accession's page on GEO's site, which names its title, authors and dates.
+    pub(super) fn page(&self) -> String {
+        format!(
+            "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={}",
+            self.id
+        )
+    }
+
     /// a pasted link to an accession's page on GEO's site or its folder on NCBI's file server, and
     /// the folder inside it the link named, as `suppl`. a link to one file stays a plain link.
     pub(super) fn from_link(url: &Url) -> Option<(Accession, Option<String>)> {

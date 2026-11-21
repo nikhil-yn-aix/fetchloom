@@ -329,10 +329,9 @@ pub(super) fn cite(
             }
         }
     }
-    let alone: Vec<&str> = cited
+    let alone: Vec<&Cited> = cited
         .iter()
         .filter(|entry| entry.doi.is_none() && !entry.missing.is_empty())
-        .map(|entry| entry.dataset.as_str())
         .collect();
     if !alone.is_empty() {
         let (has, its, entry) = if alone.len() == 1 {
@@ -340,16 +339,37 @@ pub(super) fn cite(
         } else {
             ("have", "their", "entries are")
         };
+        let names: Vec<&str> = alone.iter().map(|entry| entry.dataset.as_str()).collect();
         output.warn_with(
             Warning::ExportIncomplete,
             &format!(
                 "{} {has} no DOI, so {its} {entry} built from data.lock alone and marked incomplete",
-                units::listed(&alone, "and")
+                units::listed(&names, "and")
             ),
-            "fill in the authors and year by hand before you cite them",
+            &fill_in(&alone),
         );
     }
     Ok(cited)
+}
+
+/// what to fill in by hand in the entries `alone`, built from data.lock alone: each field one of
+/// them lacks, as the source left it out.
+fn fill_in(alone: &[&Cited]) -> String {
+    let lacked: Vec<&str> = [
+        ("author", "authors"),
+        ("year", "year"),
+        ("title", "title"),
+        ("link", "link"),
+    ]
+    .into_iter()
+    .filter(|(field, _)| alone.iter().any(|entry| entry.missing.contains(field)))
+    .map(|(_, said)| said)
+    .collect();
+    let them = if alone.len() == 1 { "it" } else { "them" };
+    format!(
+        "fill in the {} by hand before you cite {them}",
+        units::listed(&lacked, "and")
+    )
 }
 
 /// the CSL-JSON record of each DOI of `asked`, by its place. fails at a stop.
@@ -901,6 +921,11 @@ mod tests {
                 "https://physionet.org/files/mitdb/1.0.0/SHA256SUMS.txt",
                 None,
             ),
+            (
+                "geo:GSE60450".to_owned(),
+                "https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE60450",
+                None,
+            ),
         ] {
             let mut pin = locked("iris", Some("Iris"), None);
             pin.resolved = resolved;
@@ -925,5 +950,24 @@ mod tests {
         let mut pin = locked("iris", Some("Iris"), None);
         pin.resolved = "list:lists/files.txt".to_owned();
         assert_eq!(super::super::link_of(&pin), None);
+    }
+
+    /// a GEO series names no title, authors or year in data.lock, so the help names each of them
+    /// to fill in, and its page gives the link.
+    #[test]
+    fn the_help_names_each_field_an_entry_lacks() {
+        let mut pin = locked("gse60450", None, None);
+        pin.resolved = "geo:GSE60450".to_owned();
+        let geo = Cited::of_lock(&pin, super::super::link_of(&pin));
+        assert_eq!(geo.missing, ["author", "year", "title"]);
+        assert_eq!(
+            fill_in(&[&geo]),
+            "fill in the authors, year and title by hand before you cite it"
+        );
+        let bare = Cited::of_lock(&locked("uci", None, None), None);
+        assert_eq!(
+            fill_in(&[&geo, &bare]),
+            "fill in the authors, year, title and link by hand before you cite them"
+        );
     }
 }
