@@ -664,3 +664,48 @@ fn citations_take_a_dataset_pinned_by_its_md5_alone() -> Result {
     }
     Ok(())
 }
+
+/// `-o` never writes over the project's own data.toml or data.lock, or into its data.lock.d,
+/// `--force` or not: the refusal comes before any other check, offers no `--force`, and the pins
+/// stay as they were.
+#[test]
+fn export_never_writes_over_the_projects_own_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (routes, _) = server()?;
+    added(&sandbox, &routes, &["iris.csv"])?;
+    let work = sandbox.work();
+    let (manifest, lock) = (
+        fs::read(work.join("data.toml"))?,
+        fs::read(work.join("data.lock"))?,
+    );
+    fs::create_dir_all(work.join("sub"))?;
+    for target in [
+        "data.lock",
+        "data.toml",
+        "./sub/../data.lock",
+        "data.lock.d/sums.txt",
+    ] {
+        for force in [false, true] {
+            let mut args = vec!["--json", "export", "-o", target];
+            if force {
+                args.push("--force");
+            }
+            let output = sandbox.run(&args)?;
+            let document = json(&output)?;
+            assert_eq!(output.status.code(), Some(2), "{target}: {document}");
+            let error = &document["errors"][0];
+            assert_eq!(error["kind"], "usage", "{target}: {document}");
+            assert!(
+                !error["help"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .contains("--force"),
+                "{target}: {document}"
+            );
+        }
+    }
+    assert_eq!(fs::read(work.join("data.toml"))?, manifest);
+    assert_eq!(fs::read(work.join("data.lock"))?, lock);
+    assert!(!work.join("data.lock.d").exists());
+    Ok(())
+}

@@ -1883,6 +1883,82 @@ pub(super) fn data_links(context: &Context) -> crate::project::DataLinks {
     }
 }
 
+/// refuses `path`, the one file `-o` names, when it is a project's own data.toml or data.lock,
+/// or lies in its data.lock.d: writing it would take the pins, `--force` or not. names are
+/// compared ignoring case, as a disk that ignores case compares them.
+pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
+    let Ok(target) = std::path::absolute(path) else {
+        return Ok(());
+    };
+    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else {
+        return Ok(());
+    };
+    let folder = resolved(folder);
+    let is = |name: &std::ffi::OsStr, own: &str| {
+        name.to_str()
+            .is_some_and(|name| name.eq_ignore_ascii_case(own))
+    };
+    let lists = lock::lists::FOLDER;
+    let own = [manifest::FILE, lock::FILE, lists]
+        .into_iter()
+        .find(|own| is(name, own))
+        .filter(|_| folder.join(manifest::FILE).is_file())
+        .or_else(|| {
+            folder
+                .ancestors()
+                .any(|above| {
+                    above.file_name().is_some_and(|name| is(name, lists))
+                        && above
+                            .parent()
+                            .is_some_and(|root| root.join(manifest::FILE).is_file())
+                })
+                .then_some(lists)
+        });
+    let Some(own) = own else {
+        return Ok(());
+    };
+    Err(Error::new(
+        Kind::Usage,
+        format!(
+            "-o names {}, and fetchloom never writes over a project's {own}",
+            path.display()
+        ),
+    )
+    .help(
+        "give -o another file name: data.toml, data.lock and data.lock.d hold the project's pins",
+    ))
+}
+
+/// `folder`, an absolute path, with its links and `..` resolved as the system resolves them once
+/// the folders it lacks are made: the part that exists through the disk, and the rest by its
+/// names, since a folder made there is no link. `new/..` is the folder `new` would be made in.
+fn resolved(folder: &Path) -> PathBuf {
+    let mut made = Vec::new();
+    let mut there = folder;
+    let mut resolved = loop {
+        if let Ok(real) = std::fs::canonicalize(there) {
+            break real;
+        }
+        match (there.parent(), there.components().next_back()) {
+            (Some(parent), Some(last)) => {
+                made.push(last);
+                there = parent;
+            }
+            _ => return folder.to_path_buf(),
+        }
+    };
+    for part in made.into_iter().rev() {
+        match part {
+            std::path::Component::ParentDir => {
+                resolved.pop();
+            }
+            std::path::Component::CurDir => {}
+            part => resolved.push(part),
+        }
+    }
+    resolved
+}
+
 /// the project around the current folder.
 pub(super) fn find(context: &Context) -> Result<Project, Error> {
     let output = &context.output;

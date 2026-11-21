@@ -3815,3 +3815,50 @@ fn a_get_unpacks_xz_blocks_on_its_share_of_the_threads() -> Result {
     }
     Ok(())
 }
+
+/// `get -o` never writes over a project's own data.toml or data.lock, or into its data.lock.d,
+/// `--force` or not, from the project's folder or one below it, or through a folder not made yet
+/// that `..` leaves: it refuses before any request, and makes no folder.
+#[test]
+fn get_never_writes_over_a_projects_own_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        ("/iris.csv".to_owned(), file(b"a,b\n1,2\n", "\"i1\"")),
+        ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    let (manifest, lock) = (
+        std::fs::read(work.join("data.toml"))?,
+        std::fs::read(work.join("data.lock"))?,
+    );
+    let below = sandbox.folder("work/notes")?;
+    let link = format!("{}/hello.txt", server.url);
+    let asked = server.requests().len();
+    for (folder, target) in [
+        (&work, "data.lock"),
+        (&work, "data.toml"),
+        (&work, "data.lock.d/hello.txt"),
+        (&below, "../data.lock"),
+        (&work, "new/../data.lock"),
+        (&work, "new/deeper/../../data.toml"),
+    ] {
+        let output = sandbox
+            .command_in(folder, &["--json", "get", &link, "-o", target, "--force"])
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{target}: {document}");
+        assert_eq!(
+            document["errors"][0]["kind"], "usage",
+            "{target}: {document}"
+        );
+    }
+    assert_eq!(server.requests().len(), asked, "nothing was asked for");
+    assert_eq!(std::fs::read(work.join("data.toml"))?, manifest);
+    assert_eq!(std::fs::read(work.join("data.lock"))?, lock);
+    assert!(!work.join("data.lock.d").exists());
+    assert!(!work.join("new").exists());
+    Ok(())
+}

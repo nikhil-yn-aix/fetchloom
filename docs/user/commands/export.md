@@ -25,7 +25,7 @@ fetchloom export [options] [name]...
 | `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=` its place below the data folder and `checksum=sha-256=` |
 | `--format bibtex`, `csl`, `ris` | a citation of each dataset: a BibTeX entry, a CSL-JSON item, as pandoc and zotero read them, or an RIS record, as [citations](#citations) says |
 | `--format statement` | a data availability paragraph for a paper: each dataset with its DOI or link, and the SHA-256 of each of its files |
-| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists` |
+| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists`. the project's own `data.toml`, `data.lock` and what `data.lock.d` holds are refused as usage, exit 2, `--force` or not |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
 
 [global options](global-options.md) also apply.
@@ -131,4 +131,4 @@ a refused link is never shown, in the error or in JSON.
 
 ## exit codes
 
-0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, and 50 that a link cannot be written or that `-o` names a file already there. a folder or `-` for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).
+0 means the answer was written, even an empty one, or JSON listed what is known. 1 means a dataset is not pinned yet, 20 that an archive's files are not known here, and 50 that a link cannot be written or that `-o` names a file already there. a folder, `-` or one of the project's own files for `-o`, and `--force` without `-o`, are usage errors, exit 2. other failures use the [shared exit codes](../reference/exit-codes.md).

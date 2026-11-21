@@ -73,6 +73,7 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
         )
         .help(format!("name the file inside it, as in `-o {named}`")));
     }
+    super::super::project::refuse_own_file(path)?;
     if let Some(reason) = path
         .file_name()
         .and_then(|name| name.to_str())
