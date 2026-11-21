@@ -829,7 +829,12 @@ fn lock_first(
         tracing::debug!(
             "data.lock is read without its lists' rows, which the last complete sync read"
         );
-        return Ok((Some(lock), Some(text), Some(manifest.clone())));
+        let copy = manifest.clone();
+        // the copy is held beside the manifest, which a container's room counts again
+        if crate::project::lock::limited() {
+            crate::project::lock::hold(manifest::held("", &copy));
+        }
+        return Ok((Some(lock), Some(text), Some(copy)));
     }
     let (lock, text) = project.lock_from(text)?;
     Ok((Some(lock), Some(text), None))

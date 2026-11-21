@@ -393,10 +393,18 @@ impl Project {
     }
 
     /// [`Manifest::parse`] of data.toml's `text`, naming an unfinished merge in place of the
-    /// parser's error.
+    /// parser's error. in a container, the read is refused before it begins when it would
+    /// overrun the room, and what the manifest holds after is counted against every later read of
+    /// data.lock.
     pub(crate) fn parse_manifest(text: &str) -> Result<Manifest, Error> {
         let _span = tracing::debug_span!("read_manifest").entered();
-        Manifest::parse(text).map_err(|error| unmerged(manifest::FILE, text).unwrap_or(error))
+        let weighed = lock::limited();
+        let manifest = Manifest::parse_weighed(text, weighed)
+            .map_err(|error| unmerged(manifest::FILE, text).unwrap_or(error))?;
+        if weighed {
+            lock::hold(manifest::held(text, &manifest));
+        }
+        Ok(manifest)
     }
 
     /// data.lock, or nothing when the project has none yet.

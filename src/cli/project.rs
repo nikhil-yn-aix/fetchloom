@@ -344,7 +344,16 @@ fn settled_plain(
     if synced.manifest != read {
         return None;
     }
-    manifest::read_plain(text).map(|plain| (plain, read))
+    // a read too big for the container is left to the parse, which refuses it
+    let weighed = lock::limited();
+    if weighed && lock::fits_manifest(text.len() as u64, manifest::plain_weight(text)).is_err() {
+        return None;
+    }
+    let plain = manifest::read_plain(text)?;
+    if weighed {
+        lock::hold(manifest::held(text, &plain));
+    }
+    Some((plain, read))
 }
 
 /// a sync of every dataset from `plain`, data.toml's `text` as [`settled_plain`] read it with its

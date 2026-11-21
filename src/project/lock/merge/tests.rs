@@ -1141,3 +1141,33 @@ fn a_pin_not_downloaded_yet_merges_as_any_pin() {
     let kept = merged(&manifest, &unchanged, &[]).unwrap().lock.unwrap();
     assert_eq!(kept.stated, [core]);
 }
+
+/// a merge is weighed by every side of data.toml it reads: a big base, or a big whole file git
+/// merged around a conflict, whose datasets both small sides deleted, and sides that each add
+/// datasets the other lacks, whose merged manifest holds them all beside the sides.
+#[test]
+fn a_merge_is_weighed_by_every_side_it_reads() {
+    let tables = |datasets: std::ops::Range<usize>| {
+        datasets.fold(String::new(), |mut text, at| {
+            let _ = write!(text, "[datasets.d{at:04}]\nref = \"zenodo:{at}\"\n");
+            text
+        })
+    };
+    let big = tables(0..2_000);
+    let small = (tables(0..1), tables(1..2));
+    let based = sides(small.0.clone(), small.1.clone(), Some(big.clone()));
+    let whole = Sides {
+        whole: Some([big.clone(), small.1.clone()]),
+        ..sides(small.0.clone(), small.1.clone(), None)
+    };
+    for read in [based, whole] {
+        let (_, need, _) = sides_weight(&read);
+        assert!(need >= manifest::parse_weight(&big), "{need}");
+    }
+    let (ours, theirs, union) = (tables(0..500), tables(500..1_000), tables(0..1_000));
+    let both = Manifest::parse(&union).unwrap();
+    let (_, need, kept) = sides_weight(&sides(ours.clone(), theirs.clone(), None));
+    let sides_kept = manifest::kept(&ours) + manifest::kept(&theirs);
+    assert!(kept >= sides_kept + manifest::held(&union, &both), "{kept}");
+    assert!(need >= kept, "{need} < {kept}");
+}

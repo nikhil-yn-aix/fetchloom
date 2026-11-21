@@ -275,6 +275,7 @@ pub(crate) fn merge(
     told: &dyn Fn(&str),
     committed: Option<Committed<'_>>,
 ) -> Result<Merged, Error> {
+    weigh_sides(manifest)?;
     let manifests = read_manifests(manifest)?;
     let frame = frame(manifest)?;
     let mut decided = Decided::default();
@@ -282,7 +283,7 @@ pub(crate) fn merge(
     let text = merged_text(&manifests, frame, &decided.entries)?;
     let merged = read_merged(&text)?;
     check_merged(&manifests, &merged, &decided.entries)?;
-    let memory = super::ROOM.get().copied().unwrap_or(u64::MAX);
+    let memory = super::room();
     let locks = lock.map(|lock| read_locks(lock, memory)).transpose()?;
     let mut records = match &locks {
         Some(locks) => {
@@ -343,6 +344,48 @@ pub(crate) fn merge(
         repinned,
         warnings: decided.warnings,
     })
+}
+
+/// in a container: refuses a merge before it reads any side of data.toml when its reads would
+/// overrun the room, and counts what it keeps against the sides of data.lock it reads after, as
+/// [`sides_weight`] weighs them.
+fn weigh_sides(sides: &Sides) -> Result<(), Error> {
+    if !super::limited() {
+        return Ok(());
+    }
+    let (bytes, need, kept) = sides_weight(sides);
+    super::fits_manifest(bytes, need)?;
+    super::hold(kept);
+    Ok(())
+}
+
+/// what a merge of the sides of data.toml takes: their bytes, the memory its reads take at their
+/// peak, and what it keeps after them. it keeps each side it reads, its manifest and each
+/// dataset's own text, while it parses the next, one text at a time: any side, base and whole
+/// ones too, or the merged text, of at most both sides' datasets, whose manifest it keeps too.
+fn sides_weight(sides: &Sides) -> (u64, u64, u64) {
+    let read = [
+        Some(sides.ours.as_str()),
+        Some(sides.theirs.as_str()),
+        sides.base.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .chain(sides.whole.iter().flatten().map(String::as_str));
+    let (mut bytes, mut kept, mut parse) = (0_u64, 0_u64, 0_u64);
+    for text in read {
+        bytes = bytes.saturating_add(text.len() as u64);
+        kept = kept.saturating_add(manifest::kept(text));
+        parse = parse.max(manifest::parse_weight(text));
+    }
+    let merged_parse =
+        manifest::parse_weight(&sides.ours).saturating_add(manifest::parse_weight(&sides.theirs));
+    let merged_kept = manifest::kept(&sides.ours).saturating_add(manifest::kept(&sides.theirs));
+    (
+        bytes,
+        kept.saturating_add(parse.max(merged_parse)),
+        kept.saturating_add(merged_kept),
+    )
 }
 
 /// the merged data.toml, read.

@@ -451,6 +451,119 @@ fn a_project_too_big_for_its_container_is_refused_before_it_is_read() -> Result 
     Ok(())
 }
 
+/// in a container, data.toml's read is weighed before it begins, beside what a run holds before
+/// it reads a project: one whose read would overrun the room is refused by its size before it is
+/// parsed, and what the manifest holds once read counts against data.lock's read beside it, so a
+/// lock that fits the room alone is refused once the manifest takes its part. it is weighed read
+/// line by line, as `add` writes it, and by the parser, which a ref in single quotes takes.
+#[test]
+fn a_data_toml_too_big_for_its_container_is_refused_before_it_is_read() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("parts")?;
+    for at in 0..6_000 {
+        std::fs::write(folder.join(format!("p{at:04}.csv")), at.to_string())?;
+    }
+    let added = sandbox.run(&["add", "../parts"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let toml = sandbox.work().join("data.toml");
+    let imported = std::fs::read_to_string(&toml)?;
+    let with = |count: usize, quote: char| {
+        use std::fmt::Write as _;
+        let mut text = imported.clone();
+        for at in 0..count {
+            let _ = write!(
+                text,
+                "\n[datasets.d{at:05}]\nref = {quote}https://example.org/d{at:05}.csv{quote}\n"
+            );
+        }
+        std::fs::write(&toml, text)
+    };
+    let base: u64 = if cfg!(target_env = "musl") {
+        20 << 20
+    } else {
+        8 << 20
+    };
+    let list = |room: u64| {
+        sandbox
+            .command(&["--json", "list"])
+            .env("FETCHLOOM_TEST_ROOM", room.to_string())
+            .output()
+    };
+    let answered = |output: &std::process::Output, case: &str| -> Result {
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{case}: {}",
+            text(&output.stderr)?
+        );
+        Ok(())
+    };
+    let refused = |output: &std::process::Output, says: &str| -> Result {
+        let document = json(output)?;
+        assert_eq!(output.status.code(), Some(50), "{document}");
+        assert_eq!(document["errors"][0]["kind"], "local.io", "{document}");
+        assert!(document.to_string().contains(says), "{says}: {document}");
+        Ok(())
+    };
+    // the lock's 6,000 files take 3.9 MB past the base, which these rooms leave it
+    for quote in ['"', '\''] {
+        // 10,000 datasets take more than 6 MB to read
+        with(10_000, quote)?;
+        refused(
+            &list(base + 6_000_000)?,
+            "reading this project's data.toml, which is",
+        )?;
+        // 1,000 datasets take less than 4.4 MB to read, but hold more than 0.5 MB after
+        with(1_000, quote)?;
+        let room = base + 4_400_000;
+        refused(&list(room)?, "data.toml, read already, holds about")?;
+        answered(&list(room + (4 << 20))?, "roomy")?;
+    }
+    Ok(())
+}
+
+/// in a room too small for the base alone, data.toml's read is still weighed by itself: a project
+/// pinning nothing, whose data.lock has no files to refuse it later, answers with a small data.toml
+/// and is refused before it reads one the parser would take more than that room to read.
+#[test]
+fn a_data_toml_too_big_for_a_room_below_the_base_is_refused() -> Result {
+    let sandbox = Sandbox::new()?;
+    let toml = sandbox.work().join("data.toml");
+    let with = |count: usize| {
+        use std::fmt::Write as _;
+        let text = (0..count).fold(String::new(), |mut text, at| {
+            let _ = write!(
+                text,
+                "[datasets.d{at:05}]\nref = 'https://example.org/d{at:05}.csv'\n"
+            );
+            text
+        });
+        std::fs::write(&toml, text)
+    };
+    let list = || {
+        sandbox
+            .command(&["--json", "list"])
+            .env("FETCHLOOM_TEST_ROOM", (1_u64 << 20).to_string())
+            .output()
+    };
+    with(10)?;
+    let small = list()?;
+    assert_eq!(small.status.code(), Some(0), "{}", text(&small.stderr)?);
+    with(10_000)?;
+    let big = list()?;
+    let document = json(&big)?;
+    assert_eq!(big.status.code(), Some(50), "{document}");
+    assert_eq!(document["errors"][0]["kind"], "local.io", "{document}");
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with("reading this project's data.toml, which is "),
+        "{message}"
+    );
+    Ok(())
+}
+
 /// `FETCHLOOM_NO_CONFIG` works as `--no-config` does, `settings` says the file was bypassed, and
 /// data.toml is still read.
 #[test]

@@ -11,6 +11,7 @@ mod model_tests;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::de::Error as _;
 use serde::{Deserialize, Deserializer};
@@ -68,6 +69,71 @@ pub(crate) fn set_room(room: Option<u64>) {
     debug_assert!(first, "the container's room is set once, at start");
 }
 
+/// what the manifests read already from data.toml take of the room while a lock is read: all
+/// [`hold`] was told, none until then.
+static HELD: AtomicU64 = AtomicU64::new(0);
+
+/// whether a container's limit holds this run, so reads are weighed against its room.
+pub(crate) fn limited() -> bool {
+    ROOM.get().is_some_and(|room| *room < u64::MAX)
+}
+
+/// adds `bytes`, what a manifest read from data.toml holds with its text, to what every later
+/// read in this run is weighed beside: a run may hold several, as a merge's sides.
+pub(crate) fn hold(bytes: u64) {
+    let _ = HELD.try_update(Ordering::Relaxed, Ordering::Relaxed, |held| {
+        Some(held.saturating_add(bytes))
+    });
+}
+
+/// the room a container leaves a read: [`ROOM`], less what data.toml's manifest holds of it.
+pub(crate) fn room() -> u64 {
+    ROOM.get()
+        .copied()
+        .unwrap_or(u64::MAX)
+        .saturating_sub(HELD.load(Ordering::Relaxed))
+}
+
+/// refuses, before it is read, data.toml of `bytes` whose read takes about `read` of memory, as
+/// [`manifest_need`] counts it, more than the room a container leaves, as [`fits_text`] refuses a
+/// lock's text.
+pub(crate) fn fits_manifest(bytes: u64, read: u64) -> Result<(), Error> {
+    let room = room();
+    let need = manifest_need(read, room);
+    if need <= room {
+        return Ok(());
+    }
+    Err(too_big(
+        &format!("data.toml, which is {},", crate::units::size(bytes)),
+        need,
+        room,
+    ))
+}
+
+/// what data.toml's read of about `read` bytes needs of `room`: [`BASE`], which a run holds before
+/// it reads a project, and the read beside it. a room too small for the base alone is left to the
+/// count of data.lock's files, as before data.toml was weighed, so a run that reads none of them
+/// still answers there, and only the read itself is weighed against it.
+fn manifest_need(read: u64, room: u64) -> u64 {
+    if room < BASE {
+        read
+    } else {
+        BASE.saturating_add(read)
+    }
+}
+
+/// `error`, a read refused for the room, with what data.toml's manifest holds of the memory it
+/// names.
+fn beside_manifest(error: Error) -> Error {
+    match HELD.load(Ordering::Relaxed) {
+        0 => error,
+        held => error.detail(format!(
+            "data.toml, read already, holds about {} of it",
+            crate::units::size(held)
+        )),
+    }
+}
+
 /// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
 /// too big for its container says so instead of being killed partway.
 fn fits<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<(), Error> {
@@ -119,8 +185,8 @@ impl Budget {
             format!(
                 "reading this project's {} takes at least {} of memory, more than the {} this container leaves fetchloom",
                 crate::units::count(self.files, "file", "files"),
-                crate::units::size(self.need),
-                crate::units::size(self.room)
+                crate::units::size(with_manifest(self.need)),
+                crate::units::size(with_manifest(self.room))
             ),
         )
         .detail(format!(
@@ -134,7 +200,7 @@ impl Budget {
                 crate::units::size(self.taken)
             ))
         };
-        Err(error.help(raise(self.need - self.room)))
+        Err(beside_manifest(error).help(raise(self.need - self.room)))
     }
 }
 
@@ -159,22 +225,28 @@ pub(crate) fn fits_file(bytes: u64) -> Result<(), Error> {
     fits_text(
         &format!("data.lock, which is {},", crate::units::size(bytes)),
         bytes,
-        ROOM.get().copied().unwrap_or(u64::MAX),
+        room(),
     )
 }
 
 /// the error for reading `what` of the project, which takes about `need` bytes of memory, more
 /// than the `room` its container leaves.
 fn too_big(what: &str, need: u64, room: u64) -> Error {
-    Error::new(
+    beside_manifest(Error::new(
         Kind::LocalIo,
         format!(
             "reading this project's {what} takes about {} of memory, more than the {} this container leaves fetchloom",
-            crate::units::size(need),
-            crate::units::size(room)
+            crate::units::size(with_manifest(need)),
+            crate::units::size(with_manifest(room))
         ),
-    )
+    ))
     .help(raise(need - room))
+}
+
+/// `bytes`, a need or a room that [`room`] counted without what data.toml's manifest holds, with
+/// it again: a message names what the container leaves, and the manifest's part as a detail.
+fn with_manifest(bytes: u64) -> u64 {
+    bytes.saturating_add(HELD.load(Ordering::Relaxed))
 }
 
 /// how to give a read that is `short` bytes short the memory it takes.
@@ -324,7 +396,7 @@ pub(crate) fn lists_whole(text: &str, root: &Path) -> bool {
     if !text.contains("files_in") && !text.contains('\\') {
         return true;
     }
-    let Ok(parsed) = parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX)) else {
+    let Ok(parsed) = parse_within(text, &|_| false, room()) else {
         return false;
     };
     let mut listed = parsed
@@ -345,7 +417,7 @@ pub(crate) fn missing_lists(text: &str, root: &Path) -> Vec<Waiting> {
     if !text.contains("files_in") {
         return Vec::new();
     }
-    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
+    parse_within(text, &|_| false, room())
         .unwrap_or_default()
         .into_iter()
         .filter_map(|parsed| {
@@ -361,7 +433,7 @@ pub(crate) fn named_lists(text: &str) -> std::collections::HashSet<Sha256> {
     if !text.contains("files_in") {
         return std::collections::HashSet::new();
     }
-    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
+    parse_within(text, &|_| false, room())
         .unwrap_or_default()
         .iter()
         .filter_map(|parsed| parsed.written().map(|listed| listed.sha256))
@@ -371,7 +443,7 @@ pub(crate) fn named_lists(text: &str) -> std::collections::HashSet<Sha256> {
 /// each dataset data.lock's `text` pins, by name, with the parts of its file list, none if it
 /// does not read; a list's lines are not read.
 pub(crate) fn listed(text: &str) -> Vec<(String, Vec<String>)> {
-    parse_within(text, &|_| false, ROOM.get().copied().unwrap_or(u64::MAX))
+    parse_within(text, &|_| false, room())
         .unwrap_or_default()
         .iter()
         .map(|parsed| {
@@ -774,11 +846,7 @@ impl Lock {
         has: &dyn Fn(&str) -> bool,
         taken: u64,
     ) -> Result<(Lock, Vec<String>), Error> {
-        let room = ROOM
-            .get()
-            .copied()
-            .unwrap_or(u64::MAX)
-            .saturating_sub(taken);
+        let room = room().saturating_sub(taken);
         let beside = |error: Error| {
             if taken == 0 {
                 return error;
@@ -869,7 +937,7 @@ impl Lock {
         root: &Path,
         keep: &dyn Fn(&str) -> bool,
     ) -> Result<Lock, Error> {
-        Lock::read_waiting_within(text, root, keep, ROOM.get().copied().unwrap_or(u64::MAX))
+        Lock::read_waiting_within(text, root, keep, room())
     }
 
     /// [`Lock::read_waiting`] of every dataset with no list's rows read: a dataset whose files are
@@ -877,7 +945,7 @@ impl Lock {
     /// and each list by what data.lock says of it, for a settled status, which needs no listed
     /// file once [`lists_whole`] found every list there and whole, so none waits.
     pub(crate) fn read_unlisted(text: &str, root: &Path) -> Result<Lock, Error> {
-        let memory = ROOM.get().copied().unwrap_or(u64::MAX);
+        let memory = room();
         let parsed = parse_within(text, &|_| true, memory)?;
         if parsed.iter().any(|entry| entry.written().is_some()) {
             lists::folder(root)?;
@@ -932,7 +1000,7 @@ impl Lock {
         name: &str,
         row: &dyn Fn(&str) -> bool,
     ) -> Option<Lock> {
-        let memory = ROOM.get().copied().unwrap_or(u64::MAX);
+        let memory = room();
         let mut parsed = parse_within(text, keep, memory).ok()?;
         parsed.retain(|entry| keep(entry.name()));
         if parsed.iter().any(|entry| entry.written().is_some()) {
@@ -1347,7 +1415,7 @@ fn sorted(files: &[LockedFile]) -> Vec<LockedFile> {
 
 /// the datasets a lock's text gives in name order, by the narrow reader when it is the writer's.
 fn parse(text: &str) -> Result<Vec<Parsed>, Error> {
-    parse_within(text, &|_| true, ROOM.get().copied().unwrap_or(u64::MAX))
+    parse_within(text, &|_| true, room())
 }
 
 /// [`parse_only`] within `room`: a text too big for it is refused before it is parsed, as
@@ -1491,7 +1559,7 @@ fn parse_toml(text: &str) -> Result<Vec<Parsed>, Error> {
 /// a container leaves.
 #[cfg(test)]
 fn resolve(parsed: Vec<Parsed>, root: Option<&Path>) -> Result<Lock, Error> {
-    let mut budget = Budget::of(&parsed, ROOM.get().copied().unwrap_or(u64::MAX))?;
+    let mut budget = Budget::of(&parsed, room())?;
     resolve_from(parsed, root.map(lists::Parts::Folder), &mut budget)
 }
 
@@ -2480,6 +2548,22 @@ mod tests {
             2,
             "a quote could start a string, so it is read"
         );
+    }
+
+    /// data.toml's read is weighed beside the base, and in a room too small for the base alone by
+    /// itself: there a small read fits and one past the room does not, while from the base up a
+    /// read fits only what the base leaves.
+    #[test]
+    fn data_tomls_read_is_weighed_in_a_room_below_the_base_too() {
+        let fits = |read: u64, room: u64| manifest_need(read, room) <= room;
+        let below = BASE - 1;
+        assert!(fits(1_000, below));
+        assert!(fits(below, below));
+        assert!(!fits(below + 1, below));
+        assert!(!fits(37 << 20, below));
+        assert!(fits(1_000, BASE + 1_000));
+        assert!(!fits(1_001, BASE + 1_000));
+        assert!(!fits(1, BASE));
     }
 
     /// a lock's text is held against the room before it is parsed, since the text and what it

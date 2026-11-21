@@ -1824,6 +1824,91 @@ fn a_plain_data_toml_reads_as_the_parser_reads_it() {
     assert_eq!(plain.datasets.keys().collect::<Vec<_>>(), ["iris", "paper"]);
 }
 
+/// what the parser built of a table: each table in it, of a header or of a dotted key, each key
+/// and its value, each value in an array and each inline table, as [`items`] means them.
+fn built(table: &dyn TableLike) -> u64 {
+    fn value(of: &Value) -> u64 {
+        match of {
+            Value::Array(array) => array.iter().map(|inside| 1 + value(inside)).sum(),
+            Value::InlineTable(table) => table.iter().map(|(_, inside)| 1 + value(inside)).sum(),
+            _ => 0,
+        }
+    }
+    table
+        .iter()
+        .map(|(_, item)| match item {
+            Item::Table(inside) => 1 + built(inside),
+            Item::Value(inside) => 1 + value(inside),
+            Item::ArrayOfTables(tables) => tables.iter().map(|inside| 1 + built(inside)).sum(),
+            Item::None => 0,
+        })
+        .sum()
+}
+
+/// the items [`items`] counts outside strings and comments are at least what the parser builds:
+/// tables of every kind, dotted keys, arrays nested and inline tables, beside strings of every
+/// kind and comments holding `=`, `[`, `{`, `,`, `.`, quotes and escapes, which count none.
+#[test]
+fn the_items_counted_bound_what_the_parser_builds() {
+    let texts = [
+        "[datasets.iris]\nref = \"https://example.org/iris.csv?a=1,b=[2]\"\n",
+        "[datasets.eeg]\nref = 'zenodo:1'\nselect = [\"**/*.edf\", 'participants.tsv']\n[datasets.eeg.members.\"raw/b.tar.gz\"]\nexclude = [\"old/*\"]\n",
+        "a.b.c.d = 1\n[x.y.z]\nq.r = { s = 1, t = [1, [2, {u = 3}]], v.w = 'x' }\n",
+        "[[aot]]\nk = 1\n[[aot]]\n[[aot.inner]]\nm = [[], [[]], {}]\n",
+        "s = \"\"\"\nx = [1, 2]\n\\\"\"\" . = [ { ,\n\"\"\"\"\"\nt = '''\n[a.b] = ,\n'''''\nu = 1 # v = [w.x, {y}]\n",
+        "e = \"a\\\\\" # still a comment . = [\nf = \"\\\"\" # ' . = [\ng = 'lit\\' # \" . =\n",
+        "\"quoted.key\" = 1\n'lit.key' = { \"a.b\" = 2 }\n[\"t.u\".'v.w']\nx = 1.5\ny = 1979-05-27T07:32:00.999Z\n",
+        "# only a comment, with = [ { , . inside\n",
+        "",
+    ];
+    for text in texts {
+        let document = Document::parse(text).unwrap_or_else(|error| panic!("{text:?}: {error}"));
+        let built = built(document.as_table());
+        assert!(items(text) >= built, "{text:?}: {} < {built}", items(text));
+    }
+    assert_eq!(items("s = \"x.y=[{,\" # z.w=[{,\n"), 1);
+    assert_eq!(items("s = \"\"\"\nx.y = [ {,\n\"\"\"\"\"\n"), 1);
+    assert_eq!(items("s = '''\nx.y = [{,\n'''''\n"), 1);
+    assert_eq!(items("s = \"a\\\".b = [\" # c\n"), 1);
+    assert_eq!(items("s = 'a\\'.b"), 2);
+    let added = (0..300).fold(String::new(), |mut text, at| {
+        let _ = write!(
+            text,
+            "[datasets.d{at:03}]\nref = \"https://example.org/d.csv?k=1,2\"\n"
+        );
+        text
+    });
+    assert_eq!(items(&added), 900);
+    assert_eq!(
+        built(Document::parse(added.as_str()).unwrap().as_table()),
+        601
+    );
+}
+
+/// what a merge keeps of a data.toml is at least what its manifest holds, however its tables are
+/// spelled: quoted or spaced headers, dotted keys, inline tables, and the tables `add` writes.
+#[test]
+fn a_merge_keeps_at_least_what_a_read_holds() {
+    let added = (0..300).fold(String::new(), |mut text, at| {
+        let _ = write!(text, "[datasets.d{at:03}]\nref = \"zenodo:{at}\"\n");
+        text
+    });
+    for text in [
+        "[\"datasets\".\"iris\"]\nref = \"zenodo:1\"\n",
+        "[ datasets.iris ]\nref = \"zenodo:1\"\n",
+        "[datasets.\"iris\"]\nref = \"zenodo:1\"\n[datasets.a]\nref = 'zenodo:2'\n",
+        "datasets.iris.ref = \"zenodo:1\"\ndatasets.a.ref = \"zenodo:2\"\n",
+        "[datasets]\niris = { ref = \"zenodo:1\" }\na = { ref = \"zenodo:2\", select = [\"*.csv\"] }\n",
+        added.as_str(),
+    ] {
+        let read =
+            Manifest::parse(text).unwrap_or_else(|error| panic!("{text:?}: {}", error.message));
+        assert!(!read.datasets.is_empty(), "{text:?}");
+        let (kept, held) = (kept(text), held(text, &read));
+        assert!(kept >= held, "{text:?}: {kept} < {held}");
+    }
+}
+
 /// refs whose links imply a select, besides [`PLAIN_LINES`], and lines of the kinds `add` writes
 /// but for a space no TOML parser reads as one, or a carriage return alone.
 const LIGHT_LINES: [&str; 3] = [

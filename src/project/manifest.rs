@@ -330,14 +330,26 @@ impl Manifest {
         })
     }
 
-    /// data.toml's `text` read: line by line, as [`read_light`] reads it, when it holds only what
+    /// data.toml's `text` read: line by line, as [`read_counted`] reads it, when it holds only what
     /// `add` writes, else by the parser.
     pub(crate) fn parse(text: &str) -> Result<Manifest, Error> {
+        Manifest::parse_weighed(text, false)
+    }
+
+    /// [`Manifest::parse`] of data.toml's `text`, which, when `weighed`, refuses it before reading
+    /// it when the read would overrun the room a container leaves, as [`PER_ITEM`] and
+    /// [`LIGHT_PER_DATASET`] count it and [`crate::project::lock::fits_manifest`] weighs it.
+    pub(crate) fn parse_weighed(text: &str, weighed: bool) -> Result<Manifest, Error> {
         #[cfg(test)]
         tests::reading();
         let text = text.strip_prefix('\u{feff}').unwrap_or(text);
-        if let Some(manifest) = read_light(text) {
-            return Ok(manifest);
+        let light = plain_count(text);
+        if weighed {
+            let need = light.map_or_else(|| parse_weight(text), |count| light_weight(text, count));
+            crate::project::lock::fits_manifest(text.len() as u64, need)?;
+        }
+        if let Some(count) = light {
+            return Ok(read_counted(text, count));
         }
         Manifest::parse_tree(text)
     }
@@ -594,29 +606,143 @@ fn plain_count(text: &str) -> Option<usize> {
     Some(count)
 }
 
-/// [`Manifest::parse`] of data.toml's `text`, with no byte-order mark, when it holds only what
-/// `add` writes, as [`plain_count`] reads it: the same manifest, each entry with the select its
-/// link implies and its ref's line cited, read line by line with no TOML tree. none for any
-/// other text, of which no entry is made: every line is checked before any is kept.
+/// [`read_counted`] of data.toml's `text` when [`plain_count`] reads it; none for any other text.
+#[cfg(test)]
 pub(crate) fn read_light(text: &str) -> Option<Manifest> {
-    let count = plain_count(text)?;
+    plain_count(text).map(|count| read_counted(text, count))
+}
+
+/// [`Manifest::parse`] of data.toml's `text`, with no byte-order mark, which holds only what `add`
+/// writes, as [`plain_count`] found it with `count` datasets: the same manifest, each entry with
+/// the select its link implies and its ref's line cited, read line by line with no TOML tree.
+/// every line is checked before any is kept.
+fn read_counted(text: &str, count: usize) -> Manifest {
     let mut read = Vec::with_capacity(count);
     let mut open = None;
     for (at, line) in plain_lines(text).enumerate() {
         match plain_line(line) {
             Some(Plain::Table(name)) => open = Some(name),
             Some(Plain::Ref(reference)) => {
-                let name: &str = open.take()?;
-                read.push((name.to_owned(), light_entry(reference, at + 1)));
+                if let Some(name) = open.take() {
+                    read.push((name.to_owned(), light_entry(reference, at + 1)));
+                }
             }
             _ => {}
         }
     }
-    Some(Manifest {
+    Manifest {
         data_dir: DATA_DIR.to_owned(),
         // made from the whole list, its nodes are full, not half full as one by one in order
         datasets: read.into_iter().collect(),
-    })
+    }
+}
+
+/// the most memory the parser and the manifest made beside it took for one item of data.toml, a
+/// table, a key and its value, a value in an array or an inline table, of the shapes measured
+/// with `toml_edit` 0.25: 1,089 bytes for tables of dotted keys, 1,066 for the tables `add`
+/// writes, with their manifest.
+const PER_ITEM: u64 = 1_100;
+/// what the parser holds for each byte of the text while it reads it, items aside.
+const PARSER_PER_BYTE: u64 = 8;
+/// what [`read_counted`] takes a dataset at its peak: its entry in the list it makes and in the map
+/// made from it, held together for a moment, its name, ref and cited line.
+const LIGHT_PER_DATASET: u64 = 1_100;
+/// what the manifest holds of a dataset once read: its entry in the map, its name, ref and lines.
+const HELD_PER_DATASET: u64 = 1_000;
+
+/// what reading data.toml's `text` with the parser takes of memory at its peak, the text with it.
+pub(crate) fn parse_weight(text: &str) -> u64 {
+    let bytes = text.len() as u64;
+    bytes
+        .saturating_add(bytes.saturating_mul(PARSER_PER_BYTE))
+        .saturating_add(items(text).saturating_mul(PER_ITEM))
+}
+
+/// what [`read_counted`] takes of memory at its peak for `count` datasets of data.toml's `text`.
+fn light_weight(text: &str, count: usize) -> u64 {
+    (text.len() as u64).saturating_add((count as u64).saturating_mul(LIGHT_PER_DATASET))
+}
+
+/// what reading data.toml's `text` as [`read_plain`] reads it takes of memory at its peak: as
+/// [`read_counted`], a dataset for each table it may hold.
+pub(crate) fn plain_weight(text: &str) -> u64 {
+    light_weight(text, text.matches("[datasets.").count())
+}
+
+/// what a merge keeps of data.toml's `text` once read, while it parses the next: its manifest
+/// and each dataset's own text, about twice the text and [`HELD_PER_DATASET`] for each dataset it
+/// may hold, which each has a `=` of its own for its ref, outside strings and comments.
+pub(crate) fn kept(text: &str) -> u64 {
+    (text.len() as u64)
+        .saturating_mul(2)
+        .saturating_add(counted(text, b"=").saturating_mul(HELD_PER_DATASET))
+}
+
+/// what `manifest`, read from data.toml's `text`, holds with that text while the run goes on.
+pub(crate) fn held(text: &str, manifest: &Manifest) -> u64 {
+    (text.len() as u64)
+        .saturating_add((manifest.datasets.len() as u64).saturating_mul(HELD_PER_DATASET))
+}
+
+/// how many items the parser may build of `text`: each table, key and value, value in an array
+/// and inline table takes a `=`, `[`, `{`, `,` or a dotted key's `.` of its own, outside strings
+/// and comments, so their count bounds them.
+fn items(text: &str) -> u64 {
+    counted(text, b"=[{,.")
+}
+
+/// how many of the bytes `tokens` `text` holds outside strings and comments.
+fn counted(text: &str, tokens: &[u8]) -> u64 {
+    let bytes = text.as_bytes();
+    let mut count = 0;
+    let mut at = 0;
+    while let Some(&byte) = bytes.get(at) {
+        at = match byte {
+            b'#' => bytes[at..]
+                .iter()
+                .position(|&byte| byte == b'\n')
+                .map_or(bytes.len(), |end| at + end),
+            b'"' | b'\'' => string_end(bytes, at),
+            byte if tokens.contains(&byte) => {
+                count += 1;
+                at + 1
+            }
+            _ => at + 1,
+        };
+    }
+    count
+}
+
+/// where the string that opens at `at` in `bytes` ends: past its closing quote, or at the end of
+/// its line when a one-line string is left open. three quotes open and close a multi-line string,
+/// and up to two more beside the closing three are its own; a `\` escapes the next byte in a
+/// string of `"`.
+fn string_end(bytes: &[u8], at: usize) -> usize {
+    let quote = bytes[at];
+    let three = [quote; 3];
+    let multi = bytes[at..].starts_with(&three);
+    let mut next = at + if multi { 3 } else { 1 };
+    while let Some(&byte) = bytes.get(next) {
+        if quote == b'"' && byte == b'\\' {
+            next += 2;
+            continue;
+        }
+        if !multi && byte == b'\n' {
+            return next;
+        }
+        if byte == quote && !multi {
+            return next + 1;
+        }
+        if byte == quote && bytes[next..].starts_with(&three) {
+            let mut end = next + 3;
+            while end < next + 5 && bytes.get(end) == Some(&quote) {
+                end += 1;
+            }
+            return end;
+        }
+        next += 1;
+    }
+    bytes.len()
 }
 
 /// the entry of a dataset whose table holds only its `reference`, on line `line` of data.toml,

@@ -332,8 +332,10 @@ fn a_settled_status_answers_in_a_room_its_unread_rows_would_overrun() -> Result 
     } else {
         8 << 20
     };
-    // the three files' count fits, and the first row's excess, but not the first two rows'
-    let room = base + 3 * 650 + 300;
+    // the three files' count fits beside data.toml's manifest, its text and 1,000 bytes a dataset,
+    // and the first row's excess, but not the first two rows'
+    let held = fs::metadata(sandbox.work().join("data.toml"))?.len() + 1_000;
+    let room = base + 3 * 650 + 300 + held;
     let refused = |output: &std::process::Output| -> Result {
         let document = json(output)?;
         assert_eq!(output.status.code(), Some(50), "{document}");

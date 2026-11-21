@@ -145,3 +145,32 @@ native RSS and instructions ran separately on cores 0–11 at nice 10 without th
 | musl | plain sync, no selector | 40,000 | 2105.640 to 2105.638 | 32 | 0 |
 
 `selected_folders_keep_separator_boundaries_and_shared_paths` and the extended `a_survey_within_folders_lists_and_keeps_only_them` passed on the old algorithm first. they cover nested roots, shared/duplicate paths, `a` versus `a-` and `ab`, unicode, the data root, empty selection, links, missing folders and a file blocking a folder. `folder_order_matches_a_terminal_separator` independently checks the custom comparison against explicit suffixed strings. replacing it with ordinary string order made the new assertions fail; restoring it passed. the existing partial-state test still verifies that selected records, candidates and sync flags round-trip. after switch removal, the full survey characterization exercises the indexed path itself. the old paths and experiment switch are removed; raw fixtures, binaries, counters, paired runs and mutation logs remain with the sweep outside the repository.
+
+## data.toml weighed in a container, 2026-11-20
+
+in a container, a run weighs data.toml's read before it begins and counts what the manifest then holds against data.lock's read, as the [lock's budget](../../architecture/project.md#lock-reading) counts its files, so a data.toml too big for the container's memory limit stops with `local.io` before it is read, rather than the kernel ending the run partway.
+
+| read | weighed at |
+|---|---|
+| line by line, a data.toml of only what `add` writes | its text and 1,100 bytes a dataset |
+| by the parser, any other data.toml | its text, 8 bytes for each of its bytes, and 1,100 bytes an item: each `=`, `[`, `{`, `,` and dotted key's `.` outside strings and comments |
+| a settled sync's plain read | as line by line, a dataset for each `[datasets.` table |
+| a merge, before it reads any side | what it keeps of every side it reads, twice the text and 1,000 bytes a `=`, beside the largest parse among them or the merged text's |
+| what a read manifest holds after | its text and 1,000 bytes a dataset |
+
+1,100 bytes an item is a little over what `toml_edit` 0.25 and the manifest took: 1,089 bytes an item for tables of dotted keys, 1,066 for the tables `add` writes. the need below is the smallest room the guard lets a command through, on musl with its base of 20 MiB: max(base + weight, held + 2 × data.lock's bytes, base + held + 650 × files) for status and list, max(base + plain weight, held + 2 × data.lock's bytes) for the settled sync. the fixtures hold 10,000 and 100,000 datasets of one 256-byte file each: data.toml 0.65 and 6.5 MB, data.lock 4.13 and 41.3 MB. the peaks are peak RSS from musl builds of the experiment that read every data.toml line by line or every one by the parser, before a table's cited lines were kept in a list and status kept only the lists data.lock names: the medians of round 2's window for status and list at 100,000 datasets, else the largest of three runs.
+
+| datasets | read | command | need MiB | peak MiB | need / peak |
+|---:|---|---|---:|---:|---:|
+| 10,000 | line by line | status | 36.4 | 64.2 | 0.57 |
+| 10,000 | line by line | list | 36.4 | 59.4 | 0.61 |
+| 10,000 | parser | status | 57.0 | 82.4 | 0.69 |
+| 10,000 | parser | list | 57.0 | 79.4 | 0.72 |
+| 10,000 | plain | settled sync | 31.1 | 46.4 | 0.67 |
+| 100,000 | line by line | status | 183.6 | 331.6 | 0.55 |
+| 100,000 | line by line | list | 183.6 | 317.4 | 0.58 |
+| 100,000 | parser | status | 390.5 | 446.0 | 0.88 |
+| 100,000 | parser | list | 390.5 | 408.9 | 0.95 |
+| 100,000 | plain | settled sync | 180.3 | 181.8, one run 197.7 | 0.99 |
+
+the need is under every peak, at 0.55 to 0.99 of it. it is a floor, as the lock's budget is: on these fixtures it refused no run that fit, and a run whose peak falls between the need and the limit can still be ended. it leaves out the rest of a run's memory for each dataset: the lock's rows beside its text as they parse, the walk of the data folder, the list a forecast makes and status's own lists, and musl's base past 20 MiB, 35 to 45 MiB at 10,000 datasets. with those two changes, status and list of 100,000 datasets peak at 310.7 and 287 MiB, so their need is 0.59 and 0.64 of it; the settled sync's peak stays as it was.
