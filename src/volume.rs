@@ -593,6 +593,20 @@ pub(crate) fn read_at_most(file: File, most: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// the folder at `path` opened to flush it or to make files in it by handle, never waiting on a
+/// fifo or a device a co-user of a shared cache put in its place: anything but a folder is
+/// refused, and a link too unless `follow`.
+#[cfg(unix)]
+pub(crate) fn open_folder(path: &Path, follow: bool) -> io::Result<File> {
+    use rustix::fs::{Mode, OFlags};
+    let mut flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NONBLOCK | OFlags::CLOEXEC;
+    if !follow {
+        flags |= OFlags::NOFOLLOW;
+    }
+    let folder = rustix::io::retry_on_intr(|| rustix::fs::open(path, flags, Mode::empty()))?;
+    Ok(File::from(folder))
+}
+
 /// opens `path` as `open_plain` does on other systems, through one `open` of rustix's, where std's
 /// open on musl sets close-on-exec again with a second call: read and write with `write`, made if
 /// missing with `create`, never following a link, never waiting on a fifo, closed on exec, and the
@@ -720,7 +734,7 @@ fn one_at_a_time<T>(flush: impl FnOnce() -> T) -> T {
 pub(crate) fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(path)?.sync_all()
+        open_folder(path, true)?.sync_all()
     }
     #[cfg(not(unix))]
     {
@@ -1038,6 +1052,42 @@ mod tests {
         let sparse = File::options().write(true).open(&path).unwrap();
         sparse.set_len(4097).unwrap();
         assert_eq!(read(4096).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+    }
+
+    /// a folder fetchloom flushes or makes files in by handle opens at once whatever a co-user of
+    /// a shared cache put there: a fifo or a file is refused without waiting for a writer, and a
+    /// link is followed only where the caller allows it.
+    #[cfg(unix)]
+    #[test]
+    fn a_folder_opens_without_waiting_or_following_a_link() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join("folder");
+        fs::create_dir(&folder).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&folder, &link).unwrap();
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let file = dir.path().join("file");
+        fs::write(&file, b"").unwrap();
+        for follow in [false, true] {
+            assert!(
+                open_folder(&folder, follow)
+                    .unwrap()
+                    .metadata()
+                    .unwrap()
+                    .is_dir()
+            );
+            assert_eq!(open_folder(&link, follow).is_ok(), follow, "the link");
+            for path in [&fifo, &file] {
+                let refused = open_folder(path, follow).unwrap_err();
+                assert_eq!(refused.kind(), io::ErrorKind::NotADirectory, "{path:?}");
+            }
+        }
+        sync_directory(&link).unwrap();
     }
 
     /// a sealed part is made writable again only while it has no other name and is as long as

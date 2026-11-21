@@ -170,7 +170,7 @@ impl Cache {
     fn clone_of(&self, source: &File, most: u64, stop: &Stop) -> io::Result<Option<NewObject>> {
         let folder = self.root.join("tmp");
         let name = format!("{:016x}.new", fastrand::u64(..));
-        let parent = File::open(&folder)?;
+        let parent = crate::volume::open_folder(&folder, false)?;
         if let Err(err) =
             rustix::fs::fclonefileat(source, &parent, &name, rustix::fs::CloneFlags::empty())
         {
@@ -386,7 +386,7 @@ impl Batch {
     pub(super) fn open(folder: &Path) -> io::Result<Batch> {
         use std::os::unix::fs::MetadataExt as _;
 
-        let file = File::open(folder)?;
+        let file = crate::volume::open_folder(folder, false)?;
         let device = file.metadata()?.dev();
         Ok(Batch { file, device })
     }
