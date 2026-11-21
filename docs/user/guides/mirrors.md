@@ -107,7 +107,7 @@ mirrors = ["https://data.corp.internal/fetchloom"]
 mirrors_only = true
 ```
 
-then no request goes anywhere but to the mirrors: not to a source, not to a search site, not to check a key. each request is checked before its name is looked up, and every redirect too, so one that leads off a mirror's address is refused. a request to a mirror's host for anything but what the mirror holds is refused as well. `sync --locked` asks the mirror alone, and a file no mirror holds fails at once, before any download, naming each file and what each mirror said, with kind `network.refused`, exit 10:
+then no request goes anywhere but to the mirrors: not to a source, not to a search site, not to check a key. each request is checked before its name is looked up, and every redirect too, so one that leads off a mirror's address is refused. a request to a mirror's host for anything but what the mirror holds is refused as well. `sync --locked` asks the mirrors alone and never the source: it takes from them what they hold, places each dataset whose files all came, and then fails, naming each file no mirror holds and what each mirror said, with kind `network.refused`, exit 10. stderr of a run whose mirror lacked the project's one file:
 
 ```text
 error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom ask its mirrors alone
