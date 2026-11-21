@@ -593,6 +593,22 @@ pub(crate) fn read_at_most(file: File, most: u64) -> io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
+/// whether `a` and `b` name one file, a link never being the file it names. unix compares their
+/// devices and inodes without opening either, so a fifo a clone or a co-user put at one never
+/// holds the look; windows asks the files, whose opens never wait.
+pub(crate) fn is_same_file(a: &Path, b: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt as _;
+        match (fs::symlink_metadata(a), fs::symlink_metadata(b)) {
+            (Ok(a), Ok(b)) => (a.dev(), a.ino()) == (b.dev(), b.ino()),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    same_file::is_same_file(a, b).unwrap_or(false)
+}
+
 /// the folder at `path` opened to flush it or to make files in it by handle, never waiting on a
 /// fifo or a device a co-user of a shared cache put in its place: anything but a folder is
 /// refused, and a link too unless `follow`.
@@ -1052,6 +1068,30 @@ mod tests {
         let sparse = File::options().write(true).open(&path).unwrap();
         sparse.set_len(4097).unwrap();
         assert_eq!(read(4096).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+    }
+
+    /// a file is itself and its hardlink, never a link to it nor a fifo, which is looked at
+    /// without waiting for a writer.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_is_the_same_as_its_hardlink_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("file");
+        fs::write(&file, b"bytes").unwrap();
+        let hardlink = dir.path().join("hardlink");
+        fs::hard_link(&file, &hardlink).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&file, &link).unwrap();
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        assert!(is_same_file(&file, &hardlink));
+        assert!(!is_same_file(&link, &file), "a link to it");
+        assert!(!is_same_file(&fifo, &file));
+        assert!(!is_same_file(&dir.path().join("gone"), &file));
     }
 
     /// a folder fetchloom flushes or makes files in by handle opens at once whatever a co-user of

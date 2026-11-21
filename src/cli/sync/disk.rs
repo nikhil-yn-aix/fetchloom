@@ -1082,8 +1082,10 @@ impl Survey {
                 };
                 let mark = marks.get(&placed.sha256);
                 let is_object = || {
-                    same_file::is_same_file(native(root, path), cache.object_path(&placed.sha256))
-                        .unwrap_or(false)
+                    crate::volume::is_same_file(
+                        &native(root, path),
+                        &cache.object_path(&placed.sha256),
+                    )
                 };
                 let changed = *seen != placed.look
                     || (!self.edited.is_empty() && self.edited.contains(*path));
@@ -1409,11 +1411,10 @@ fn same_inside(root: &Path, path: &str, data_dir: &str) -> bool {
         return false;
     };
     name::fold(&outer.join("/")) == name::fold(data_dir)
-        && same_file::is_same_file(
-            native(root, path),
-            native(root, &format!("{data_dir}/{rest}")),
+        && crate::volume::is_same_file(
+            &native(root, path),
+            &native(root, &format!("{data_dir}/{rest}")),
         )
-        .unwrap_or(false)
 }
 
 /// whether `a` and `b` sit on different devices, whose filesystems may keep times to different
@@ -1839,9 +1840,7 @@ pub(crate) fn audit(project: &Project, survey: &Survey, cache: &Cache) -> Result
         }
         let file = native(&project.root, path);
         if survey.elsewhere.contains(path) {
-            let marked = if same_file::is_same_file(&file, cache.object_path(&placed.sha256))
-                .unwrap_or(false)
-            {
+            let marked = if crate::volume::is_same_file(&file, &cache.object_path(&placed.sha256)) {
                 cache.mark_changed(&placed.sha256)
             } else {
                 cache::Identity::of(&file)

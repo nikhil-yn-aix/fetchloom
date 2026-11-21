@@ -4347,7 +4347,7 @@ fn adoption(
     checked: u64,
     writable: bool,
 ) -> Placed {
-    if same_file::is_same_file(path, cache.object_path(&target.sha256)).unwrap_or(false) {
+    if crate::volume::is_same_file(path, &cache.object_path(&target.sha256)) {
         placed(target, Method::Hardlink, look, false, checked)
     } else {
         placed(target, Method::Copy, look, target.copy && writable, checked)
