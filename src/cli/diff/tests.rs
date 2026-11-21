@@ -235,6 +235,43 @@ fn a_spec_tells_select_changed() {
     );
 }
 
+/// only a side whose data.toml asks for what its data.lock pinned names its patterns: one edited
+/// since its lock leaves the line saying that they changed.
+#[test]
+fn patterns_are_named_only_as_each_side_pinned_them() {
+    let asked = |select: &str| {
+        Manifest::parse(&format!(
+            "[datasets.iris]\nref = \"zenodo:iris\"\nselect = {select}\n"
+        ))
+        .unwrap()
+    };
+    let (csv, both) = (asked(r#"["*.csv"]"#), asked(r#"["*.csv", "README"]"#));
+    let pinned = |manifest: &Manifest| Lock {
+        datasets: vec![Locked {
+            spec: lock::spec(&manifest.datasets["iris"].source),
+            ..fetched("iris", 1, vec![file("a.csv", b"a")])
+        }],
+        ..Lock::default()
+    };
+    let named = |before: &Manifest, after: &Manifest| {
+        let mut datasets = diffed(&pinned(&csv), &pinned(&both));
+        name_patterns(
+            &mut datasets,
+            || Some(before.clone()),
+            || Some(after.clone()),
+        );
+        told(&datasets)
+    };
+    assert_eq!(
+        named(&csv, &both),
+        ["iris changed: select [\"*.csv\"] \u{2192} [\"*.csv\", \"README\"]; the same files"]
+    );
+    assert_eq!(
+        named(&both, &both),
+        ["iris changed: select or exclude changed in data.toml; the same files"]
+    );
+}
+
 /// a name from a lock, which a commit anyone made can hold, reaches the terminal escaped.
 #[test]
 fn a_control_character_in_a_path_is_shown_escaped() {

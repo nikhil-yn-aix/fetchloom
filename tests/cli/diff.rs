@@ -209,6 +209,46 @@ fn diff_names_a_link_a_hand_edit_moved() -> Result {
     Ok(())
 }
 
+/// a change of select or exclude names each side's patterns, as data.toml asks for them in the
+/// project folder and in each commit.
+#[test]
+fn diff_names_the_patterns_a_dataset_changed() -> Result {
+    let sandbox = Sandbox::new()?;
+    // a listing as python's http.server writes it
+    let listing = "<!DOCTYPE HTML>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<title>Directory listing for /files/</title>\n</head>\n<body>\n<h1>Directory listing for /files/</h1>\n<hr>\n<ul>\n<li><a href=\"a.csv\">a.csv</a></li>\n<li><a href=\"b.csv\">b.csv</a></li>\n</ul>\n<hr>\n</body>\n</html>\n";
+    let length = listing.len().to_string();
+    let html = [
+        ("Content-Type", "text/html; charset=utf-8"),
+        ("Content-Length", length.as_str()),
+    ];
+    let routes = Routes::start(vec![
+        (
+            "/files/".to_owned(),
+            crate::support::reply("200 OK", &html, listing.as_bytes()),
+        ),
+        ("/files/a.csv".to_owned(), served(b"a\n")),
+        ("/files/b.csv".to_owned(), served(b"b\n")),
+    ])?;
+    sandbox.allow(&routes.url);
+    let work = sandbox.work();
+    let folder = format!("{}/files/", routes.url);
+    done(&sandbox, &work, &["add", &folder, "--as", "draws"])?;
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "both draws"])?;
+    done(&sandbox, &work, &["exclude", "data/draws/b.csv"])?;
+    let told =
+        "draws changed: exclude none \u{2192} [\"b.csv\"]; 1 file removed\nD  draws/b.csv  2 B\n";
+    let output = run(&sandbox, &work, &["diff"])?;
+    assert_eq!(text(&output.stdout)?, told, "{}", text(&output.stderr)?);
+    ok(&sandbox, &["commit", "-qam", "leave b out"])?;
+    let output = run(&sandbox, &work, &["diff", "HEAD~1", "HEAD"])?;
+    assert_eq!(text(&output.stdout)?, told, "{}", text(&output.stderr)?);
+    Ok(())
+}
+
 /// a revision is never read as an option, whatever it starts with, and a project outside any
 /// repository is told it has no commits to compare.
 #[test]

@@ -14,6 +14,7 @@ use crate::error::{Error, Kind};
 use crate::output::plain;
 use crate::project::git::{self, Unnamed};
 use crate::project::lock::{self, Lock, Locked, LockedFile, Stated, StatedFile, lists};
+use crate::project::manifest::{self, Manifest};
 use crate::units;
 
 /// what `fetchloom diff` found, as `--json` reports it.
@@ -208,7 +209,16 @@ fn report(context: &Context, args: &args::Diff) -> Result<Report, Error> {
             after,
         )
     };
-    let datasets = compared(&before, &after);
+    let mut datasets = compared(&before, &after);
+    let asked = |commit: Option<&str>| match commit {
+        Some(commit) => manifest_at(&git, root, commit),
+        None => project.manifest().ok().map(|(_, manifest)| manifest),
+    };
+    name_patterns(
+        &mut datasets,
+        || asked(Some(&from_commit)),
+        || asked(to_commit.as_deref()),
+    );
     let to_shown = args.to.as_deref().map_or_else(
         || "the project folder".to_owned(),
         |to| plain(to).into_owned(),
@@ -608,7 +618,7 @@ fn dataset(
     if change == Change::Changed && fields.is_empty() && files.is_empty() && unlisted.is_empty() {
         return None;
     }
-    let said = fields_said(&fields);
+    let said = fields_said(&fields, None);
     let count = |change: Change| files.iter().filter(|file| file.change == change).count() as u64;
     Some(Dataset {
         name: name.to_owned(),
@@ -626,8 +636,9 @@ fn dataset(
 }
 
 /// each field that differs, in words: a version that is its link again is left to the link's
-/// line, and a spec, a hash of what data.toml asks, is said as what it stands for.
-fn fields_said(fields: &[Field]) -> Vec<String> {
+/// line, and a spec, a hash of what data.toml asks, is said as what it stands for: the
+/// `patterns` each side asks, when they are known.
+fn fields_said(fields: &[Field], patterns: Option<&Patterns>) -> Vec<String> {
     let field = |name: &str| fields.iter().find(|field| field.name == name);
     let value = |value: &Option<String>| {
         value
@@ -638,6 +649,10 @@ fn fields_said(fields: &[Field]) -> Vec<String> {
     for changed in fields {
         said.push(match changed.name {
             "spec" if field("ref").is_some() || field("web_page").is_some() => continue,
+            "spec" if let Some(patterns) = patterns.filter(|patterns| patterns.differ()) => {
+                said.extend(patterns.said());
+                continue;
+            }
             "spec" => "select or exclude changed in data.toml".to_owned(),
             // an output never unpacks, so becoming one or no longer says it
             "extract" if field("at").is_some() => continue,
@@ -672,6 +687,99 @@ fn fields_said(fields: &[Field]) -> Vec<String> {
         });
     }
     said
+}
+
+/// the `select` and `exclude` patterns data.toml asks of a dataset on each side, as it pinned them.
+struct Patterns {
+    before: [Vec<String>; 2],
+    after: [Vec<String>; 2],
+}
+
+impl Patterns {
+    /// the patterns `manifest` asks of `name`, when they hash, with its `ref`, to `spec`, the spec
+    /// that side's data.lock pins, so a data.toml edited since its lock tells nothing.
+    fn asked(
+        manifest: Option<&Manifest>,
+        name: &str,
+        spec: Option<&str>,
+    ) -> Option<[Vec<String>; 2]> {
+        let source = &manifest?.datasets.get(name)?.source;
+        let patterns = |globs: &[crate::glob::Glob]| {
+            globs.iter().map(|glob| glob.as_str().to_owned()).collect()
+        };
+        (Some(lock::spec(source).as_str()) == spec)
+            .then(|| [patterns(&source.select), patterns(&source.exclude)])
+    }
+
+    fn differ(&self) -> bool {
+        self.before != self.after
+    }
+
+    /// a line for each key whose patterns differ, as `select ["*.csv"] → ["*.csv", "README"]`.
+    fn said(&self) -> Vec<String> {
+        let shown = |patterns: &[String]| {
+            if patterns.is_empty() {
+                return "none".to_owned();
+            }
+            let quoted: Vec<String> = patterns
+                .iter()
+                .map(|pattern| format!("{pattern:?}"))
+                .collect();
+            format!("[{}]", quoted.join(", "))
+        };
+        ["select", "exclude"]
+            .into_iter()
+            .zip(self.before.iter().zip(&self.after))
+            .filter(|(_, (before, after))| before != after)
+            .map(|(key, (before, after))| {
+                format!("{key} {} \u{2192} {}", shown(before), shown(after))
+            })
+            .collect()
+    }
+}
+
+/// tells, for each of `datasets` whose spec alone changed, the patterns data.toml asks of it on
+/// each side, as `before` and `after` read data.toml there, each read once and only when a
+/// dataset needs it. a side whose patterns are not what its data.lock pinned leaves the line as
+/// it was.
+fn name_patterns(
+    datasets: &mut [Dataset],
+    before: impl Fn() -> Option<Manifest>,
+    after: impl Fn() -> Option<Manifest>,
+) {
+    let (was, now) = (std::cell::OnceCell::new(), std::cell::OnceCell::new());
+    for dataset in datasets
+        .iter_mut()
+        .filter(|dataset| dataset.change == Change::Changed)
+    {
+        let Some(spec) = dataset.fields.iter().find(|field| field.name == "spec") else {
+            continue;
+        };
+        let asked = |manifest: &std::cell::OnceCell<Option<Manifest>>,
+                     read: &dyn Fn() -> Option<Manifest>,
+                     spec: &Option<String>| {
+            Patterns::asked(
+                manifest.get_or_init(read).as_ref(),
+                &dataset.name,
+                spec.as_deref(),
+            )
+        };
+        let Some(before) = asked(&was, &before, &spec.before) else {
+            continue;
+        };
+        let Some(after) = asked(&now, &after, &spec.after) else {
+            continue;
+        };
+        dataset.said = fields_said(&dataset.fields, Some(&Patterns { before, after }));
+    }
+}
+
+/// data.toml as `commit` has it in the project at `root`, none when it has none or it does not
+/// read.
+fn manifest_at(git: &Path, root: &Path, commit: &str) -> Option<Manifest> {
+    let blobs = git::blobs(git, root, commit, &[manifest::FILE])?;
+    let text = git::blob(git, root, blobs.get(manifest::FILE)?)?;
+    Manifest::parse(std::str::from_utf8(&text).ok()?).ok()
 }
 
 /// the fields that differ: every field of a dataset added or removed, else each field with another
