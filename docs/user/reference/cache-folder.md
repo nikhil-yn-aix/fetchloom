@@ -84,6 +84,8 @@ project-local lock and placement records live in [the project folder](project-fo
 
 [cache sharing](../concepts/cache-and-placement.md#cache) covers per-user caches and trusted group access.
 
+fetchloom reads the cache's own records only as plain files, never through a link and never waiting on a pipe, and only up to a size far past what it writes: 1 MiB for a download's record, 1 MiB for one line of URL records, and 1 GiB for a record of what an archive unpacked to or a list of imported files. a larger one counts as none, as if it were never written. this keeps one member of a shared cache from making everyone's runs wait or fill memory, but it does not make the cache safe from its members: anyone who can write it can change the bytes every project reads, so share a cache only with people you trust, as [one cache for a whole lab](../guides/clusters.md#one-cache-for-a-whole-lab) says.
+
 a cache folder you may not write to fails a download with `local.io` (exit 50), and the message names the folder that refused, such as `<cache>/partial`. fix its permissions, or set `FETCHLOOM_CACHE` to a folder you may write to.
 
 an unreadable `changed/` folder or change mark stops sync and get with `local.io`, exit 50, before they place files. fix the storage or its permissions, run `fetchloom cache verify`, then retry; keep the marks, since deleting them can hide damage from another project's hardlinks. a file the cache got just before a power cut can be lost and is then downloaded again, so the cache never stands in for a project's pins.

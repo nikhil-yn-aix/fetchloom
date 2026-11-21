@@ -3,13 +3,18 @@
 //! is the `unpacks_to` data.lock keeps and a record proves itself against the lock.
 
 use std::fmt::Write as _;
-use std::io::{self, Read};
+use std::io;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use super::Cache;
 use crate::digest::{self, Sha256};
+
+/// the most of a record of what an archive unpacked to a read takes: about what the 10 million
+/// files an archive may unpack to by default take, so one a co-user of a shared cache made
+/// larger is no record, and the archive is unpacked again.
+const RECORD_MOST: u64 = 1 << 30;
 
 /// a file an archive unpacked to, stored in the cache under its SHA-256.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -165,15 +170,12 @@ impl Cache {
         stands.then_some((hashed, members))
     }
 
-    /// the bytes of the record of `archive`, from a plain file read without following a link:
-    /// one someone put there as a link, or as a pipe that would hold every run reading it, is no
-    /// record.
+    /// the bytes of the record of `archive`, from a plain file read without following a link and
+    /// up to [`RECORD_MOST`]: one someone put there as a link, as a pipe that would hold every run
+    /// reading it, or larger, is no record.
     fn unpacked_bytes(&self, archive: &Sha256) -> Option<Vec<u8>> {
-        let mut bytes = Vec::new();
-        crate::volume::read_unfollowed(&self.unpacked_path(archive))
-            .and_then(|mut file| file.read_to_end(&mut bytes))
-            .ok()?;
-        Some(bytes)
+        let file = crate::volume::read_unfollowed(&self.unpacked_path(archive)).ok()?;
+        crate::volume::read_at_most(file, RECORD_MOST).ok()
     }
 
     /// every archive with a record.

@@ -577,6 +577,22 @@ pub(crate) fn read_unfollowed(path: &Path) -> io::Result<File> {
     open_plain(path, OpenOptions::new().read(true))
 }
 
+/// the bytes `file` holds when they are at most `most`: a larger file is refused with
+/// `FileTooLarge` before a byte is read, and so is one that grows past `most` as it is read.
+pub(crate) fn read_at_most(file: File, most: u64) -> io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let held = file.metadata()?.len();
+    if held > most {
+        return Err(io::ErrorKind::FileTooLarge.into());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(held).unwrap_or_default());
+    file.take(most.saturating_add(1)).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
+        return Err(io::ErrorKind::FileTooLarge.into());
+    }
+    Ok(bytes)
+}
+
 /// opens `path` as `open_plain` does on other systems, through one `open` of rustix's, where std's
 /// open on musl sets close-on-exec again with a second call: read and write with `write`, made if
 /// missing with `create`, never following a link, never waiting on a fifo, closed on exec, and the
@@ -1007,6 +1023,21 @@ mod tests {
         release.send(()).unwrap();
         flushing.join().unwrap();
         assert!(FLUSHING.try_lock().is_ok(), "the gate is let go after it");
+    }
+
+    /// a record read whole is refused past its cap, as a co-user of a shared cache can make one as
+    /// large as a sparse file allows, and read whole up to it.
+    #[test]
+    fn a_file_past_its_cap_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("record");
+        fs::write(&path, b"0123456789").unwrap();
+        let read = |most| read_at_most(File::open(&path).unwrap(), most);
+        assert_eq!(read(10).unwrap(), b"0123456789");
+        assert_eq!(read(9).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
+        let sparse = File::options().write(true).open(&path).unwrap();
+        sparse.set_len(4097).unwrap();
+        assert_eq!(read(4096).unwrap_err().kind(), io::ErrorKind::FileTooLarge);
     }
 
     /// a sealed part is made writable again only while it has no other name and is as long as

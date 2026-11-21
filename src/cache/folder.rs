@@ -4,7 +4,7 @@
 //! the folders from the cache's root down to it held, so none is renamed or replaced meanwhile.
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
 use super::sharing::Sharing;
@@ -206,11 +206,10 @@ impl Folder {
         crate::volume::read_unfollowed(&self.join(name))
     }
 
-    /// the bytes of the plain file `name`, never read through a link.
-    pub(super) fn read(&self, name: &str) -> io::Result<Vec<u8>> {
-        let mut bytes = Vec::new();
-        self.read_file(name)?.read_to_end(&mut bytes)?;
-        Ok(bytes)
+    /// the bytes of the plain file `name`, never read through a link, when they are at most
+    /// `most`.
+    pub(super) fn read(&self, name: &str, most: u64) -> io::Result<Vec<u8>> {
+        crate::volume::read_at_most(self.read_file(name)?, most)
     }
 
     /// whether `name` still names the file `file` has open.

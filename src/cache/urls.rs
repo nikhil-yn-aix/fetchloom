@@ -29,6 +29,16 @@ const CHECK: usize = 16 + 1;
 /// how much of a line one read asks for; a longer one takes more.
 const WINDOW: usize = 1024;
 
+/// the longest line a read takes, thousands of times what a link's record holds: a longer one, as
+/// a co-user of a shared cache could leave with no line end, is passed over.
+const LINE_MOST: usize = 1 << 20;
+
+/// the most of a shard's lines a read takes: the 4 GiB its index reaches, and the line past them.
+const LOG_MOST: u64 = (1 << 32) + LINE_MOST as u64;
+
+/// the most of a shard's index a read takes, more entries than 4 GiB of the shortest lines need.
+const INDEX_MOST: u64 = 1 << 30;
+
 /// one shard as this run read it.
 #[derive(Default)]
 struct Index {
@@ -77,6 +87,9 @@ impl Index {
         let whole = file.metadata()?.len() / ENTRY as u64 * ENTRY as u64;
         if whole <= self.read {
             return Ok(());
+        }
+        if whole > INDEX_MOST {
+            return Err(io::ErrorKind::FileTooLarge.into());
         }
         file.seek(SeekFrom::Start(self.read))?;
         let mut bytes = vec![0; usize::try_from(whole - self.read).map_err(io::Error::other)?];
@@ -290,8 +303,8 @@ struct Kept {
 /// record.
 fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
     let (records, entries) = names(shard);
-    let read = |name: &str| urls(root, None).and_then(|urls| urls.read(name));
-    let (lines, index) = match (read(&records), read(&entries)) {
+    let read = |name: &str, most| urls(root, None).and_then(|urls| urls.read(name, most));
+    let (lines, index) = match (read(&records, LOG_MOST), read(&entries, INDEX_MOST)) {
         (Ok(lines), Ok(index)) => (lines, index),
         (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
             return Err(err);
@@ -407,7 +420,7 @@ fn line_at(file: &File, start: u64) -> Option<Vec<u8>> {
             line.extend_from_slice(&got[..end]);
             return Some(line);
         }
-        if read == 0 {
+        if read == 0 || line.len() + read > LINE_MOST {
             return None;
         }
         line.extend_from_slice(got);

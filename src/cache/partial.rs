@@ -86,6 +86,10 @@ impl Drop for Claimed {
     }
 }
 
+/// the most of a download's [`Record`] a read takes, many times what one holds: one a co-user of a
+/// shared cache made larger is no record.
+const RECORD_MOST: u64 = 1 << 20;
+
 #[derive(Debug, Serialize, Deserialize)]
 struct Record {
     // deferred publication still needs the original URL in memory
@@ -630,7 +634,7 @@ impl Partial {
     }
 
     fn recorded(&self) -> Option<Record> {
-        let text = self.folder.read(name_of(&self.record)).ok()?;
+        let text = self.folder.read(name_of(&self.record), RECORD_MOST).ok()?;
         let mut record: Record = serde_json::from_slice(&text).ok()?;
         if !super::recorded_url_matches(&record.url, &self.url) {
             if !self.pinned {
