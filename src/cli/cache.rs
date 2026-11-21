@@ -1088,6 +1088,10 @@ fn needed_with(
 }
 
 /// [`needed_with`], narrowed to a drop's candidates by `focus`.
+#[expect(
+    clippy::too_many_lines,
+    reason = "each registered project is read, checked and counted in order in one walk"
+)]
 fn needed_focused(
     cache: &Cache,
     current: Option<&Lock>,
