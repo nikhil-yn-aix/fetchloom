@@ -58,6 +58,12 @@ warning: FETCHLOM_CACHE is set, but fetchloom reads no such variable, so it chan
    Settings ~/.config/fetchloom/settings.toml (bypassed by --no-config)
 ```
 
+a file `FETCHLOOM_SETTINGS` names is read in place of the usual one, never beside it, so while the usual one is there, the line says it is not read. stderr of a real run under a lab's settings file, its path shortened:
+
+```text
+   Settings /srv/lab/settings.toml, which FETCHLOOM_SETTINGS names, so ~/.config/fetchloom/settings.toml is not read
+```
+
 JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records; a setting only its variable sets keeps its `origin` there, as `default` or `machine` where no variable sets it. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets`, `azure_containers`, `drive_folders`, `mirrors` and `reuse`, true or false for `mirrors_only`, `web_archives` and `accessible`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default`, `flag` or `resources`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 
 ## exit codes

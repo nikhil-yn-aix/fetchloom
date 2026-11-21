@@ -56,6 +56,8 @@ struct File {
     path: Option<String>,
     found: bool,
     bypassed: bool,
+    /// the usual settings file, there but unread, since `FETCHLOOM_SETTINGS` names another.
+    passed_over: Option<String>,
 }
 
 pub(super) fn run(context: &Context) -> Report {
@@ -81,6 +83,14 @@ pub(super) fn run(context: &Context) -> Report {
             "Settings",
             &format!("{} (bypassed by {by})", units::path(path)),
         ),
+        Some(path) if let Some(usual) = &file.passed_over => output.label(
+            "Settings",
+            &format!(
+                "{}, which FETCHLOOM_SETTINGS names, so {} is not read",
+                units::path(path),
+                units::path(usual)
+            ),
+        ),
         Some(path) if file.found => output.label("Settings", &units::path(path)),
         Some(path) => output.label("Settings", &format!("{} (no file yet)", units::path(path))),
         None => output.label("Settings", "no folder for a settings file"),
@@ -97,6 +107,10 @@ pub(super) fn run(context: &Context) -> Report {
             path: file.path.as_ref().map(|path| path.display().to_string()),
             found: file.found,
             bypassed: file.bypassed.is_some(),
+            passed_over: file
+                .passed_over
+                .as_ref()
+                .map(|path| path.display().to_string()),
         },
     }
 }

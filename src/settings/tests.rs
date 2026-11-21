@@ -33,6 +33,7 @@ fn file(text: &str) -> Result<File, Error> {
         values,
         found: true,
         bypassed: None,
+        passed_over: None,
     })
 }
 

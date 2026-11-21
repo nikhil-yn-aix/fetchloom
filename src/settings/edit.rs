@@ -209,6 +209,7 @@ fn reads(path: &Path, text: &str, usable: Usable<'_>) -> Vec<Stops> {
         values,
         found: true,
         bypassed: None,
+        passed_over: None,
     };
     match Settings::read(&|_| None, file, Machine::default()) {
         Ok(settings) => usable(&settings),
@@ -558,6 +559,7 @@ fn check(
         values: parse(path, &line.to_string())?,
         found: true,
         bypassed: None,
+        passed_over: None,
     };
     Settings::read_asked(&|_| None, file, Machine::default(), Some(key))
         .map(drop)

@@ -229,6 +229,7 @@ mod tests {
             path: Some(path),
             found: true,
             bypassed: None,
+            passed_over: None,
         }
     }
 

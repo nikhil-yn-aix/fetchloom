@@ -609,6 +609,56 @@ fn no_config_bypasses_the_settings_file_for_one_run() -> Result {
     Ok(())
 }
 
+/// a settings file `FETCHLOOM_SETTINGS` names, as a lab's for every account, is read in place of
+/// the usual one, and `settings` says the usual one is not read, so its values going quiet is no
+/// surprise; with no usual file, or when the variable names it, nothing is said.
+#[test]
+fn settings_says_the_usual_file_is_unread_under_a_named_one() -> Result {
+    let sandbox = Sandbox::new()?;
+    let usual = settings_file(&sandbox)?;
+    let lab = sandbox.folder("lab")?.join("settings.toml");
+    std::fs::write(&lab, "jobs = 4\n")?;
+    let shown_with = |named: &std::path::Path| -> Result<(String, serde_json::Value)> {
+        let told = sandbox
+            .command(&["settings"])
+            .env("FETCHLOOM_SETTINGS", named)
+            .output()?;
+        assert_eq!(told.status.code(), Some(0), "{}", text(&told.stderr)?);
+        let document = json(
+            &sandbox
+                .command(&["--json", "settings"])
+                .env("FETCHLOOM_SETTINGS", named)
+                .output()?,
+        )?;
+        Ok((text(&told.stderr)?, document))
+    };
+    let (stderr, document) = shown_with(&lab)?;
+    assert!(!stderr.contains("is not read"), "{stderr}");
+    assert_eq!(
+        document["result"]["file"]["passed_over"],
+        serde_json::Value::Null
+    );
+    std::fs::write(&usual, "timeout = \"2min\"\n")?;
+    let (stderr, document) = shown_with(&lab)?;
+    assert!(
+        stderr.contains(", which FETCHLOOM_SETTINGS names, so ")
+            && stderr.contains(" is not read\n"),
+        "{stderr}"
+    );
+    assert_eq!(
+        document["result"]["file"]["passed_over"],
+        usual.display().to_string()
+    );
+    assert_eq!(shown(&document, "timeout")["origin"], "default");
+    let (stderr, document) = shown_with(&usual)?;
+    assert!(!stderr.contains("is not read"), "{stderr}");
+    assert_eq!(
+        document["result"]["file"]["passed_over"],
+        serde_json::Value::Null
+    );
+    Ok(())
+}
+
 #[test]
 fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     let sandbox = Sandbox::new()?;

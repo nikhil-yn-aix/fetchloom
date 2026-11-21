@@ -183,6 +183,9 @@ pub(crate) struct File {
     pub(crate) found: bool,
     /// what left the file unread for this run, `--no-config` or `FETCHLOOM_NO_CONFIG`.
     pub(crate) bypassed: Option<&'static str>,
+    /// the usual settings file, there but unread, since `FETCHLOOM_SETTINGS` names another one
+    /// in its place, as a lab's for every account.
+    pub(crate) passed_over: Option<PathBuf>,
 }
 
 impl File {
@@ -229,11 +232,13 @@ impl File {
             }
         };
         let values = parse(&path, &text)?;
+        let passed_over = named.then(|| usual(var, &path)).flatten();
         Ok(File {
             path: Some(path),
             values,
             found: true,
             bypassed: None,
+            passed_over,
         })
     }
 
@@ -246,6 +251,7 @@ impl File {
             path,
             values: Vec::new(),
             bypassed: Some(by),
+            passed_over: None,
         }
     }
 
@@ -315,6 +321,19 @@ fn located(var: Var<'_>) -> (Option<PathBuf>, bool) {
     let path =
         named.or_else(|| crate::machine::settings_folder(var).map(|folder| folder.join(FILE)));
     (path, is_named)
+}
+
+/// the usual settings file, `settings.toml` in fetchloom's folder, when it is there and is not
+/// the file at `named`, which `FETCHLOOM_SETTINGS` names in its place.
+fn usual(var: Var<'_>, named: &Path) -> Option<PathBuf> {
+    let usual = crate::machine::settings_folder(var)?.join(FILE);
+    let same = |one: &Path, other: &Path| {
+        std::fs::canonicalize(one)
+            .ok()
+            .zip(std::fs::canonicalize(other).ok())
+            .is_some_and(|(one, other)| one == other)
+    };
+    (usual.is_file() && !same(&usual, named)).then_some(usual)
 }
 
 /// a value in the settings file: text, or for a key that holds a list, the list's items.

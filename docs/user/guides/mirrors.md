@@ -123,7 +123,7 @@ error: 1 file data.lock names is on no mirror, and mirrors_only lets fetchloom a
 
 `mirrors_only` needs a mirror: set alone it stops every command with kind `usage`. offline mode is stricter: no network at all, so it reads folder mirrors and no web mirror.
 
-mirror-only mode is fetchloom's promise not to ask anything else; a person can turn it off, so a network that must not reach the internet still needs rules in its firewall or proxy. set `FETCHLOOM_SETTINGS` for every account to a settings file people cannot edit, so the same mirrors apply to all.
+mirror-only mode is fetchloom's promise not to ask anything else; a person can turn it off, so a network that must not reach the internet still needs rules in its firewall or proxy. set `FETCHLOOM_SETTINGS` for every account to a settings file people cannot edit, so the same mirrors apply to all. that file takes the place of each person's own settings file, which is then not read, as `fetchloom settings` says, so put in it every setting the accounts need, and tell people their own settings go quiet; a person can still set a `FETCHLOOM_*` variable.
 
 ## filling a folder mirror
 
