@@ -594,37 +594,84 @@ async fn before_holding(
 }
 
 /// asks before starting a project in `root` when it is the home folder or a disk's root, which
-/// take in far more than one project's folders. with nobody to ask it refuses, unless `--yes`.
+/// take in far more than one project's folders, or when a folder below holds a project already,
+/// which the new one would wrap. with nobody to ask it refuses, unless `--yes`.
 fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(), Error> {
-    let what = if root.parent().is_none() {
-        "the root of a disk"
-    } else if home.is_some_and(|home| same_file::is_same_file(home, root).unwrap_or(false)) {
-        "your home folder"
-    } else {
-        return Ok(());
-    };
     if context.yes {
         return Ok(());
     }
-    let why = format!(
-        "{} is {what}, and a project there takes in every folder below it",
-        root.display()
-    );
+    let what = if root.parent().is_none() {
+        Some("the root of a disk")
+    } else if home.is_some_and(|home| same_file::is_same_file(home, root).unwrap_or(false)) {
+        Some("your home folder")
+    } else {
+        None
+    };
+    let below = super::project::projects_below(root);
+    let (why, question) = match what {
+        None if below.is_empty() => return Ok(()),
+        Some(what) => (
+            format!(
+                "{} is {what}, and a project there takes in every folder below it",
+                root.display()
+            ),
+            start_question(root, what),
+        ),
+        None => {
+            let (named, held, them) = held_below(&below);
+            (
+                format!(
+                    "{named} below {} {held} already, so fetchloom did not start another project around {them}",
+                    root.display()
+                ),
+                format!(
+                    "{named} below this folder {held} already.\nstart another project here, around {them}?"
+                ),
+            )
+        }
+    };
     // the command runs again from that new folder, so a relative path in it starts one further up
-    let again = super::typed::one_folder_down().map_or_else(
+    let down = super::typed::one_folder_down();
+    let again = down.as_ref().map_or_else(
         || "run the command again".to_owned(),
         |line| format!("run `{line}` again"),
     );
-    let elsewhere = format!(
-        "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then {again}"
-    );
+    // a line naming paths from here would miss them from a folder further down
+    let there = |folder: &str| {
+        down.as_ref().filter(|_| !folder.contains('/')).map_or_else(
+            || "add from there".to_owned(),
+            |line| format!("run `{line}` again"),
+        )
+    };
+    let first = below.iter().flatten().next();
+    let elsewhere = match (below.len(), first) {
+        (0, _) => format!(
+            "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then {again}"
+        ),
+        (1, Some(one)) => format!(
+            "to add to the project in {one}/, go into its folder with `cd {}`, then {}",
+            crate::suggested::shell_folder(one),
+            there(one)
+        ),
+        (_, Some(first)) => format!(
+            "to add to one of those projects, go into its folder, as with `cd {}`, then {}",
+            crate::suggested::shell_folder(first),
+            there(first)
+        ),
+        (1, None) => {
+            "to add to the project below, go into its folder and add from there".to_owned()
+        }
+        (_, None) => {
+            "to add to one of the projects below, go into its folder and add from there".to_owned()
+        }
+    };
     let cancel = format!(
         "starting a project in {}, so nothing changed",
         root.display()
     );
     match context
         .output
-        .ask_yes_no(&start_question(root, what), false)
+        .ask_yes_no(&question, false)
         .map_err(|error| error.cancelling(&cancel))?
     {
         Some(true) => Ok(()),
@@ -648,6 +695,16 @@ fn start_question(root: &Path, what: &str) -> String {
         "{} is {what}.\na project there takes in every folder below it. start one anyway?",
         root.display()
     )
+}
+
+/// how a question names `below`, the folders below that hold a project: the folders, what they
+/// hold, and the word for them.
+fn held_below(below: &[Option<String>]) -> (String, &'static str, &'static str) {
+    let named = super::project::named_below(below);
+    match (below.len(), named.as_slice()) {
+        (1, [one]) => (one.clone(), "holds a project", "it"),
+        (_, many) => (units::listed(many, "and"), "hold projects", "them"),
+    }
 }
 
 /// `error`, saying what state the project is in when a stop ended the add. `restored` says whether
@@ -2534,6 +2591,42 @@ mod tests {
         context.yes = true;
         assert!(start_here(&context, root, None).is_ok());
         assert!(start_here(&context, dir.path(), Some(dir.path())).is_ok());
+    }
+
+    /// a new project would wrap the one in a folder below, which the person more likely meant, so
+    /// with nobody to ask the add refuses and names that folder, unless --yes.
+    #[test]
+    fn starting_a_project_around_another_asks_first() {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        };
+        let mut context = Context::new(Output::new(style, Level::Quiet, false, false));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("myproj")).unwrap();
+        assert!(start_here(&context, dir.path(), None).is_ok());
+        std::fs::write(dir.path().join("myproj").join(manifest::FILE), "").unwrap();
+        let refused = start_here(&context, dir.path(), None).unwrap_err();
+        assert_eq!(refused.kind, Kind::Unconfirmed);
+        assert_eq!(
+            refused.message,
+            format!(
+                "myproj/ below {} holds a project already, so fetchloom did not start another project around it",
+                dir.path().display()
+            )
+        );
+        assert_eq!(
+            refused.help.as_deref(),
+            Some(
+                "to add to the project in myproj/, go into its folder with `cd myproj`, then add from there, or add --yes to start the project there anyway"
+            )
+        );
+        context.yes = true;
+        assert!(start_here(&context, dir.path(), None).is_ok());
     }
 
     /// the counts are of system files an import skips and links one add with `--as` was given.

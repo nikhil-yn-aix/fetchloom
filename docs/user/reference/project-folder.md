@@ -28,6 +28,8 @@ project commands use the nearest folder at or above the working directory that h
 
 in a git repository with no `data.toml` of its own, project commands fail with exit 50 and name the repository, and `add` starts a new project in the working directory. to use a project above the repository on purpose, name its folder with `-C`, as in `fetchloom -C .. sync`.
 
+where no project is found, a folder up to three below that holds a `data.toml` is most likely the one meant, as after one `cd ..` too many, so the help names it with the command to run there, as ``there is one in myproj/: run `fetchloom -C myproj sync` ``. with none below, the help says to go into the project's folder, or to start a project there with `fetchloom add <link>`. hidden folders and links are passed by. a folder whose name a shell needs quoted, as `my project`, is named quoted, and one whose name no command in a help can carry, as one holding a backtick, still counts but goes unnamed, so a first `add` never wraps it unasked either.
+
 ## owner record
 
 | field | value |

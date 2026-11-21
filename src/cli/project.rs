@@ -1971,43 +1971,45 @@ pub(super) fn find(context: &Context) -> Result<Project, Error> {
     let output = &context.output;
     let here =
         std::env::current_dir().map_err(|err| Error::io("cannot read the current folder", &err))?;
-    let mut project = Project::find(&here).ok_or_else(|| match Project::repository(&here) {
-        Some(repository) => {
-            let error = Error::new(
-                Kind::ProjectInvalid,
-                format!(
+    let mut project = Project::find(&here).ok_or_else(|| {
+        let repository = Project::repository(&here);
+        let error = Error::new(
+            Kind::ProjectInvalid,
+            match &repository {
+                Some(repository) => format!(
                     "there is no data.toml in this folder or any folder above it inside the git repository at {}",
                     repository.display()
                 ),
-            );
-            let below = projects_below(&here);
-            let Some(first) = below.first() else {
-                return error.help(format!("run `{}` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`", command("add <link>")));
-            };
-            // after -C, the folder below it is named whole, as the run's own folder is
-            let run = super::typed::in_folder(first).map_or_else(
-                || {
-                    let folder = here.join(first);
-                    format!(
-                        "fetchloom -C {} <command>",
-                        crate::suggested::shell_folder(&folder.to_string_lossy())
-                    )
-                },
-                crate::suggested::written,
-            );
-            let folders: Vec<String> = below.iter().map(|folder| format!("{folder}/")).collect();
-            if let [one] = folders.as_slice() {
-                error.help(format!("there is one in {one}: run `{run}`"))
-            } else {
-                let listed = units::listed(&folders, "and");
-                error.help(format!("there is one in each of {listed}: give -C its folder, as in `{run}`"))
-            }
+                None => "there is no data.toml in this folder or any folder above it".to_owned(),
+            },
+        );
+        let below = projects_below(&here);
+        let Some(first) = below.iter().flatten().next() else {
+            return error.help(match repository {
+                Some(_) => format!("run `{}` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`", command("add <link>")),
+                None => format!("go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project here, run `{}`", command("add <link>")),
+            });
+        };
+        // after -C, the folder below it is named whole, as the run's own folder is
+        let run = super::typed::in_folder(first).map_or_else(
+            || {
+                let folder = here.join(first);
+                format!(
+                    "fetchloom -C {} <command>",
+                    crate::suggested::shell_folder(&folder.to_string_lossy())
+                )
+            },
+            crate::suggested::written,
+        );
+        let folders = named_below(&below);
+        if let [one] = folders.as_slice() {
+            error.help(format!("there is one in {one}: run `{run}`"))
+        } else {
+            let listed = units::listed(&folders, "and");
+            error.help(format!(
+                "there is one in each of {listed}: give -C its folder, as in `{run}`"
+            ))
         }
-        None => Error::new(
-            Kind::ProjectInvalid,
-            "there is no data.toml in this folder or any folder above it",
-        )
-        .help(format!("run `{}` to start a project here", command("add <link>"))),
     })?;
     tracing::debug!(root = %project.root.display(), "found data.toml");
     if project.root != here {
@@ -2020,13 +2022,15 @@ pub(super) fn find(context: &Context) -> Result<Project, Error> {
     Ok(project)
 }
 
-/// the folders below `here` that hold a data.toml, as paths from it with `/` between folders:
-/// those at the nearest depth that has any, up to three folders down. hidden folders and links
-/// are passed by, and a large tree is read only in part.
-fn projects_below(here: &Path) -> Vec<String> {
+/// the folders below `here` that hold a data.toml, real folders only, as paths from it with `/`
+/// between folders: those at the nearest depth that has any, up to three folders down, named ones
+/// first. hidden folders and links are passed by, and a large tree is read only in part. a path
+/// holding a backtick, a control character or a name that is no text is none: it counts, but no
+/// help names it, so no folder's name steers a help, or the `fix` taken from it.
+pub(super) fn projects_below(here: &Path) -> Vec<Option<String>> {
     const DEPTH: usize = 3;
     const MOST_FOLDERS: usize = 2_000;
-    let mut level = vec![(here.to_path_buf(), String::new())];
+    let mut level = vec![(here.to_path_buf(), Some(String::new()))];
     let mut read = 0;
     for _ in 0..DEPTH {
         let mut found = Vec::new();
@@ -2040,22 +2044,22 @@ fn projects_below(here: &Path) -> Vec<String> {
                 continue;
             };
             for entry in entries.flatten() {
-                let Ok(name) = entry.file_name().into_string() else {
-                    continue;
-                };
-                // a name a shell would need quoted, as one with a backtick, never reaches a help
-                let plain = matches!(super::shell_word(&name), std::borrow::Cow::Borrowed(_));
-                if name.starts_with('.')
-                    || !plain
+                let name = entry.file_name();
+                if name.as_encoded_bytes().starts_with(b".")
                     || !entry.file_type().is_ok_and(|kind| kind.is_dir())
                 {
                     continue;
                 }
-                let inner = if shown.is_empty() {
-                    name
-                } else {
-                    format!("{shown}/{name}")
-                };
+                let named = name
+                    .to_str()
+                    .filter(|name| !name.contains('`') && !name.chars().any(char::is_control));
+                let inner = shown.as_deref().zip(named).map(|(shown, name)| {
+                    if shown.is_empty() {
+                        name.to_owned()
+                    } else {
+                        format!("{shown}/{name}")
+                    }
+                });
                 if entry.path().join(manifest::FILE).is_file() {
                     found.push(inner);
                 } else {
@@ -2064,12 +2068,32 @@ fn projects_below(here: &Path) -> Vec<String> {
             }
         }
         if !found.is_empty() || next.is_empty() {
-            found.sort();
+            found.sort_by_key(|path| (path.is_none(), path.clone()));
             return found;
         }
         level = next;
     }
     Vec::new()
+}
+
+/// how a line names `below`, the folders below that hold a project, as `projects_below` finds
+/// them: each it may name, with `/` after it, then how many others hold one.
+pub(super) fn named_below(below: &[Option<String>]) -> Vec<String> {
+    let mut named: Vec<String> = below
+        .iter()
+        .flatten()
+        .map(|folder| format!("{folder}/"))
+        .collect();
+    let others = below.len() - named.len();
+    if others > 0 {
+        named.push(match (named.is_empty(), others) {
+            (true, 1) => "a folder".to_owned(),
+            (false, 1) => "another folder".to_owned(),
+            (true, _) => units::count(others as u64, "folder", "folders"),
+            (false, _) => units::count(others as u64, "other folder", "other folders"),
+        });
+    }
+    named
 }
 
 pub(super) enum Waited<T> {
@@ -2259,17 +2283,30 @@ pub(super) fn known_with_rest(
 
 #[cfg(test)]
 pub(crate) mod tests {
-    /// a folder whose name a shell would need quoted is passed by, so no clone's folder name
-    /// steers the help, or the `fix` taken from it.
+    /// every folder below that holds a project counts, a name a shell needs quoted too, but one
+    /// no command in backticks can carry is never named, so no clone's folder name steers the
+    /// help, or the `fix` taken from it.
     #[test]
-    fn projects_below_pass_by_names_a_shell_would_need_quoted() {
+    fn projects_below_count_every_folder_and_name_only_those_a_help_can_quote() {
         let root = tempfile::tempdir().unwrap();
-        for name in ["analysis", "x`fetchloom remove y`", "two words"] {
+        for name in ["analysis", "x`fetchloom remove y`", "two words", ".hidden"] {
             let folder = root.path().join(name);
             std::fs::create_dir_all(&folder).unwrap();
             std::fs::write(folder.join("data.toml"), "").unwrap();
         }
-        assert_eq!(super::projects_below(root.path()), ["analysis"]);
+        let below = super::projects_below(root.path());
+        assert_eq!(
+            below,
+            [
+                Some("analysis".to_owned()),
+                Some("two words".to_owned()),
+                None
+            ]
+        );
+        assert_eq!(
+            super::named_below(&below),
+            ["analysis/", "two words/", "another folder"]
+        );
     }
 
     use super::*;

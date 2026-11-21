@@ -1641,14 +1641,54 @@ fn fetchloom_alone_in_a_project_sums_up_its_status() -> Result {
 
 #[test]
 fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
-    let output = Sandbox::new()?.run(&["sync"])?;
+    let output = Sandbox::new()?.run(&["--json", "sync"])?;
     assert_eq!(output.status.code(), Some(50));
-    let stderr = text(&output.stderr)?;
-    assert!(
-        stderr.contains("there is no data.toml in this folder or any folder above it"),
-        "{stderr}"
+    let error = &json(&output)?["errors"][0];
+    assert_eq!(
+        error["message"],
+        "there is no data.toml in this folder or any folder above it"
     );
-    assert!(stderr.contains("`fetchloom add <link>`"), "{stderr}");
+    assert_eq!(
+        error["help"],
+        "go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project here, run `fetchloom add <link>`"
+    );
+    Ok(())
+}
+
+/// one folder above a project, as after one `cd ..` too many, the help names the project below,
+/// and an add asks before it starts a second project around it, refusing with nobody to ask.
+#[test]
+fn a_project_right_below_is_named_and_never_wrapped_unasked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let above = sandbox.folder("above")?;
+    let inner = above.join("myproj");
+    fs::create_dir(&inner)?;
+    fs::write(inner.join("data.toml"), "")?;
+    let refused = sandbox.command_in(&above, &["--json", "status"]).output()?;
+    assert_eq!(refused.status.code(), Some(50));
+    assert_eq!(
+        json(&refused)?["errors"][0]["help"],
+        "there is one in myproj/: run `fetchloom -C myproj --json status`"
+    );
+    let folder = sandbox.folder("measurements")?;
+    fs::write(folder.join("heights.csv"), b"cm\n170\n")?;
+    let unasked = sandbox
+        .command_in(&above, &["--json", "add", "../measurements"])
+        .output()?;
+    assert_eq!(unasked.status.code(), Some(1), "{}", text(&unasked.stdout)?);
+    let error = &json(&unasked)?["errors"][0];
+    assert_eq!(error["kind"], "unconfirmed");
+    assert_eq!(
+        error["help"],
+        "to add to the project in myproj/, go into its folder with `cd myproj`, then run `fetchloom --json add ../../measurements` again, or add --yes to start the project there anyway"
+    );
+    assert!(!above.join("data.toml").exists());
+    assert!(!above.join(".fetchloom").exists());
+    let wrapped = sandbox
+        .command_in(&above, &["add", "../measurements", "--yes"])
+        .output()?;
+    assert_eq!(wrapped.status.code(), Some(0), "{}", text(&wrapped.stderr)?);
+    assert!(above.join("data.toml").is_file());
     Ok(())
 }
 
@@ -1702,6 +1742,42 @@ fn a_project_below_the_repository_root_is_named() -> Result {
         json(&refused)?["errors"][0]["help"],
         "there is one in each of analysis/ and paper/: give -C its folder, as in `fetchloom -C analysis --json status`"
     );
+    Ok(())
+}
+
+/// a project in a folder whose name a shell needs quoted still keeps an add from wrapping it
+/// unasked, and the help quotes the folder; one whose name no help can quote, as one with a
+/// backtick, keeps the add from it too, unnamed.
+#[test]
+fn a_project_below_with_any_name_is_never_wrapped_unasked() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("measurements")?;
+    fs::write(folder.join("heights.csv"), b"cm\n170\n")?;
+    for (name, help) in [
+        (
+            "my project",
+            "to add to the project in my project/, go into its folder with `cd \"my project\"`, then run `fetchloom --json add ../../measurements` again, or add --yes to start the project there anyway".to_owned(),
+        ),
+        (
+            "x`fetchloom remove y`",
+            "to add to the project below, go into its folder and add from there, or add --yes to start the project there anyway".to_owned(),
+        ),
+    ] {
+        let above = sandbox.folder("above")?;
+        let inner = above.join(name);
+        fs::create_dir_all(&inner)?;
+        fs::write(inner.join("data.toml"), "")?;
+        let unasked = sandbox
+            .command_in(&above, &["--json", "add", "../measurements"])
+            .output()?;
+        assert_eq!(unasked.status.code(), Some(1), "{name}: {}", text(&unasked.stdout)?);
+        let error = &json(&unasked)?["errors"][0];
+        assert_eq!(error["kind"], "unconfirmed", "{name}");
+        assert_eq!(error["help"], help.as_str(), "{name}");
+        assert_eq!(error["fix"], serde_json::Value::Null, "{name}");
+        assert!(!above.join("data.toml").exists(), "{name}");
+        crate::support::delete_folder(&above)?;
+    }
     Ok(())
 }
 
