@@ -530,7 +530,8 @@ fn exclude_and_remove_point_at_each_other() -> Result {
     Ok(())
 }
 
-/// data.lock still pins the file, and the warning says how to leave one out for good.
+/// data.lock still pins the file, so a sync puts it back as its own work, never as a warning, which
+/// `-q` would keep, and a hint says how to leave one out for good.
 #[test]
 fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     let sandbox = Sandbox::new()?;
@@ -542,7 +543,17 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`\n"),
+        stderr.contains("   Put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it\n  hint: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("warning: put back"), "{stderr}");
+    assert_eq!(fs::read(&dog)?, b"broken");
+    delete(&dog)?;
+    let quiet = sandbox.run(&["-q", "sync"])?;
+    ok(&quiet)?;
+    let stderr = text(&quiet.stderr)?;
+    assert!(
+        !stderr.contains("put back") && !stderr.contains("Put back"),
         "{stderr}"
     );
     assert_eq!(fs::read(&dog)?, b"broken");
@@ -561,12 +572,11 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
         json!(["data/pets/images/cat_001.png", "data/pets/labels.csv"])
     );
     assert_eq!(document["result"]["placement"]["placed"], 2);
-    // a drive that cannot link warns of that too, so the warning is found, not counted
-    let warning = "put back 2 files that were deleted or moved, since data.lock pins them: data/pets/images/cat_001.png, data/pets/labels.csv; there is nothing to do: each sync puts back the files data.lock pins; to leave a file out for good, run `fetchloom exclude data/pets/images/cat_001.png`";
+    // a drive that cannot link warns of that, so only a warning of putting back is looked for
     assert!(
-        crate::support::warned(&document)
+        !crate::support::warned(&document)
             .iter()
-            .any(|told| *told == warning),
+            .any(|told| told.contains("put back")),
         "{}",
         document["warnings"]
     );
@@ -574,7 +584,7 @@ fn a_sync_says_it_puts_back_files_someone_deleted() -> Result {
     Ok(())
 }
 
-/// the warning names the exclude that leaves the folder out; a deleted dataset or data folder is a
+/// the hint names the exclude that leaves the folder out; a deleted dataset or data folder is a
 /// fresh start, told only as a missing folder.
 #[test]
 fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() -> Result {
@@ -585,7 +595,7 @@ fn a_sync_names_a_deleted_folder_once_and_refills_a_deleted_dataset_quietly() ->
     ok(&output)?;
     let stderr = text(&output.stderr)?;
     assert!(
-        stderr.contains("warning: put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  help: there is nothing to do: each sync puts back the files data.lock pins; to leave a folder out for good, run `fetchloom exclude data/tree/sub`\n"),
+        stderr.contains("   Put back the 3 files in data/tree/sub/, which was deleted or moved, since data.lock pins them\n  hint: to leave a folder out for good, run `fetchloom exclude data/tree/sub`\n"),
         "{stderr}"
     );
     for gone in [folder.clone(), sandbox.work().join("data")] {

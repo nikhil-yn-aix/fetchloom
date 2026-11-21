@@ -88,7 +88,7 @@ fn a_moved_data_folder_names_data_dir_once() -> Result {
     Ok(())
 }
 
-/// a single compressed file unpacked by hand, as `gunzip -f` leaves it: the put-back help names
+/// a single compressed file unpacked by hand, as `gunzip -f` leaves it: the put-back hint names
 /// decompress = true first, which keeps the unpacked file, and the next sync takes that file as
 /// placed and lets the packed one go.
 #[test]
@@ -104,14 +104,11 @@ fn a_compressed_file_unpacked_by_hand_points_to_decompress() -> Result {
     let folder = sandbox.work().join("data/visits");
     delete(&folder.join("visits.csv.gz"))?;
     fs::write(folder.join("visits.csv"), csv)?;
-    let output = sandbox.run(&["--json", "sync"])?;
-    let document = json(&output)?;
-    assert_eq!(
-        crate::support::warned(&document),
-        [
-            "put back data/visits/visits.csv.gz, which was deleted or moved, since data.lock pins it; to keep data/visits/visits.csv, which you unpacked, in its place, set decompress = true for visits in data.toml"
-        ],
-        "{document}"
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert!(
+        stderr.contains("   Put back data/visits/visits.csv.gz, which was deleted or moved, since data.lock pins it\n  hint: to keep data/visits/visits.csv, which you unpacked, in its place, set decompress = true for visits in data.toml\n"),
+        "{stderr}"
     );
     let manifest = sandbox.work().join("data.toml");
     let written = fs::read_to_string(&manifest)?;
@@ -177,7 +174,7 @@ fn renamed_files_are_put_back_without_naming_data_dir() -> Result {
     }
     let renamed = synced(&sandbox)?;
     assert!(
-        renamed.contains("warning: put back 2 files that were deleted or moved"),
+        renamed.contains("   Put back 2 files that were deleted or moved"),
         "{renamed}"
     );
     assert!(!renamed.contains("data_dir"), "{renamed}");

@@ -161,7 +161,6 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.left_behind` | files stay in a folder no dataset uses now; `details` names them |
 | `place.overwritten` | a dry run of `sync --force` would replace a file sync keeps |
 | `place.path_folder` | a dataset's `path` makes a folder named like the one file it holds |
-| `place.put_back` | files fetchloom placed were deleted or moved, so they were put back; `details` names them |
 | `place.restored` | a changed file was put back as data.lock pins it |
 | `place.set_aside` | a file `sync --force` moved out of the way could not go back, as when a folder now has its path, so it is kept under a hidden name, which `details` names; every sync says so until the file is moved |
 | `place.unportable` | files have names windows and fat disks cannot store |

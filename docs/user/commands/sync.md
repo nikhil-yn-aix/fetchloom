@@ -124,16 +124,16 @@ a dry run warns the same way, and `-v` names each file. when the old folder hold
 
 ## local changes
 
-a file fetchloom placed that someone deleted or moved comes back, since data.lock still pins it, and sync names the first five and counts the rest; JSON lists them in `result.placement.put_back`. stderr after a sample was deleted by hand, from a test run:
+a file fetchloom placed that someone deleted or moved comes back, since data.lock still pins it. that is a sync's own work, not a warning, so sync says it in one line, naming the first five files and counting the rest, with a hint that leaves them out for good, and `-q` says nothing of it; JSON lists them in `result.placement.put_back`. stderr after a sample was deleted by hand, from a test run:
 
 ```text
-warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it
-  help: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`; keep files of your own in a folder outside data/
+   Put back data/pets/images/dog_010_corrupt.png, which was deleted or moved, since data.lock pins it
+  hint: to leave a file out for good, run `fetchloom exclude data/pets/images/dog_010_corrupt.png`
 ```
 
-[`fetchloom exclude`](exclude.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names exclude only where it works: the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom exclude` of that folder.
+[`fetchloom exclude`](exclude.md) writes a pattern into data.toml, so every clone leaves the file out too. the hint names exclude only where it works: the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `Put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom exclude` of that folder. a single compressed file unpacked by hand, as `gunzip` leaves it, gets a hint to set `decompress = true` for its dataset, which keeps the unpacked file in its place.
 
-a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere stays: status lists it as extra while it is in a dataset's folder, whose .gitignore hides it from git, and never once it is outside them, where git sees it. a dry run warns the same way, as `a sync would put back`.
+a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake either, so sync places it again and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere stays: status lists it as extra while it is in a dataset's folder, whose .gitignore hides it from git, and never once it is outside them, where git sees it. a dry run says the same, as `Would put back`.
 
 without `--force`, edited files and untracked files at pinned paths stay in place, and JSON lists them in `result.placement.kept`; other extra files are not listed there, and [status](status.md) finds them. the warning about each names the `fetchloom sync --force` that replaces it. a sync that placed files ends with where a script finds the dataset, as `` next: `fetchloom path cows` tells your scripts where cows is``.
 

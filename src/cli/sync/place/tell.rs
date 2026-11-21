@@ -68,6 +68,7 @@ pub(super) fn tell(
     }
     tell_placed(output, placement, &folders, datasets);
     tell_refilled(output, manifest, placement);
+    tell_put_back(output, placement, "Put back");
     // an add tells it among its own lines, where it told the rule it added before
     if !adding {
         super::tell_marked(output, placement);
@@ -96,7 +97,6 @@ pub(super) fn tell(
     }
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
-    warn_put_back(output, placement, "put back");
     if placement.r_package {
         output.warn_with(
             Warning::ProjectRPackage,
@@ -216,13 +216,14 @@ fn unreached_said(found: &plan::Unreached) -> (String, String) {
     )
 }
 
-/// the most files a warning about files put back names; `-v` names each one.
+/// the most files a line about files put back names; `-v` names each one.
 const NAMED: usize = 5;
 
-/// a warning for the files someone deleted or moved that a sync puts back, as `verb` says, with up
-/// to [`NAMED`] ways to leave them out for good. a folder deleted whole is named once, and a
-/// dataset's own folder deleted whole is a fresh start, which needs no warning.
-fn warn_put_back(output: &Output, placement: &Placement, verb: &str) {
+/// tells the files someone deleted or moved that a sync puts back, as `verb` says, naming up to
+/// [`NAMED`], with hints that leave them out for good. putting them back is a sync's own work, so
+/// nothing here is a warning. a folder deleted whole is named once, and a dataset's own folder
+/// deleted whole is a fresh start, which the line placing it says.
+fn tell_put_back(output: &Output, placement: &Placement, verb: &str) {
     let fresh = |path: &String| {
         placement
             .emptied
@@ -252,8 +253,8 @@ fn warn_put_back(output: &Output, placement: &Placement, verb: &str) {
             None => items.push((path, 1, path)),
         }
     }
-    let said = put_back_said(verb, &paths, &items, &folders);
-    let mut help = Vec::new();
+    let said = put_back_said(&paths, &items, &folders);
+    output.step(verb, &said);
     let unpacked: Vec<&(String, String)> = paths
         .iter()
         .filter_map(|path| placement.unpacked.get(*path))
@@ -265,39 +266,34 @@ fn warn_put_back(output: &Output, placement: &Placement, verb: &str) {
             .map(|(_, dataset)| dataset.as_str())
             .collect();
         let datasets: Vec<&str> = datasets.into_iter().collect();
-        help.push(format!(
+        output.hint(&format!(
             "to keep {beside}, which you unpacked, in its place, set decompress = true for {} in data.toml",
             units::listed(&datasets, "and")
         ));
     }
-    if unpacked.len() < paths.len() {
-        help.push(
-            "there is nothing to do: each sync puts back the files data.lock pins".to_owned(),
-        );
-        if let Some((name, files, path)) = items.iter().find(|(_, _, path)| {
+    if unpacked.len() < paths.len()
+        && let Some((name, files, path)) = items.iter().find(|(_, _, path)| {
             !placement.unexcludable.contains_key(*path) && !placement.unpacked.contains_key(*path)
-        }) {
-            let (what, name) = if *files > 1 {
-                ("folder", *name)
-            } else {
-                ("file", path.as_str())
-            };
-            help.push(format!(
-                "to leave a {what} out for good, run `{}`",
-                crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(name)))
-            ));
-        }
+        })
+    {
+        let (what, name) = if *files > 1 {
+            ("folder", *name)
+        } else {
+            ("file", path.as_str())
+        };
+        output.hint(&format!(
+            "to leave a {what} out for good, run `{}`",
+            crate::cli::project::command(&format!("exclude {}", crate::cli::shell_word(name)))
+        ));
     }
-    output.warn_detailed(Warning::PlacePutBack, &said, Some(&help.join("; ")), &paths);
     for path in paths {
         output.detail(path);
     }
 }
 
-/// what a warning about `paths` names: the one file, the one folder deleted whole, or the first
+/// what a line about `paths` names: the one file, the one folder deleted whole, or the first
 /// [`NAMED`] of `items`, a folder with how many files it held, and how many the rest hold.
 fn put_back_said(
-    verb: &str,
     paths: &[&String],
     items: &[(&str, u64, &String)],
     folders: &BTreeMap<&str, usize>,
@@ -309,11 +305,11 @@ fn put_back_said(
     };
     match (paths.len(), items) {
         (1, _) => format!(
-            "{verb} {}, which was deleted or moved, since data.lock pins it",
+            "{}, which was deleted or moved, since data.lock pins it",
             paths[0]
         ),
         (count, [(folder, ..)]) => format!(
-            "{verb} the {} files in {folder}/, which was deleted or moved, since data.lock pins them",
+            "the {} files in {folder}/, which was deleted or moved, since data.lock pins them",
             units::grouped(count as u64)
         ),
         (count, _) => {
@@ -324,7 +320,7 @@ fn put_back_said(
                 more => format!(" and {} more", units::grouped(more)),
             };
             format!(
-                "{verb} {} that were deleted or moved, since data.lock pins them: {}{more}",
+                "{} that were deleted or moved, since data.lock pins them: {}{more}",
                 units::count(count as u64, "file", "files"),
                 named.join(", ")
             )
@@ -528,6 +524,7 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     }
     let placement = &preview.placement;
     tell_refilled(output, manifest, placement);
+    tell_put_back(output, placement, "Would put back");
     super::mark::tell_made(output, &placement.marked, placement.in_git, "Would ignore");
     for overwritten in &placement.overwritten {
         output.warn(
@@ -545,7 +542,6 @@ pub(crate) fn tell_preview(output: &Output, manifest: &Manifest, scope: &Scope, 
     warn_changed_outputs(output, placement);
     warn_kept(output, manifest, scope, placement);
     warn_retired(output, placement);
-    warn_put_back(output, placement, "a sync would put back");
     warn_unreached(output, &placement.unreached);
     for path in &placement.restored {
         if placement.repaired.contains(path) {
@@ -1237,8 +1233,8 @@ mod tests {
         let items = [("data/set/a", 2, &first), ("data/set/c", 1, &only)];
         let folders = BTreeMap::from([("data/set/a", 0), ("data/set/c", 1)]);
         assert_eq!(
-            put_back_said("put back", &paths, &items, &folders),
-            "put back 3 files that were deleted or moved, since data.lock pins them: the 2 in data/set/a/, data/set/c/only.csv"
+            put_back_said(&paths, &items, &folders),
+            "3 files that were deleted or moved, since data.lock pins them: the 2 in data/set/a/, data/set/c/only.csv"
         );
     }
 
@@ -1490,24 +1486,26 @@ mod tests {
         }
     }
 
-    /// the help says there is nothing to do, then gives exclude with the first file it can leave
-    /// out, quoted for a shell. the only file of a dataset gets no more, and a whole data folder
-    /// put back no `data_dir`, which a sync of a moved folder tells of apart.
+    /// putting files back is a sync's own work, so one line tells it, naming the first five and
+    /// counting the rest, and a hint gives exclude with the first file it can leave out, quoted
+    /// for a shell. the only file of a dataset gets no hint, and with -q nothing is said at all.
     #[test]
     fn files_put_back_are_counted_and_the_first_five_named() {
-        let output = Output::new(
-            Style {
-                color: false,
-                unicode: false,
-                interactive: false,
-                watched: false,
-                links: false,
-                accessible: false,
-            },
-            Level::Quiet,
-            false,
-            false,
-        );
+        let output = |level| {
+            Output::new(
+                Style {
+                    color: false,
+                    unicode: false,
+                    interactive: false,
+                    watched: false,
+                    links: false,
+                    accessible: false,
+                },
+                level,
+                false,
+                false,
+            )
+        };
         let put_back = |paths: &[&str], unexcludable: Vec<(&str, &str)>| Placement {
             put_back: paths.iter().map(|path| (*path).to_owned()).collect(),
             unexcludable: unexcludable
@@ -1520,41 +1518,41 @@ mod tests {
             .map(|n| format!("data/pets/my images/{n}.png"))
             .collect();
         let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-        warn_put_back(&output, &put_back(&paths, vec![]), "put back");
+        let told = output(Level::Normal);
+        tell_put_back(&told, &put_back(&paths, vec![]), "Put back");
         let first = put_back(&paths[..1], vec![]);
-        warn_put_back(&output, &first, "a sync would put back");
-        warn_put_back(&output, &put_back(&[], vec![]), "put back");
+        tell_put_back(&told, &first, "Would put back");
+        tell_put_back(&told, &put_back(&[], vec![]), "Put back");
         let only = put_back(&["data/m/m.csv"], vec![("data/m/m.csv", "m")]);
-        warn_put_back(&output, &only, "put back");
+        tell_put_back(&told, &only, "Put back");
         let both = put_back(
             &["data/m/m.csv", "data/pets/b.png"],
             vec![("data/m/m.csv", "m")],
         );
-        warn_put_back(&output, &both, "put back");
+        tell_put_back(&told, &both, "Put back");
         let many: Vec<String> = (0..5000).map(|n| format!("data/pets/{n}.png")).collect();
         let mut gone = put_back(&many.iter().map(String::as_str).collect::<Vec<_>>(), vec![]);
         gone.placed = 5000;
-        warn_put_back(&output, &gone, "put back");
-        let nothing = "there is nothing to do: each sync puts back the files data.lock pins";
+        tell_put_back(&told, &gone, "Put back");
+        let first_file = "  hint: to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`";
         assert_eq!(
-            output.warned(),
+            told.said(),
             [
-                format!(
-                    "put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more; {nothing}; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`"
-                ),
-                format!(
-                    "a sync would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it; {nothing}; to leave a file out for good, run `fetchloom exclude \"data/pets/my images/1.png\"`"
-                ),
-                format!(
-                    "put back data/m/m.csv, which was deleted or moved, since data.lock pins it; {nothing}"
-                ),
-                format!(
-                    "put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/pets/b.png; {nothing}; to leave a file out for good, run `fetchloom exclude data/pets/b.png`"
-                ),
-                format!(
-                    "put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more; {nothing}; to leave a file out for good, run `fetchloom exclude data/pets/0.png`"
-                ),
+                "   Put back 7 files that were deleted or moved, since data.lock pins them: data/pets/my images/1.png, data/pets/my images/2.png, data/pets/my images/3.png, data/pets/my images/4.png, data/pets/my images/5.png and 2 more",
+                first_file,
+                "      Would put back data/pets/my images/1.png, which was deleted or moved, since data.lock pins it",
+                first_file,
+                "   Put back data/m/m.csv, which was deleted or moved, since data.lock pins it",
+                "   Put back 2 files that were deleted or moved, since data.lock pins them: data/m/m.csv, data/pets/b.png",
+                "  hint: to leave a file out for good, run `fetchloom exclude data/pets/b.png`",
+                "   Put back 5,000 files that were deleted or moved, since data.lock pins them: data/pets/0.png, data/pets/1.png, data/pets/2.png, data/pets/3.png, data/pets/4.png and 4,995 more",
+                "  hint: to leave a file out for good, run `fetchloom exclude data/pets/0.png`",
             ]
         );
+        assert_eq!(told.warned(), Vec::<String>::new());
+        let quiet = output(Level::Quiet);
+        tell_put_back(&quiet, &gone, "Put back");
+        assert_eq!(quiet.said(), Vec::<String>::new());
+        assert_eq!(quiet.warned(), Vec::<String>::new());
     }
 }

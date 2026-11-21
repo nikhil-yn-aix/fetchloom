@@ -126,8 +126,6 @@ pub(crate) enum Warning {
     PlaceOverwritten,
     /// a dataset's `path` makes a folder named like the one file it holds.
     PlacePathFolder,
-    /// files fetchloom placed were deleted or moved, so they were put back.
-    PlacePutBack,
     /// a changed file was put back as data.lock pins it.
     PlaceRestored,
     /// a file `sync --force` moved out of the way could not go back, so it is kept under a hidden
@@ -229,7 +227,6 @@ impl Warning {
             Warning::PlaceLeftBehind => "place.left_behind",
             Warning::PlaceOverwritten => "place.overwritten",
             Warning::PlacePathFolder => "place.path_folder",
-            Warning::PlacePutBack => "place.put_back",
             Warning::PlaceRestored => "place.restored",
             Warning::PlaceSetAside => "place.set_aside",
             Warning::PlaceUnportable => "place.unportable",
@@ -326,7 +323,6 @@ mod tests {
             PlaceLeftBehind,
             PlaceOverwritten,
             PlacePathFolder,
-            PlacePutBack,
             PlaceRestored,
             PlaceSetAside,
             PlaceUnportable,

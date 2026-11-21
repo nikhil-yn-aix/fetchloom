@@ -904,7 +904,7 @@ fn a_shared_folder_too_full_to_name_gets_no_wildcard() -> Result {
     // a file put back makes the next sync place again, and still it says nothing more of git
     crate::support::delete(&sandbox.work().join("data/f0000.csv"))?;
     let again = synced(&sandbox)?;
-    assert!(again.contains("put back data/f0000.csv"), "{again}");
+    assert!(again.contains("Put back data/f0000.csv"), "{again}");
     assert!(!again.contains("git sees"), "said once: {again}");
     assert!(!marker.exists());
 
