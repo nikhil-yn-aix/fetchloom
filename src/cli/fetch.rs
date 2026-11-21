@@ -3424,6 +3424,7 @@ mod tests {
                 fetch,
                 label: label.to_owned(),
                 dataset: None,
+                named_by_caller: false,
                 again: None,
             }
         };
