@@ -260,8 +260,9 @@ fn a_stop_leaves_no_bar_behind() -> Result {
         let server = Server::held_file("/files/big.bin")?;
         let get = sandbox.command(&["get", &server.url]);
         let size = format!("rows 30 cols {columns}");
+        // the bar, which a narrow terminal draws without its verb
         let Some((code, screen)) =
-            crate::support::typed(&sandbox.work(), &get, &size, "Downloading", "\u{3}")?
+            crate::support::typed(&sandbox.work(), &get, &size, "big.bin", "\u{3}")?
         else {
             return Ok(());
         };
@@ -272,7 +273,9 @@ fn a_stop_leaves_no_bar_behind() -> Result {
             "{columns}: {shown:#?}"
         );
         assert!(
-            !shown.iter().any(|line| line.contains("Downloading")),
+            !shown.iter().any(
+                |line| line.contains("Downloading") || line.trim_start().starts_with("big.bin")
+            ),
             "{columns}: {shown:#?}\n{screen:?}"
         );
     }

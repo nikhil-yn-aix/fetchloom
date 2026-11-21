@@ -528,27 +528,42 @@ fn style(
             "line",
             move |state: &ProgressState, out: &mut dyn fmt::Write| {
                 let (done, total) = moved.shown(state.pos(), state.len());
-                let bar = if matches!(verb, "Downloading" | "Unpacking" | "Checking") {
-                    total.map_or_else(|| meter(0, 1, color), |total| meter(done, total, color))
-                } else {
-                    String::new()
-                };
+                let bar = matches!(verb, "Downloading" | "Unpacking" | "Checking").then(|| {
+                    total.map_or_else(
+                        || (meter(0, 1, color), None),
+                        |total| (meter(done, total, color), Some(percent(done, total))),
+                    )
+                });
                 // unpacking and checking read local files, whose pauses mean nothing
                 let quiet = (verb == "Downloading").then(|| moved.quiet());
                 let stopping = moved.stopping.load(Ordering::Relaxed);
                 let behind = quiet.filter(|_| moved.behind.load(Ordering::Relaxed));
-                let amount = waiting(done, total, moved.retrying(), behind)
+                let mut counters = waiting(done, total, moved.retrying(), behind)
                     .filter(|_| !stopping)
                     .unwrap_or_else(|| {
                         // this run's bytes over its own time, as the time left is
                         let (rate, left) = moved.pace(state.pos(), state.len(), Instant::now());
-                        measure(done, total, rate, state.elapsed(), left, quiet, stopping)
+                        measure((done, total), rate, state.elapsed(), left, quiet, stopping)
                     });
+                // a transfer's counters keep the room they grow to, so its name's cut stays put
+                if bar.is_some() {
+                    counters.steady(total);
+                }
                 let width = usize::from(console::Term::stderr().size().1);
-                let line = render(&name, &heading, &bar, &amount, width, color);
+                let meter = bar.as_ref().map(|(bar, percent)| (bar.as_str(), *percent));
+                let line = render(&name, &heading, meter, &counters, width, color);
                 let _ = out.write_str(&super::shown(&line, unicode));
             },
         )
+}
+
+/// how far `done` got of `total`, in whole percent, rounded down, so a bar short of its end never
+/// reads `100%`.
+fn percent(done: u64, total: u64) -> u8 {
+    if total == 0 {
+        return 100;
+    }
+    u8::try_from(u128::from(done.min(total)) * 100 / u128::from(total)).unwrap_or(100)
 }
 
 fn meter(done: u64, total: u64, color: bool) -> String {
@@ -567,60 +582,184 @@ fn meter(done: u64, total: u64, color: bool) -> String {
     )
 }
 
-/// the fewest columns a name keeps beside its counters before the counters give way.
+/// the fewest columns a name keeps beside a bar, beside a percent, and at the last.
+const NAME_ROOMY: usize = 24;
 const NAME_LEAST: usize = 16;
+const NAME_SHORTEST: usize = 8;
 
-/// facts before decoration: as the terminal narrows, the bar goes first, then the verb, then the
-/// name down to [`NAME_LEAST`], then the counters from the end; a name alone is cut to fit.
-fn render(name: &str, verb: &str, bar: &str, amount: &str, width: usize, color: bool) -> String {
-    let dim = super::paint(color, anstyle::Style::new().dimmed());
-    let line = |parts: &[&str], amount: &str| {
-        let amount = if amount.is_empty() {
-            String::new()
-        } else {
-            format!("{dim}{amount}{dim:#}")
-        };
-        parts
-            .iter()
-            .copied()
-            .chain([amount.as_str()])
-            .filter(|part| !part.is_empty())
-            .collect::<Vec<_>>()
-            .join(" ")
-    };
-    let fits = |shown: &str| console::measure_text_width(shown) <= width;
-    for shown in [
-        line(&[verb, name, bar], amount),
-        line(&[verb, name], amount),
-    ] {
-        if fits(&shown) {
-            return shown;
+/// the room a transfer keeps for its rate, as wide as `1023.9 KiB/s`, and for its time left, as
+/// wide as `59 s left`, before they show, so its line keeps one shape while it runs.
+const RATE_WIDEST: usize = 12;
+const LEFT_WIDEST: usize = 9;
+
+/// a bar's counters apart, so a narrow line lets the least useful go first, each with the room it
+/// keeps, which a transfer's counters grow to.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct Counters {
+    /// how far the bar got: `98.1/234.5 MiB`, or the bytes alone with no total.
+    count: Option<String>,
+    /// the rate, the first counter to give way.
+    rate: Option<String>,
+    /// what comes after: the time left, a stall, a try to come, a stop, or how long a wait lasted.
+    then: Option<String>,
+    /// the room each keeps, in the order above.
+    room: [usize; 3],
+}
+
+/// which form of a bar's count a line keeps.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Count {
+    Whole,
+    /// the bytes done alone, as `98.1 MiB`.
+    Done,
+    Uncounted,
+}
+
+impl Counters {
+    /// counters with `count`, a `rate` and what comes `then`, each given the room it takes now.
+    fn new(count: Option<String>, rate: Option<String>, then: Option<String>) -> Counters {
+        let room = [&count, &rate, &then]
+            .map(|part| part.as_deref().map_or(0, console::measure_text_width));
+        Counters {
+            count,
+            rate,
+            then,
+            room,
         }
     }
-    let mut kept = std::borrow::Cow::Borrowed(amount);
-    loop {
-        let shown = line(&[name], &kept);
-        if fits(&shown) {
-            return shown;
+
+    /// gives a transfer's counters the room they grow to, with `total` its length when known:
+    /// the count at its end, the rate and the time left at their widest.
+    fn steady(&mut self, total: Option<u64>) {
+        let whole = total.map_or(0, |total| {
+            console::measure_text_width(&fraction(total, total))
+        });
+        self.room[0] = self.room[0].max(whole);
+        self.room[1] = self.room[1].max(RATE_WIDEST);
+        if total.is_some() {
+            self.room[2] = self.room[2].max(LEFT_WIDEST);
         }
-        if kept.is_empty() {
-            break;
-        }
-        let room = width.saturating_sub(console::measure_text_width(&kept) + 1);
-        if room >= NAME_LEAST {
-            return line(&[&middle(name, room)], &kept);
-        }
-        let shorter = match kept.rsplit_once(" · ") {
-            Some((head, _)) => head.to_owned(),
-            // a fraction that shares one unit, as in 1.0/4.0 MiB, keeps that unit
-            None => kept
-                .split_once('/')
-                .map_or_else(String::new, |(done, total)| match total.rsplit_once(' ') {
-                    Some((_, unit)) if !done.contains(' ') => format!("{done} {unit}"),
-                    _ => done.to_owned(),
-                }),
+    }
+
+    /// what a line shows of them, with `rate`, the count in its `count` form and what comes
+    /// `then`, and the room that takes, a transfer's counters yet to come with theirs.
+    fn kept(&self, rate: bool, count: Count, then: bool) -> (String, usize) {
+        let count = match (count, &self.count) {
+            (Count::Whole, whole) => Some((whole.clone(), self.room[0])),
+            (Count::Done, Some(whole)) => {
+                let done = done_alone(whole);
+                let width = console::measure_text_width(&done);
+                Some((Some(done), width))
+            }
+            _ => None,
         };
-        kept = shorter.into();
+        let parts: Vec<(Option<String>, usize)> = [
+            count,
+            rate.then(|| (self.rate.clone(), self.room[1])),
+            then.then(|| (self.then.clone(), self.room[2])),
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|(part, room)| part.is_some() || *room > 0)
+        .collect();
+        let room = parts.iter().map(|(_, room)| room + 3).sum::<usize>();
+        let shown: Vec<String> = parts.into_iter().filter_map(|(part, _)| part).collect();
+        (shown.join(" · "), room.saturating_sub(3))
+    }
+
+    /// every counter, as a line wide enough shows them, for tests.
+    #[cfg(test)]
+    fn said(&self) -> String {
+        self.kept(true, Count::Whole, true).0
+    }
+}
+
+/// the bytes a count says were done, with the unit they share with its total: `98.1 MiB` of
+/// `98.1/234.5 MiB`, or the count as it is without a total.
+fn done_alone(count: &str) -> String {
+    count.split_once('/').map_or_else(
+        || count.to_owned(),
+        |(done, total)| match total.rsplit_once(' ') {
+            Some((_, unit)) if !done.contains(' ') => format!("{done} {unit}"),
+            _ => done.to_owned(),
+        },
+    )
+}
+
+/// what of a bar shows in place of its meter: the meter, its percent, or neither.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Meter,
+    Percent,
+    Unmarked,
+}
+
+/// the least a name keeps that is the whole name.
+const WHOLE: usize = usize::MAX;
+
+/// a bar's line at `width` columns, its progress kept before its name: as the terminal narrows,
+/// the name is cut in the middle first, then the verb goes, then the bar gives way to its percent,
+/// then the counters go from the least useful, the rate first; the time left and the percent stay
+/// longest. a name alone is cut to fit.
+fn render(
+    name: &str,
+    verb: &str,
+    meter: Option<(&str, Option<u8>)>,
+    counters: &Counters,
+    width: usize,
+    color: bool,
+) -> String {
+    use Count::{Done, Uncounted, Whole};
+    use Mark::{Meter, Percent, Unmarked};
+    // what a line keeps: the verb, its mark, the rate, its count, what comes then, and the least
+    // its name keeps
+    const LINES: [(bool, Mark, bool, Count, bool, usize); 11] = [
+        (true, Meter, true, Whole, true, WHOLE),
+        (true, Meter, true, Whole, true, NAME_ROOMY),
+        (false, Meter, true, Whole, true, NAME_ROOMY),
+        (false, Percent, true, Whole, true, WHOLE),
+        (false, Percent, true, Whole, true, NAME_LEAST),
+        (false, Percent, false, Whole, true, NAME_LEAST),
+        (false, Percent, false, Whole, true, NAME_SHORTEST),
+        (false, Percent, false, Done, true, NAME_SHORTEST),
+        (false, Percent, false, Uncounted, true, NAME_SHORTEST),
+        (false, Percent, false, Uncounted, false, NAME_SHORTEST),
+        (false, Unmarked, false, Uncounted, false, NAME_SHORTEST),
+    ];
+    let dim = super::paint(color, anstyle::Style::new().dimmed());
+    let tone = super::paint(color, super::tinted(super::Tone::Work));
+    let named = console::measure_text_width(name);
+    for (with_verb, mark, rate, count, then, least) in LINES {
+        let mark = match (mark, meter) {
+            (Meter, Some((bar, _))) => Some(bar.to_owned()),
+            (Percent, Some((_, Some(percent)))) => Some(format!("{tone}{percent:>3}%{tone:#}")),
+            _ => None,
+        };
+        let (amount, kept) = counters.kept(rate, count, then);
+        let verb = with_verb.then_some(verb);
+        let amount = (!amount.is_empty()).then(|| format!("{dim}{amount}{dim:#}"));
+        // what the line takes beside the name, each part with the space that parts it from the
+        // next, the counters at the room they keep
+        let taken = verb.map_or(0, |verb| console::measure_text_width(verb) + 1)
+            + mark
+                .as_deref()
+                .map_or(0, |mark| console::measure_text_width(mark) + 1)
+            + if kept > 0 { kept + 1 } else { 0 };
+        let room = width.saturating_sub(taken);
+        if room < least.min(named) {
+            continue;
+        }
+        let shown = middle(name, room);
+        return [
+            verb.map(str::to_owned),
+            Some(shown).filter(|shown| !shown.is_empty()),
+            mark,
+            amount,
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(" ");
     }
     middle(name, width)
 }
@@ -645,38 +784,34 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
-/// the counters: the rate once it settles and the time left once it holds, `no data` once `quiet`,
-/// which local work leaves none, passes [`STALL`], the disk once every byte is in, and `stopping`
-/// alone. a wait with nothing counted says how long it has lasted; a transfer shows its bytes,
-/// rate and time left instead.
+/// the counters of a bar that got `done` of `total`: the rate once it settles and the time left
+/// once it holds, `no data` once `quiet`, which local work leaves none, passes [`STALL`], the disk
+/// once every byte is in, and `stopping` alone. a wait with nothing counted says how long it has
+/// lasted; a transfer shows its bytes, rate and time left instead.
 fn measure(
-    done: u64,
-    total: Option<u64>,
+    (done, total): (u64, Option<u64>),
     rate: f64,
     elapsed: Duration,
     left: Duration,
     quiet: Option<Duration>,
     stopping: bool,
-) -> String {
-    let mut parts = Vec::new();
-    if done > 0 {
-        parts.push(counted(done, total));
-    }
+) -> Counters {
+    let count = (done > 0).then(|| counted(done, total));
     if stopping {
-        parts.push("stopping".to_owned());
-        return parts.join(" · ");
+        return Counters::new(count, None, Some("stopping".to_owned()));
     }
     if let Some(quiet) = quiet {
         if every_byte_in(done, total) {
-            parts.push("waiting for the disk".to_owned());
-            if quiet >= MOMENT {
-                parts.push(units::seconds(quiet));
-            }
-            return parts.join(" · ");
+            let then = if quiet >= MOMENT {
+                format!("waiting for the disk · {}", units::seconds(quiet))
+            } else {
+                "waiting for the disk".to_owned()
+            };
+            return Counters::new(count, None, Some(then));
         }
         if quiet >= STALL {
-            parts.push(format!("no data for {}", units::seconds(quiet)));
-            return parts.join(" · ");
+            let then = format!("no data for {}", units::seconds(quiet));
+            return Counters::new(count, None, Some(then));
         }
     }
     let settled = done > 0 && rate > 0.0 && elapsed >= SETTLE;
@@ -686,16 +821,15 @@ fn measure(
         && !still
         && total.is_some()
         && (elapsed >= STEADY || left <= elapsed.saturating_mul(REACH));
-    if settled {
-        parts.push(units::speed(rate));
-        if foreseen {
-            parts.push(format!("{} left", units::seconds(whole_up(left))));
-        }
-    }
-    if done == 0 && elapsed >= MOMENT && !still {
-        parts.push(units::seconds(elapsed));
-    }
-    parts.join(" · ")
+    let rate = settled.then(|| units::speed(rate));
+    let then = if foreseen {
+        Some(format!("{} left", units::seconds(whole_up(left))))
+    } else if done == 0 && elapsed >= MOMENT && !still {
+        Some(units::seconds(elapsed))
+    } else {
+        None
+    };
+    Counters::new(count, rate, then)
 }
 
 /// how long the `rest` of a transfer takes at `rate` bytes a second, the longest duration when a
@@ -724,7 +858,7 @@ fn waiting(
     total: Option<u64>,
     retry: Option<String>,
     behind: Option<Duration>,
-) -> Option<String> {
+) -> Option<Counters> {
     let what = match (retry, behind) {
         (Some(next), _) => next,
         (None, Some(quiet)) if quiet >= STALL && !every_byte_in(done, total) => {
@@ -732,11 +866,11 @@ fn waiting(
         }
         _ => return None,
     };
-    Some(if done > 0 {
-        format!("{} · {what}", counted(done, total))
-    } else {
-        what
-    })
+    Some(Counters::new(
+        (done > 0).then(|| counted(done, total)),
+        None,
+        Some(what),
+    ))
 }
 
 /// how far a bar got: `done` of `total` when it is known.
@@ -1206,6 +1340,19 @@ mod tests {
     use super::*;
     use crate::output::screen::Screen;
 
+    /// [`measure`]'s counters as one line, with `left` the bar's own time left.
+    fn measured(
+        done: u64,
+        total: Option<u64>,
+        rate: f64,
+        elapsed: Duration,
+        left: Duration,
+        quiet: Option<Duration>,
+        stopping: bool,
+    ) -> String {
+        measure((done, total), rate, elapsed, left, quiet, stopping).said()
+    }
+
     /// a wait for a person's answer counts neither as data that stopped coming nor in the bar's
     /// time: 4 s of waiting in a bar born 5 s ago leave it neither quiet nor 2 s old.
     #[test]
@@ -1415,20 +1562,58 @@ mod tests {
         );
     }
 
+    /// counters as `amount` shows them, ` · ` between them: the count first where the first is a
+    /// size, a rate, which ends in `/s`, then what comes after, the last.
+    fn counters(amount: &str) -> Counters {
+        let parts: Vec<&str> = amount
+            .split(" · ")
+            .filter(|part| !part.is_empty())
+            .collect();
+        let rate = parts.iter().find(|part| part.ends_with("/s"));
+        let count = parts
+            .first()
+            .filter(|part| part.contains('B') && !part.ends_with("/s"));
+        let then = parts
+            .last()
+            .filter(|part| Some(*part) != count && Some(*part) != rate);
+        Counters::new(
+            count.map(|part| (*part).to_owned()),
+            rate.map(|part| (*part).to_owned()),
+            then.map(|part| (*part).to_owned()),
+        )
+    }
+
+    /// [`render`] of a transfer with `bar` as its meter, `percent` done, and `amount` its counters,
+    /// keeping the room they grow to for a total of `total`.
+    fn drawn(
+        name: &str,
+        (bar, percent): (&str, u8),
+        (amount, total): (&str, u64),
+        width: usize,
+        color: bool,
+    ) -> String {
+        let mut counters = counters(amount);
+        counters.steady(Some(total));
+        render(
+            name,
+            "Downloading",
+            Some((bar, Some(percent))),
+            &counters,
+            width,
+            color,
+        )
+    }
+
     #[test]
     fn bars_keep_the_name_and_fit_at_every_fraction() {
+        let mib = 1024 * 1024;
         for color in [false, true] {
             for done in [0, 1, 25, 50, 99, 100, 150] {
                 let bar = meter(done, 100, color);
+                let shown = (bar.as_str(), percent(done, 100));
                 for width in [0, 1, 7, 8, 12, 20, 40, 60, 80, 120] {
-                    let line = render(
-                        "iris.csv",
-                        "Downloading",
-                        &bar,
-                        "12.3/39.4 MiB · 4.1 MiB/s · 7 s left",
-                        width,
-                        color,
-                    );
+                    let amount = ("12.3/39.4 MiB · 4.1 MiB/s · 7 s left", 39 * mib);
+                    let line = drawn("iris.csv", shown, amount, width, color);
                     assert!(
                         console::measure_text_width(&line) <= width,
                         "{width}: {line}"
@@ -1446,30 +1631,28 @@ mod tests {
 
     #[test]
     fn narrow_progress_keeps_the_file_name() {
-        let amount = "1.0/4.0 MiB · 512 KiB/s · 6 s left · 12 s";
-        let bar = "#####---------------";
+        let amount = ("1.0/4.0 MiB · 512 KiB/s · 6 s left", 4 << 20);
+        let bar = ("#####---------------", 25);
         for width in [128, 100, 80, 60, 40, 20, 12, 8] {
-            let line = render("iris.csv", "Downloading", bar, amount, width, false);
+            let line = drawn("iris.csv", bar, amount, width, false);
             assert!(line.contains("iris.csv"), "{width}: {line}");
             assert!(
                 console::measure_text_width(&line) <= width,
                 "{width}: {line}"
             );
         }
-        assert_eq!(
-            render("iris.csv", "Downloading", bar, amount, 8, false),
-            "iris.csv"
-        );
-        let wide = render("iris.csv", "Downloading", bar, amount, 128, false);
+        assert_eq!(drawn("iris.csv", bar, amount, 8, false), "iris.csv");
+        let wide = drawn("iris.csv", bar, amount, 128, false);
         assert!(wide.contains("512 KiB/s"), "{wide}");
         assert!(wide.contains("6 s left"), "{wide}");
     }
 
+    /// a counter keeps its unit, and the time left outlasts the rate and the count.
     #[test]
     fn narrow_progress_never_shows_a_number_without_its_unit() {
-        let amount = "1.0/4.0 MiB · 512 KiB/s · 6 s left";
+        let amount = counters("1.0/4.0 MiB · 512 KiB/s · 6 s left");
         for width in 0..=80 {
-            let line = render("iris.csv", "Downloading", "", amount, width, false);
+            let line = render("iris.csv", "Downloading", None, &amount, width, false);
             let counter = line.rsplit(' ').next().unwrap_or_default();
             assert!(
                 !counter.starts_with(|c: char| c.is_ascii_digit()),
@@ -1477,32 +1660,71 @@ mod tests {
             );
         }
         assert_eq!(
-            render("iris.csv", "Downloading", "", amount, 16, false),
-            "iris.csv 1.0 MiB"
+            render("iris.csv", "Downloading", None, &amount, 28, false),
+            "iris.csv 1.0 MiB · 6 s left"
         );
         assert_eq!(
-            render("iris.csv", "Downloading", "", "512 KiB/4.0 MiB", 16, false),
-            "iris.csv 512 KiB"
+            render("iris.csv", "Downloading", None, &amount, 17, false),
+            "iris.csv 6 s left"
+        );
+        assert_eq!(
+            render(
+                "iris.csv",
+                "Downloading",
+                None,
+                &counters("512 KiB/4.0 MiB · 6 s left"),
+                28,
+                false
+            ),
+            "iris.csv 512 KiB · 6 s left"
         );
     }
 
-    /// a narrow line drops the bar, then the verb, then the name's middle; the counters keep room.
+    /// a hugging face shard's line at 80 and 40 columns once showed no bar, no percent and no time
+    /// left: the name is cut in the middle first, the verb goes, the bar gives way to its percent,
+    /// then the rate, then the count, and the time left stays.
     #[test]
-    fn narrow_progress_drops_decoration_before_facts() {
-        let name = "train-00000-of-00004.parquet";
-        let bar = "#####---------------";
-        let amount = "113.9/190.7 MiB · 47.7 MiB/s · 2 s left";
-        let at = |width| render(name, "Downloading", bar, amount, width, false);
-        assert_eq!(at(101), format!("Downloading {name} {bar} {amount}"));
-        assert_eq!(at(80), format!("Downloading {name} {amount}"));
-        assert_eq!(at(68), format!("{name} {amount}"));
-        let narrow = at(60);
-        assert!(narrow.ends_with(&format!(" {amount}")), "{narrow}");
+    fn narrow_progress_cuts_the_name_before_the_progress() {
+        let name = "tinystories1/data/train-00001-of-00004-5852b56a2bd28fd9.parquet";
+        let bar = ("#################---", 89);
+        let amount = ("211.3/236.7 MiB · 31.5 MiB/s · 1 s left", 248_200_000);
+        let at = |width| drawn(name, bar, amount, width, false);
+        let wide = at(160);
+        assert_eq!(wide, format!("Downloading {name} {} {}", bar.0, amount.0));
+        let roomy = at(120);
+        assert!(roomy.starts_with("Downloading tinystories1/"), "{roomy}");
+        assert!(roomy.contains('~') && roomy.contains(bar.0), "{roomy}");
+        let eighty = at(80);
         assert!(
-            narrow.starts_with("train-") && narrow.contains('~'),
-            "{narrow}"
+            eighty.starts_with("tinystories1/") && eighty.contains('~'),
+            "{eighty}"
         );
-        assert_eq!(console::measure_text_width(&narrow), 60, "{narrow}");
+        assert!(eighty.ends_with(&format!(" 89% {}", amount.0)), "{eighty}");
+        let forty = at(40);
+        assert!(forty.ends_with(" 89% 211.3 MiB · 1 s left"), "{forty}");
+        for width in [160, 120, 80, 40] {
+            assert!(
+                console::measure_text_width(&at(width)) <= width,
+                "{width}: {}",
+                at(width)
+            );
+        }
+    }
+
+    /// the cut in a name once moved as the numbers beside it changed width, so the name jumped
+    /// with each frame: a transfer's counters keep the room they grow to.
+    #[test]
+    fn a_names_cut_stays_put_while_its_counters_grow() {
+        let name = "imdbtest/plain_text/test-00000-of-00001.parquet";
+        let total = 20_447_232;
+        let cut = |amount: &str| {
+            let line = drawn(name, ("#---", 15), (amount, total), 80, false);
+            line.split(' ').next().unwrap_or_default().to_owned()
+        };
+        let early = cut("2.9/19.5 MiB");
+        assert_eq!(early, cut("3.3/19.5 MiB · 979.7 KiB/s · 17 s left"));
+        assert_eq!(early, cut("13.3/19.5 MiB · 1022.9 KiB/s · 7 s left"));
+        assert!(early.contains('~'), "{early}");
     }
 
     #[test]
@@ -1514,11 +1736,10 @@ mod tests {
             (1, "~"),
             (0, ""),
         ] {
-            let line = render(
+            let line = drawn(
                 "specimen_replicate_01.fastq.gz",
-                "Downloading",
-                "#####---------------",
-                "1.0/4.0 MiB · 512 KiB/s · 6 s left",
+                ("#####---------------", 25),
+                ("1.0/4.0 MiB · 512 KiB/s · 6 s left", 4 << 20),
                 width,
                 false,
             );
@@ -1537,19 +1758,34 @@ mod tests {
             "mesures_e\u{301}chantillon.csv",
         ] {
             for (bar, amount) in [
-                ("\x1b[36m━━━━━━━━━━━━━━━━━━━━\x1b[0m", "1.0/4.0 MiB · 12 s"),
-                ("", "1.0 MiB · 12 s"),
-                ("", ""),
+                (
+                    Some(("\x1b[36m━━━━━━━━━━━━━━━━━━━━\x1b[0m", Some(25))),
+                    "1.0/4.0 MiB · 6 s left",
+                ),
+                (None, "1.0 MiB · 6 s left"),
+                (None, ""),
             ] {
+                let amount = counters(amount);
+                // the verb, and the bar or nothing, each with its space
+                let around = 12 + if bar.is_some() { 21 } else { 0 };
                 for width in 0..=100 {
-                    let line = render(name, "\x1b[36mDownloading\x1b[0m", bar, amount, width, true);
+                    let line = render(
+                        name,
+                        "\x1b[36mDownloading\x1b[0m",
+                        bar,
+                        &amount,
+                        width,
+                        true,
+                    );
                     assert!(
                         console::measure_text_width(&line) <= width,
                         "{width}: {line}"
                     );
                     assert!(!line.contains('\n'), "{width}: {line}");
-                    let beside =
-                        console::measure_text_width(name) + 1 + console::measure_text_width(amount);
+                    let beside = around
+                        + console::measure_text_width(name)
+                        + 1
+                        + console::measure_text_width(&amount.said());
                     if width >= beside {
                         assert!(line.contains(name), "{width}: {line}");
                     } else if width > 0 {
@@ -1748,23 +1984,23 @@ mod tests {
         let second = Duration::from_secs(1);
         let busy = Some(Duration::ZERO);
         assert_eq!(
-            measure(0, None, 0.0, second, Duration::ZERO, busy, false),
+            measured(0, None, 0.0, second, Duration::ZERO, busy, false),
             ""
         );
         assert_eq!(
-            measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy, false),
+            measured(1024, None, 512.0, 12 * second, Duration::ZERO, busy, false),
             "1.0 KiB · 512 B/s"
         );
         assert_eq!(
-            measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy, false),
+            measured(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy, false),
             "12 s"
         );
         assert_eq!(
-            measure(1024, Some(4096), 0.0, second, Duration::ZERO, busy, false),
+            measured(1024, Some(4096), 0.0, second, Duration::ZERO, busy, false),
             "1.0/4.0 KiB"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 512.0,
@@ -1781,7 +2017,7 @@ mod tests {
     fn a_download_that_stopped_receiving_says_so_instead_of_a_fading_rate() {
         let second = Duration::from_secs(1);
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 300.0,
@@ -1793,7 +2029,7 @@ mod tests {
             "1.0/4.0 KiB · no data for 12 s"
         );
         assert_eq!(
-            measure(
+            measured(
                 0,
                 Some(4096),
                 0.0,
@@ -1805,7 +2041,7 @@ mod tests {
             "no data for 9 s"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 512.0,
@@ -1818,7 +2054,7 @@ mod tests {
             "two seconds of nothing is a stall to tell"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 512.0,
@@ -1831,7 +2067,7 @@ mod tests {
             "a second of nothing drops a time left it cannot keep to"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 512.0,
@@ -1879,7 +2115,9 @@ mod tests {
         let second = Duration::from_secs(1);
         let mib = 1024 * 1024;
         assert_eq!(
-            waiting(680 * mib, Some(800 * mib), None, Some(3 * second)).as_deref(),
+            waiting(680 * mib, Some(800 * mib), None, Some(3 * second))
+                .map(|counters| counters.said())
+                .as_deref(),
             Some("680.0/800.0 MiB · waiting for the disk · 3 s")
         );
         assert_eq!(
@@ -1889,7 +2127,9 @@ mod tests {
         );
         assert_eq!(waiting(680 * mib, Some(800 * mib), None, None), None);
         assert_eq!(
-            waiting(0, None, Some("try 2 of 5".to_owned()), Some(3 * second)).as_deref(),
+            waiting(0, None, Some("try 2 of 5".to_owned()), Some(3 * second))
+                .map(|counters| counters.said())
+                .as_deref(),
             Some("try 2 of 5")
         );
     }
@@ -1899,7 +2139,7 @@ mod tests {
     fn a_full_bar_says_it_waits_for_the_disk() {
         let second = Duration::from_secs(1);
         assert_eq!(
-            measure(
+            measured(
                 57,
                 Some(57),
                 4.0,
@@ -1911,7 +2151,7 @@ mod tests {
             "57/57 B · waiting for the disk · 12 s"
         );
         assert_eq!(
-            measure(
+            measured(
                 57,
                 Some(57),
                 40.0,
@@ -2018,7 +2258,7 @@ mod tests {
         let second = Duration::from_secs(1);
         let mib = 1024 * 1024;
         assert_eq!(
-            measure(
+            measured(
                 74 * mib,
                 Some(300 * mib),
                 4.6 * 1_048_576.0,
@@ -2030,7 +2270,7 @@ mod tests {
             "74.0/300.0 MiB · stopping"
         );
         assert_eq!(
-            measure(
+            measured(
                 0,
                 Some(4096),
                 0.0,
@@ -2042,7 +2282,7 @@ mod tests {
             "stopping"
         );
         assert_eq!(
-            measure(
+            measured(
                 57,
                 Some(57),
                 4.0,
@@ -2054,7 +2294,7 @@ mod tests {
             "57/57 B · stopping"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(4096),
                 0.0,
@@ -2074,7 +2314,7 @@ mod tests {
         let busy = Some(Duration::ZERO);
         let mib = 1024 * 1024;
         assert_eq!(
-            measure(
+            measured(
                 9 * 1024,
                 Some(136 * mib),
                 2970.0,
@@ -2087,7 +2327,7 @@ mod tests {
             "three seconds at the start of a slow link cannot tell thirteen hours"
         );
         assert_eq!(
-            measure(
+            measured(
                 9 * mib,
                 Some(136 * mib),
                 2.0 * 1_048_576.0,
@@ -2099,7 +2339,7 @@ mod tests {
             "9.0/136.0 MiB · 2.0 MiB/s · 1 min 04 s left"
         );
         assert_eq!(
-            measure(
+            measured(
                 1024,
                 Some(136 * mib),
                 2970.0,
@@ -2112,7 +2352,8 @@ mod tests {
             "half a minute of a steady slow rate is worth telling"
         );
         let rate = 4.0 * 1_048_576.0;
-        let after = |done, left| measure(done, Some(20 * mib), rate, 5 * second, left, busy, false);
+        let after =
+            |done, left| measured(done, Some(20 * mib), rate, 5 * second, left, busy, false);
         assert_eq!(
             after(13 * mib, Duration::from_millis(1750)),
             "13.0/20.0 MiB · 4.0 MiB/s · 2 s left",
