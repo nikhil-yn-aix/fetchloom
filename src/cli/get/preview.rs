@@ -107,6 +107,19 @@ pub(super) async fn run(
             .iter()
             .flat_map(|planned| planned.hosts.iter().cloned()),
     );
+    // the get itself would ask before downloads the cache's disk may lack room for
+    if !context.offline.enabled() {
+        // a dry run makes no cache, so its disk is the one the nearest folder is on
+        let free = cache.root().ancestors().find_map(crate::space::free);
+        if crate::space::short(total.bytes, free).is_some() {
+            crate::cli::warn_short(
+                &context.output,
+                "this get",
+                (total.bytes, free.unwrap_or_default()),
+                &format!("the cache at {}", units::path(cache.root())),
+            );
+        }
+    }
     tell(context, &plans, &total);
     let mut report = report(args, lone, &links, &plans);
     if let Some(dry) = &mut report.dry {

@@ -1135,33 +1135,38 @@ fn a_link_a_sync_refuses_is_never_announced_as_a_download() -> Result {
     Ok(())
 }
 
-/// a dry run of a file larger than the cache's disk has free says so, as the add itself would
-/// before any download, rather than ending as if the add would go through.
+/// a dry run of a file larger than the cache's disk has free says so, as the add or get itself
+/// would before any download, rather than ending as if it would go through.
 #[cfg(debug_assertions)]
 #[test]
 fn a_dry_run_tells_a_download_the_disk_has_no_room_for() -> Result {
     let sandbox = Sandbox::new()?;
-    let huge = reply(
-        "206 Partial Content",
-        &[
-            ("Content-Range", "bytes 0-0/1048576"),
-            ("Content-Length", "1"),
-            ("ETag", "\"v1\""),
-        ],
-        b"x",
-    );
-    let server = Server::start("/huge.bin", vec![huge])?;
-    let output = sandbox
-        .command(&["add", &server.url, "--dry-run"])
-        .env("FETCHLOOM_TEST_FREE", "1000")
-        .output()?;
-    let stderr = text(&output.stderr)?;
-    assert!(
-        stderr
-            .contains("warning: this add needs at least 1.0 MiB on the disk holding the cache at "),
-        "{stderr}"
-    );
-    assert!(stderr.contains(", which has 1000 B free\n"), "{stderr}");
+    let huge = || {
+        reply(
+            "206 Partial Content",
+            &[
+                ("Content-Range", "bytes 0-0/1048576"),
+                ("Content-Length", "1"),
+                ("ETag", "\"v1\""),
+            ],
+            b"x",
+        )
+    };
+    let server = Server::start("/huge.bin", vec![huge(), huge()])?;
+    for command in ["add", "get"] {
+        let output = sandbox
+            .command(&[command, &server.url, "--dry-run"])
+            .env("FETCHLOOM_TEST_FREE", "1000")
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains(&format!(
+                "warning: this {command} needs at least 1.0 MiB on the disk holding the cache at "
+            )),
+            "{stderr}"
+        );
+        assert!(stderr.contains(", which has 1000 B free\n"), "{stderr}");
+    }
     Ok(())
 }
 
