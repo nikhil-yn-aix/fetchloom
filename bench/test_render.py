@@ -527,6 +527,22 @@ class VerdictTests(unittest.TestCase):
         poor = self.judged([dict(row, scenario="s2r", profile="poor") for row in failed], scenario="s2r", profile="poor")
         self.assertEqual((poor["rival"], poor["withheld"]), ("curl", None))
 
+    def test_a_run_over_the_budget_withholds_its_verdict_and_keeps_its_measurements(self):
+        rows = headline_rows(curl=2, aria2c=1.5)
+        impolite = [dict(row, over_budget=row["tool"] == "aria2c" and row["round"] == 3) for row in rows]
+        judged = self.judged(impolite)
+        aria2c = judged["comparisons"]["aria2c"]
+        # the fastest tool was impolite once, so the case has no verdict, though its ratio stays
+        self.assertEqual((judged["rival"], judged["reason"]), (None, "aria2c went over the budget in 1 of 10 runs"))
+        self.assertEqual((aria2c["word"], render.said("aria2c", judged), round(aria2c["median_ratio"], 9)),
+                         (None, "went over the budget in 1 of 10 runs", 1.5))
+        self.assertEqual(judged["comparisons"]["curl"]["word"], "fetchloom faster")
+        own = self.judged([dict(row, over_budget=row["tool"] == "fetchloom" and row["round"] == 7) for row in rows])
+        self.assertEqual((own["rival"], own["reason"]),
+                         (None, "fetchloom went over the budget in 1 of 10 runs, so no comparison is at the same politeness"))
+        self.assertEqual([render.said(tool, own) for tool in ("curl", "aria2c")], ["withheld", "withheld"])
+        self.assertEqual(round(own["comparisons"]["curl"]["median_ratio"], 9), 2)
+
     def test_a_case_outside_the_headline_set_is_judged_at_95_percent(self):
         judged = self.judged(headline_rows(scenario="s3", profile="lan", curl=.5), scenario="s3", profile="lan")
         self.assertEqual((judged["headline"], judged["level"], judged["rival"]), (False, .95, "curl"))

@@ -205,12 +205,21 @@ def word(interval, rival):
     return "inconclusive"
 
 
+def over_budget(measured):
+    """why runs were not at the same politeness, as a phrase after the tool's name, or None."""
+    over = sum(bool(row.get("over_budget")) for row in measured.values())
+    return f"went over the budget in {over} of {len(measured)} runs" if over else None
+
+
 def standing(base, measured, comparison):
     """why a comparison with fetchloom cannot stand, as a phrase after the tool's name, or None: a
-    failed run, rounds other than fetchloom's, or fewer than ab.MIN_PAIRS paired rounds."""
+    failed run, a run over the politeness budget, rounds other than fetchloom's, or fewer than
+    ab.MIN_PAIRS paired rounds. the measurements stay in the table either way."""
     failed = sum(row.get("status") != "passed" for row in measured.values())
     if failed:
         return f"failed {failed} of {len(measured)} runs"
+    if over_budget(measured):
+        return over_budget(measured)
     if measured.keys() != base.keys():
         return "ran other rounds than fetchloom"
     if comparison["pairs"] < ab.MIN_PAIRS or comparison["interval"] is None or None in comparison["interval"]:
@@ -241,6 +250,8 @@ def judge(case, runs):
         withheld = "fetchloom did not run"
     elif own_failed:
         withheld = f"fetchloom failed {own_failed} of {len(base)} runs"
+    elif over_budget(base) or (AA in rounds and over_budget(rounds[AA])):
+        withheld = f"fetchloom {over_budget(base) or over_budget(rounds[AA])}, so no comparison is at the same politeness"
     elif case["profile"] in GATED and aa is None:
         withheld = "no a/a arm measured this machine's noise"
     elif case["profile"] in GATED and aa["unmet"]:

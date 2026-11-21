@@ -141,6 +141,7 @@ This plan is fixed before any data is seen.
 - The A/A arm is never a rival. On lan and home it must pass every run, in the same rounds as fetchloom, with at least 10 pairs, and its 95% interval must sit inside 0.97 to 1.03. Otherwise the machine's noise is unmeasured or too large, and the case gets no verdict, in its table either. On the poor link its width is reported as the network's own randomness, and the rounds the pilot shows are needed instead of a gate.
 - A verdict needs at least 10 paired rounds; every link runs 10, and the pilot may raise a count before the real run, never lower one after seeing data. A wide interval is inconclusive: no case is run again to replace it, and the renderer refuses a case measured twice.
 - A tool with a failed run in a case shows "failed n of m" instead of a ratio, and a timeout is a failure. A case where fetchloom failed a run gets no verdict.
+- A run over the politeness budget keeps its measurements, but a comparison it is in gets no verdict, since the two tools were not equally polite. A case where fetchloom went over the budget gets no verdict at all.
 - s6 and s9 show each tool's time beside its guarantee, a stat, a hash or a question to the server, never as a win at equal checking, and are outside the headline set.
 - The page gives the seconds first, then the ratio and its interval. It leads with home broadband and the poor link, then lan, names each link in plain words with its shaping, and names the faster tool where fetchloom loses.
 
