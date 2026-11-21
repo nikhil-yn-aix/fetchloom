@@ -154,6 +154,11 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
         ),
         err,
     );
+    if cfg!(windows) && err.kind() == io::ErrorKind::AlreadyExists && is_link(destination) {
+        return error.help(
+            "a link stands at that name: remove the link itself, not what it points to, then run the same command again",
+        );
+    }
     match short_name_taker(destination, err) {
         Some(taker) => error.help(format!(
             "windows gives {taker}, beside it, that name as its short name: rename {taker}, or delete it if fetchloom placed it and sync again, which places a file with a name of that form first"
@@ -162,10 +167,16 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
     }
 }
 
+/// whether a symbolic link or a junction stands at `path`, looked at without following it.
+fn is_link(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|found| found.file_type().is_symlink())
+}
+
 /// the name of the file beside `destination` that windows answers its name for, as the short 8.3
-/// name it gave that file, when that is why `err` says the name is taken.
+/// name it gave that file, when that is why `err` says the name is taken. a link at the name is
+/// no such file: following it would name what it points to.
 fn short_name_taker(destination: &Path, err: &io::Error) -> Option<String> {
-    if !cfg!(windows) || err.kind() != io::ErrorKind::AlreadyExists {
+    if !cfg!(windows) || err.kind() != io::ErrorKind::AlreadyExists || is_link(destination) {
         return None;
     }
     let wanted = destination.file_name()?;
@@ -393,6 +404,66 @@ mod tests {
             state.files[&targets[0].path].look.size,
             bytes.len() as u64,
             "the edit was recorded as the placed file"
+        );
+    }
+
+    /// a link made at a file's name after sync looked, here a junction to a folder outside the
+    /// project, takes the name as a file would, and the refusal says a link stands there: following
+    /// it would call the folder it points to a short-name owner, to be renamed.
+    #[cfg(windows)]
+    #[test]
+    fn a_link_at_the_name_is_told_as_a_link_not_a_short_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let stored = crate::cache::tests::store(&cache, b"station,temperature\n");
+        let locked = LockedFile {
+            path: "weather.csv".to_owned(),
+            size: stored.size,
+            sha256: stored.digest,
+            md5: None,
+            url: "https://example.org/weather.csv".to_owned(),
+            unpacks_to: None,
+        };
+        let target = Target {
+            dataset: "weather",
+            path: "data/weather/weather.csv".to_owned(),
+            sha256: stored.digest,
+            size: stored.size,
+            copy: false,
+            file: &locked,
+        };
+        let project = Project::at(dir.path().join("project"));
+        let data = project.root.join("data");
+        fs::create_dir_all(data.join("weather")).unwrap();
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        let destination = data.join("weather").join("weather.csv");
+        if crate::test_links::link_folder(&outside, &destination).is_err() {
+            return crate::test_skips::skip("symlinks", "no link can be made here");
+        }
+        let mut placer = Placer::new(&data);
+        let mut state = State::default();
+        let (_, failure) = put_all(
+            &project,
+            &mut placer,
+            &cache,
+            &[&target],
+            &mut state,
+            0,
+            &Work::default(),
+        );
+        let failure = failure.unwrap();
+        assert_eq!(
+            failure.help.as_deref(),
+            Some(
+                "a link stands at that name: remove the link itself, not what it points to, then run the same command again"
+            ),
+            "{}",
+            failure.message
+        );
+        assert!(
+            fs::read_dir(&outside).unwrap().next().is_none(),
+            "nothing went through the link"
         );
     }
 
