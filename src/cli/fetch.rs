@@ -814,7 +814,7 @@ impl<'a> Watch<'a> {
         }
         let mut head = Vec::with_capacity(HEAD);
         if let Some(path) = cache.find(&fetched.digest, Some(fetched.size))
-            && let Ok(file) = std::fs::File::open(path)
+            && let Ok(file) = crate::volume::read_unfollowed(&path)
         {
             let _ =
                 std::io::Read::read_to_end(&mut std::io::Read::take(file, HEAD as u64), &mut head);
@@ -3634,6 +3634,56 @@ mod tests {
                 Ok(_) => assert!(!refused, "{shown:?} was kept"),
             }
         }
+    }
+
+    /// a download the cache found, then swapped for a link by someone sharing the cache before its
+    /// first bytes are read by its name, is never read through the link: a sign-in page there
+    /// says nothing of the download.
+    #[cfg(unix)]
+    #[test]
+    fn a_cached_download_swapped_for_a_link_is_never_read_through_it() {
+        let output = quiet();
+        let (overall, held) = (overall(), Held::default());
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let folder = tempfile::tempdir().unwrap();
+        let cache = Cache::open(folder.path().join("cache")).unwrap();
+        let job = Job {
+            fetch: Fetch::new(Url::parse("http://lab.example/data.csv").unwrap()),
+            label: "data.csv".to_owned(),
+            dataset: None,
+            again: None,
+        };
+        let stored = crate::cache::tests::store(&cache, b"a,b\n1,2\n");
+        let page = folder.path().join("page.html");
+        std::fs::write(&page, b"<!DOCTYPE html><title>Sign in</title>").unwrap();
+        let object = cache.object_path(&stored.digest);
+        crate::cache::swap_once_found(move || {
+            std::fs::remove_file(&object).unwrap();
+            std::os::unix::fs::symlink(&page, &object).unwrap();
+        });
+        let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
+        watch
+            .on(&Event::WebPage {
+                name: None,
+                slashed: false,
+            })
+            .unwrap();
+        let fetched = Fetched {
+            digest: stored.digest,
+            size: stored.size,
+            moved: stored.size,
+            name: None,
+            origin: crate::net::Origin::Network,
+            version: None,
+            began: None,
+            arrived: None,
+            asked: std::time::Duration::ZERO,
+        };
+        assert!(watch.checked(&cache, fetched).is_ok());
+        assert!(
+            crate::cache::swapped_once_found(),
+            "the download was swapped"
+        );
     }
 
     /// a host that would mean more to a shell, which a link's parser lets through, is quoted in

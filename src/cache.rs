@@ -621,6 +621,27 @@ pub(crate) fn swapped() -> bool {
     MEANWHILE.with_borrow(Option::is_none)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// what a test does once [`Cache::find`] found an object and before its caller reads it by
+    /// its name, as someone sharing the cache swapping the object for a link meanwhile would, once.
+    static FOUND: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// has `swap` happen once a test's next [`Cache::find`] found an object, before its caller reads
+/// the object by its name.
+#[cfg(all(test, unix))]
+pub(crate) fn swap_once_found(swap: impl FnOnce() + 'static) {
+    FOUND.set(Some(Box::new(swap)));
+}
+
+/// whether the swap a test asked [`swap_once_found`] for happened.
+#[cfg(all(test, unix))]
+pub(crate) fn swapped_once_found() -> bool {
+    FOUND.with_borrow(Option::is_none)
+}
+
 /// the room the cache's disk had free as the archives this run unpacks at once began, which they
 /// share, so archives unpacking together never each count on all of it.
 #[derive(Debug, Default)]
@@ -1079,6 +1100,10 @@ impl Cache {
             && !changed::vouch(&path, &metadata, digest).ok()?
         {
             return None;
+        }
+        #[cfg(test)]
+        if let Some(swap) = FOUND.take() {
+            swap();
         }
         Some(path)
     }

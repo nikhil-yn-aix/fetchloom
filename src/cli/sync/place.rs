@@ -4458,7 +4458,8 @@ pub(crate) fn cached_at(cache: &Cache, sha256: &Sha256, size: u64) -> Cached {
     match found {
         (found, _) if found == size => Cached::Here,
         (found, path)
-            if Sha256::of_file(&path, Block::sized(found.saturating_add(1)))
+            if crate::volume::read_unfollowed(&path)
+                .and_then(|file| Sha256::of_reader(file, Block::sized(found.saturating_add(1))))
                 .is_ok_and(|digest| digest == *sha256) =>
         {
             Cached::Other(found)
@@ -5906,6 +5907,26 @@ mod tests {
             Cached::Here,
             "as find trusts it at its size"
         );
+    }
+
+    /// an object the cache found, then swapped for a link by someone sharing the cache before it
+    /// is read by its name, is never hashed through the link: bytes elsewhere that hash to the pin
+    /// never show the pin's size wrong, and the object counts as absent.
+    #[cfg(unix)]
+    #[test]
+    fn a_cached_object_swapped_for_a_link_is_never_hashed_through_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let digest = crate::cache::tests::store(&cache, b"twelve bytes").digest;
+        let elsewhere = dir.path().join("elsewhere");
+        fs::write(&elsewhere, b"twelve bytes").unwrap();
+        let object = cache.object_path(&digest);
+        crate::cache::swap_once_found(move || {
+            fs::remove_file(&object).unwrap();
+            std::os::unix::fs::symlink(&elsewhere, &object).unwrap();
+        });
+        assert_eq!(cached_at(&cache, &digest, 13), Cached::Absent);
+        assert!(crate::cache::swapped_once_found(), "the object was swapped");
     }
 
     /// kept, vouched and adopted files lend their bytes, and only to a file placed or replaced;
