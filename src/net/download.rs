@@ -229,6 +229,8 @@ pub(crate) enum Event {
     /// the bytes kept are no longer as the download left them on this disk, as when they no
     /// longer hash as recorded or were made read-only, so it starts over from the first byte.
     Spoiled,
+    /// the download starts over from the first byte, losing the bytes it held, for this reason.
+    Restart(Restart),
     /// the file's link is gone, so it is looked up again and comes from a new link, which goes on
     /// from nothing kept of the old one: no later run asks the old link again.
     Moved,
@@ -273,6 +275,18 @@ pub(crate) enum Event {
         limit: Option<String>,
         open: bool,
     },
+}
+
+/// why a download starts over from the first byte, as the person watching is told.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Restart {
+    /// the server names another version of the file, or states another length for it.
+    Changed,
+    /// the server answered the request for the rest with no continuation of the bytes held:
+    /// another range, a refusal of it, or a form of answer fetchloom does not join.
+    Unjoinable,
+    /// the bytes joined from several answers did not match the file's hash.
+    Mismatched,
 }
 
 /// whether a later run can go on from a stopped download's bytes: it needs proof the rest is the
@@ -693,6 +707,7 @@ impl Reach {
             Event::Waiting
             | Event::Lockless
             | Event::Spoiled
+            | Event::Restart(_)
             | Event::Moved
             | Event::Kept { .. }
             | Event::WebPage { .. }
@@ -1115,6 +1130,7 @@ impl Net {
                     // download that does not match starts over once, as one stream
                     Err(err) if resumed && !restarted => {
                         tracing::debug!(%err, "a download in pieces did not match, starting over");
+                        on(Event::Restart(Restart::Mismatched))?;
                         restarted = true;
                         state.split = false;
                         partial.discard();
@@ -1343,6 +1359,19 @@ impl Net {
                 && earlier
                     .as_ref()
                     .is_some_and(|(_, kept)| !other_version(kept, &validators));
+            if !state.sent_whole {
+                let stated = headers::total_length(&head, StatusCode::PARTIAL_CONTENT);
+                let changed = earlier
+                    .as_ref()
+                    .is_some_and(|(_, kept)| other_version(kept, &validators))
+                    || length.zip(stated).is_some_and(|(kept, now)| kept != now);
+                let why = if changed {
+                    Restart::Changed
+                } else {
+                    Restart::Unjoinable
+                };
+                on(Event::Restart(why)).map_err(Failure::Final)?;
+            }
             return Ok(Answer::StartOver);
         };
         let total = headers::total_length(&head, status);

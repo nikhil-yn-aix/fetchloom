@@ -15,7 +15,7 @@ use reqwest::header;
 use tokio::sync::OwnedSemaphorePermit;
 use url::Url;
 
-use super::{Event, Listener, local};
+use super::{Event, Listener, Restart, local};
 use crate::cache::{PartialWriter, Validators};
 use crate::error::Kind;
 use crate::net::failure::{self, Failure};
@@ -618,11 +618,16 @@ impl Net {
         let head = response.headers();
         tracing::debug!(url = %Shown(job.from), status = status.as_u16(), start, end, "part");
         let changed = !job.pinned && headers::changed(job.validators, &headers::validators(head));
+        let restart = |why| {
+            // the split ends either way, and a stop asked meanwhile is heard there
+            let _ = (job.on)(Event::Restart(why));
+            Err(Ended::Changed)
+        };
         match status {
             StatusCode::PARTIAL_CONTENT
                 if changed || headers::total_length(head, status) != Some(job.total) =>
             {
-                Err(Ended::Changed)
+                restart(Restart::Changed)
             }
             StatusCode::PARTIAL_CONTENT if headers::range_start(head) == Some(start) => {
                 if let Some(last) = headers::range_end(head) {
@@ -630,8 +635,8 @@ impl Net {
                 }
                 Ok(response)
             }
-            StatusCode::OK if changed => Err(Ended::Changed),
-            StatusCode::RANGE_NOT_SATISFIABLE => Err(Ended::Changed),
+            StatusCode::OK if changed => restart(Restart::Changed),
+            StatusCode::RANGE_NOT_SATISFIABLE => restart(Restart::Unjoinable),
             StatusCode::OK | StatusCode::PARTIAL_CONTENT => Err(Ended::NoRanges),
             status => Err(Ended::Failed(self.status_refusal(job.from, status, head))),
         }

@@ -45,7 +45,8 @@ pub(crate) use azure::Given;
 pub(crate) use azure::test_identity_endpoint;
 pub(crate) use azure::{Azure, Sent};
 pub(crate) use download::{
-    Divert, Event, Expect, Expired, Fetch, Fetched, LFS_LARGEST, Listed, Origin, Probed, Resumable,
+    Divert, Event, Expect, Expired, Fetch, Fetched, LFS_LARGEST, Listed, Origin, Probed, Restart,
+    Resumable,
 };
 pub(crate) use endpoint::Endpoint;
 pub(crate) use failure::{

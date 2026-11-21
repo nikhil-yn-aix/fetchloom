@@ -22,7 +22,7 @@ use crate::cache::Cache;
 use crate::digest::Sha256;
 use crate::error::{Error, FileFailure, Kind};
 use crate::net::{
-    Event, Expect, Fetch, Fetched, Listed, Net, NoVersion, Origin, Resumable, estimate,
+    Event, Expect, Fetch, Fetched, Listed, Net, NoVersion, Origin, Restart, Resumable, estimate,
 };
 use crate::output::{Bar, Output, Ticker, Warning};
 use crate::source::folder::PAGE_FLAG;
@@ -657,6 +657,9 @@ struct Watch<'a> {
     /// whether the bytes kept were found no longer as the download left them on this disk, the
     /// reason a start over that follows gives.
     spoiled: AtomicBool,
+    /// why the download said it goes back to its first byte, the reason a start over that
+    /// follows gives.
+    restart: Mutex<Option<Restart>>,
     /// the furthest point the overall progress counted, so bytes fetched again after a retry or
     /// a fresh start count once.
     counted: AtomicU64,
@@ -711,6 +714,7 @@ impl<'a> Watch<'a> {
             earlier: AtomicU64::new(0),
             restarted: AtomicBool::new(false),
             spoiled: AtomicBool::new(false),
+            restart: Mutex::new(None),
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
@@ -831,6 +835,12 @@ impl<'a> Watch<'a> {
         let earlier = self.earlier.load(Ordering::Relaxed);
         let held = self.held.bytes.load(Ordering::Relaxed);
         let spoiled = self.spoiled.swap(false, Ordering::Relaxed);
+        let told = self
+            .restart
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take()
+            .map(restarted_because);
         let lost = if resumed >= held {
             return;
         } else if held <= earlier {
@@ -839,27 +849,28 @@ impl<'a> Watch<'a> {
             if resumed > 0 {
                 return;
             }
-            let why = if spoiled {
-                format!(", since {SPOILED}")
-            } else {
-                String::new()
+            let why = match (spoiled, told) {
+                (true, _) => format!(", since {SPOILED}"),
+                (false, Some(told)) => format!(", since {told}"),
+                (false, None) => String::new(),
             };
             format!(
                 "the {} an earlier run kept cannot be continued{why}",
                 units::size(earlier)
             )
         } else {
-            let why = match (self.held.resumable(), resumable) {
+            let why = match (self.held.resumable(), resumable, told) {
                 _ if spoiled => SPOILED.to_owned(),
-                (Resumable::Unproven(why), _) => format!(
+                (_, _, Some(told)) => told,
+                (Resumable::Unproven(why), _, None) => format!(
                     "nothing shows they are the same file: {}",
                     unnamed(why, "the server")
                 ),
-                (Resumable::No, _) => "the server cannot continue from them".to_owned(),
-                (_, Resumable::No | Resumable::Unproven(_)) => {
+                (Resumable::No, _, None) => "the server cannot continue from them".to_owned(),
+                (_, Resumable::No | Resumable::Unproven(_), None) => {
                     "the server sent the whole file again instead of the rest".to_owned()
                 }
-                _ => "the file changed on the server".to_owned(),
+                _ => restarted_because(Restart::Changed),
             };
             format!(
                 "the {} downloaded so far cannot be continued, since {why}",
@@ -1181,6 +1192,9 @@ impl<'a> Watch<'a> {
             }
             Event::Lockless => self.held.lockless.store(true, Ordering::Relaxed),
             Event::Spoiled => self.spoiled.store(true, Ordering::Relaxed),
+            Event::Restart(why) => {
+                *self.restart.lock().unwrap_or_else(PoisonError::into_inner) = Some(why);
+            }
             Event::Moved => self.moved(),
             // no new bar: the download may still wait for a free slot. a lone download's bar,
             // already showing, says what it goes on from
@@ -1264,6 +1278,16 @@ impl Drop for Watch<'_> {
     fn drop(&mut self) {
         self.overall.stop.ended(*self.arrived.get_mut());
     }
+}
+
+/// what a start over says of why it goes back to the first byte.
+fn restarted_because(why: Restart) -> String {
+    match why {
+        Restart::Changed => "the file changed on the server",
+        Restart::Unjoinable => "the server did not send the rest as asked",
+        Restart::Mismatched => "the pieces it came in did not match its hash",
+    }
+    .to_owned()
 }
 
 /// whether the name at `path` already says its bytes are compressed with `encoding`, as

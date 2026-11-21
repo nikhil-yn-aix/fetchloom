@@ -383,6 +383,103 @@ fn a_try_that_starts_over_says_why() -> Result {
     Ok(())
 }
 
+/// a request for the rest answered with no part, as a 416 that states no length, or with a part
+/// from another byte, starts over, and says the server did not send what was asked, not that the
+/// file changed.
+#[test]
+fn a_try_answered_with_another_part_than_asked_starts_over_and_says_so() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let cut = 150_000;
+    let moved = cut + 4096;
+    let length = body.len().to_string();
+    let rest = (body.len() - moved).to_string();
+    let range = format!("bytes {moved}-{}/{length}", body.len() - 1);
+    let tagged = [("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+    let ranged = [
+        ("Content-Length", length.as_str()),
+        ("ETag", "\"v1\""),
+        ("Accept-Ranges", "bytes"),
+    ];
+    let elsewhere = [
+        ("Content-Length", rest.as_str()),
+        ("Content-Range", range.as_str()),
+        ("ETag", "\"v1\""),
+    ];
+    for answer in [
+        reply("416 Range Not Satisfiable", &[("Content-Length", "0")], b""),
+        reply("206 Partial Content", &elsewhere, &body[moved..]),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(
+            "/big.bin",
+            vec![
+                reply("200 OK", &tagged, &body[..cut]),
+                answer,
+                reply("200 OK", &ranged, &body),
+            ],
+        )?;
+        let output = sandbox.run(&["get", &server.url, "-o", "big.bin"])?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        let restarts: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.contains("Restarting"))
+            .collect();
+        assert_eq!(
+            restarts,
+            [
+                " Restarting big.bin · the 146.5 KiB downloaded so far cannot be continued, since the server did not send the rest as asked"
+            ],
+            "{stderr}"
+        );
+        assert_eq!(fs::read(sandbox.work().join("big.bin"))?, body);
+    }
+    Ok(())
+}
+
+/// pieces from two answers that do not make the file data.lock pins start over once, and the
+/// start over says so, not that the file changed on the server.
+#[test]
+fn a_file_whose_pieces_miss_its_pin_starts_over_and_says_so() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let cut = 150_000;
+    let length = body.len().to_string();
+    let mut spoiled = body.clone();
+    spoiled[cut + 10] ^= 0xff;
+    let rest = (body.len() - cut).to_string();
+    let range = format!("bytes {cut}-{}/{length}", body.len() - 1);
+    let tagged = [("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+    let part = [
+        ("Content-Length", rest.as_str()),
+        ("Content-Range", range.as_str()),
+        ("ETag", "\"v1\""),
+    ];
+    let server = Server::start(
+        "/big.bin",
+        vec![
+            reply("200 OK", &tagged, &body),
+            reply("200 OK", &tagged, &body[..cut]),
+            reply("206 Partial Content", &part, &spoiled[cut..]),
+            reply("200 OK", &tagged, &body),
+        ],
+    )?;
+    let sandbox = Sandbox::new()?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "big"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    delete_folder(&sandbox.cache())?;
+    delete_folder(&sandbox.work().join("data"))?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(" Restarting big/big.bin · the 390.6 KiB downloaded so far cannot be continued, since the pieces it came in did not match its hash"),
+        "{stderr}"
+    );
+    assert_eq!(fs::read(sandbox.work().join("data/big/big.bin"))?, body);
+    Ok(())
+}
+
 /// a try that finds the bytes an earlier try kept are no longer as it left them on this disk starts
 /// over, and says that is why, not that the file changed on the server.
 #[test]
