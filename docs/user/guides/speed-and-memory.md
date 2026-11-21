@@ -73,6 +73,8 @@ and from the same run at lean:
             hash lanes: resources = lean
 ```
 
+lean never raises a budget: where the default budget for what the system or a cgroup leaves is below 128 MiB, that budget holds, and the buffers line and the `memory` row name the machine, as at the default level.
+
 a level that is none of the three words stops every named command with kind `usage`, exit 2:
 
 ```text

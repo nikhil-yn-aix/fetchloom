@@ -601,10 +601,14 @@ impl Settings {
         };
         let resources = level(&given)?;
         let limits = resources.value.limits(machine);
+        // a level caps the budget only below what the machine gives; at it, the machine holds it
+        let capped = limits
+            .memory
+            .filter(|memory| *memory < defaults.memory.value);
         let memory = size(
             &given,
             "memory",
-            derived(limits.memory, resources.value, defaults.memory),
+            derived(capped, resources.value, defaults.memory),
         )?;
         let steady = if memory.origin.is_named() {
             memory

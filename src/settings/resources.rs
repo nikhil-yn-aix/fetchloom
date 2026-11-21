@@ -304,11 +304,12 @@ mod tests {
                 (128 * MIB, "resources"),
                 (131_072, "machine"),
             ),
+            // the machine's own budget, under lean's, is what holds it
             (
                 "lean",
                 tiny,
                 lean,
-                (100 * MIB, "resources"),
+                (100 * MIB, "machine"),
                 (100_000, "default"),
             ),
             (
@@ -631,6 +632,34 @@ mod tests {
                 ),
             ),
         ]);
+    }
+
+    /// a cgroup that leaves lean a smaller budget than lean's own holds the buffers, so it is what
+    /// a run names for them, not lean.
+    #[test]
+    fn a_cgroup_below_leans_budget_is_named_for_the_buffers() {
+        let in_cgroup = Machine {
+            memory_in_cgroup: true,
+            ..machine(2, Some(120 * MIB))
+        };
+        check(vec![(
+            &[("FETCHLOOM_RESOURCES", "lean")],
+            "",
+            in_cgroup,
+            24,
+            spends(
+                Level::Lean,
+                [2, 2, 2, 1],
+                60 * MIB,
+                &[
+                    "downloads: resources = lean",
+                    "to one host: resources = lean",
+                    "local workers: this run may use 2 of the 24 processors",
+                    "buffers: half of the 120.0 MiB this cgroup leaves",
+                    "hash lanes: resources = lean",
+                ],
+            ),
+        )]);
     }
 
     /// the machine limits are the usable processors and the memory the system or a cgroup leaves.
