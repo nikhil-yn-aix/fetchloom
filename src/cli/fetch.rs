@@ -1864,6 +1864,10 @@ fn labelled((index, mut job): (usize, Job)) -> (usize, Job) {
     clippy::too_many_arguments,
     reason = "each is one part of the run that a batch of downloads shares"
 )]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the queue, each download's task and what its result does stay in one loop"
+)]
 async fn run_each(
     context: &Context,
     net: &Arc<Net>,
