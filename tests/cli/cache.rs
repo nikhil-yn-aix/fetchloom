@@ -2525,6 +2525,12 @@ fn two_largest_among_others() -> Result<Sandbox> {
     }
     let added = sandbox.run(&["add", "../big"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    // a coarse clock, as FAT's, can give the files placed last the state's own time, and a status
+    // then hashes them before its batch does; a sync in a later tick settles them
+    let state = sandbox.work().join(".fetchloom").join("state");
+    sandbox.wait_for_a_later_time(fs::metadata(&state)?.modified()?)?;
+    let settled = sandbox.run(&["sync"])?;
+    assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
     Ok(sandbox)
 }
 
