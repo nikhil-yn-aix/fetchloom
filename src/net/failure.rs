@@ -38,9 +38,8 @@ pub(super) enum Failure {
     Transient {
         reason: String,
         retry_after: Option<Duration>,
-        /// no answer came, for a reason this machine gave: no route or network, an address it no
-        /// longer has, or a lookup DNS could not answer for now, as when its network is gone.
-        unreachable: bool,
+        /// no answer came, for a reason this machine gave, as when its network is gone.
+        unreachable: Option<Cut>,
     },
     /// the host's rate limit is used up and resets within [`pace::LONGEST`], after `wait`. the
     /// next try waits for the reset before it is sent, and spends none of the request's retries.
@@ -48,6 +47,43 @@ pub(super) enum Failure {
         reason: String,
         wait: Duration,
     },
+}
+
+/// a reason this machine gave for a try that got no answer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Cut {
+    /// no route to the host's network, or no network up, as on a machine without one.
+    Route,
+    /// no route to the proxy that carries the request, which says nothing of the host's network.
+    Proxy,
+    /// a lookup DNS could not answer for now.
+    Lookup,
+    /// no way to this one host, or an address this machine no longer has.
+    Host,
+}
+
+/// what a cut shows this machine cannot reach, which waiting does not bring where nobody watches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Unreached {
+    /// anything: it has no route out of itself.
+    Anything,
+    /// the host's network, which it has no route to.
+    Host,
+}
+
+impl Cut {
+    /// what the cut shows this machine cannot reach, `routed` telling whether it has a route out
+    /// of itself, if it can tell. no route to the host's network is the kernel's own verdict on
+    /// the host; a failed lookup, or a proxy out of reach, shows nothing unless this machine has
+    /// no route at all, since a lookup fails for now on a network too, as on a lab's own.
+    fn unreached(self, routed: fn() -> Option<bool>) -> Option<Unreached> {
+        match self {
+            Cut::Host => None,
+            _ if routed() == Some(false) => Some(Unreached::Anything),
+            Cut::Route => Some(Unreached::Host),
+            Cut::Proxy | Cut::Lookup => None,
+        }
+    }
 }
 
 impl Failure {
@@ -182,11 +218,15 @@ impl<'a> Retry<'a> {
         self.lost = 0;
     }
 
-    /// a try got no answer for a reason this machine gave, as [`Failure::Transient`] marks it.
-    /// when [`Outage`]'s rule finds the network gone, the request waits for it and
-    /// spends no try; otherwise the try is spent as [`Retry::wait`] spends any other.
+    /// a try got no answer for a reason this machine gave, `cut`, as [`Failure::Transient`] marks
+    /// it. when [`Outage`]'s rule finds the network gone, the request waits for it and spends no
+    /// try; otherwise the try is spent as [`Retry::wait`] spends any other. a machine that cannot
+    /// reach the host, as [`Cut::unreached`] tells, ends with an error that names offline mode, at
+    /// once where nobody watches and nothing answered this run, since a job's node that has no
+    /// route there gets none by waiting.
     pub(super) async fn unreachable(
         &mut self,
+        cut: Cut,
         reason: String,
         has_copy: bool,
     ) -> Result<(), Error> {
@@ -194,10 +234,24 @@ impl<'a> Retry<'a> {
         if heard != self.heard {
             return self.wait(reason, None, has_copy).await;
         }
+        let unreached = cut.unreached(self.net.routed);
+        if let Some(unreached) = unreached
+            && heard == 0
+            && !self.net.watched
+        {
+            return Err(cut_off_from(self.url, unreached, &reason));
+        }
         let lost = self.net.outage.lost(heard, tokio::time::Instant::now());
         // no retries asks for no waiting either
         if self.net.retries == 0 || lost.gone >= self.net.outage_wait {
-            return self.wait(reason, None, has_copy).await;
+            let waited = self.wait(reason, None, has_copy).await;
+            return waited.map_err(|error| match unreached {
+                Some(unreached) if error.kind == Kind::NetworkUnreachable => {
+                    let help = offline_help(self.url, unreached);
+                    error.help(help)
+                }
+                _ => error,
+            });
         }
         self.moving = false;
         self.lost += 1;
@@ -332,9 +386,9 @@ impl<'a> Retry<'a> {
             Failure::Limited { reason, wait } => self.limited(reason, wait, has_copy).await,
             Failure::Transient {
                 reason,
-                unreachable: true,
+                unreachable: Some(cut),
                 ..
-            } => self.unreachable(reason, has_copy).await,
+            } => self.unreachable(cut, reason, has_copy).await,
             Failure::Transient {
                 reason,
                 retry_after,
@@ -384,8 +438,10 @@ impl Net {
 
     /// how long requests wait for a lost network before their tries count again: minutes when a
     /// person `watched`, at a laptop joining wifi, and moments in a script or CI, which nobody
-    /// watches wait.
+    /// watches wait. there a run that heard from no host on a machine with no route to it ends at
+    /// once.
     pub(crate) fn with_watched(mut self, watched: bool) -> Net {
+        self.watched = watched;
         self.outage_wait = if watched {
             LONGEST_OUTAGE
         } else {
@@ -443,7 +499,7 @@ pub(super) fn transient(reason: String) -> Failure {
     Failure::Transient {
         reason,
         retry_after: None,
-        unreachable: false,
+        unreachable: None,
     }
 }
 
@@ -483,7 +539,7 @@ pub(super) fn refusal(
             return Failure::Transient {
                 reason: reason(),
                 retry_after: wait.or_else(|| retry_after(headers)),
-                unreachable: false,
+                unreachable: None,
             };
         }
     }
@@ -491,7 +547,7 @@ pub(super) fn refusal(
         return Failure::Transient {
             reason: reason(),
             retry_after: retry_after(headers),
-            unreachable: false,
+            unreachable: None,
         };
     }
     let error = match status {
@@ -770,7 +826,7 @@ pub(super) fn classify(
         Failure::Transient {
             reason: unconnected(url, err),
             retry_after: None,
-            unreachable: cut_off(err),
+            unreachable: cut_off(err, carrier.is_some()),
         }
     } else if closed_early(err) {
         transient(format!(
@@ -909,28 +965,40 @@ fn deepest(err: &reqwest::Error) -> String {
     }
 }
 
-/// whether `err` came from this machine having no network: no route or network, an address it no
+/// how `err` came from this machine having no network: no route or network, an address it no
 /// longer has, or a lookup DNS could not answer for now. a refusal or a silence could be one host's.
-fn cut_off(err: &reqwest::Error) -> bool {
+/// a request a proxy `carried` connects to the proxy alone, so a route it lacks is the proxy's.
+fn cut_off(err: &reqwest::Error, carried: bool) -> Option<Cut> {
     let mut cause: Option<&(dyn std::error::Error + 'static)> = Some(err);
     while let Some(current) = cause {
         if current.is::<address::Unanswered>() {
-            return true;
+            return Some(Cut::Lookup);
         }
-        if let Some(io) = current.downcast_ref::<std::io::Error>()
-            && matches!(
-                io.kind(),
-                std::io::ErrorKind::NetworkUnreachable
-                    | std::io::ErrorKind::NetworkDown
-                    | std::io::ErrorKind::HostUnreachable
-                    | std::io::ErrorKind::AddrNotAvailable
-            )
+        if let Some(cut) = current
+            .downcast_ref::<std::io::Error>()
+            .and_then(|io| cut_by(io.kind(), carried))
         {
-            return true;
+            return Some(cut);
         }
         cause = current.source();
     }
-    false
+    None
+}
+
+/// the cut a connection that failed with `kind` shows, `carried` by a proxy or not.
+fn cut_by(kind: std::io::ErrorKind, carried: bool) -> Option<Cut> {
+    match kind {
+        std::io::ErrorKind::NetworkUnreachable | std::io::ErrorKind::NetworkDown if carried => {
+            Some(Cut::Proxy)
+        }
+        std::io::ErrorKind::NetworkUnreachable | std::io::ErrorKind::NetworkDown => {
+            Some(Cut::Route)
+        }
+        std::io::ErrorKind::HostUnreachable | std::io::ErrorKind::AddrNotAvailable => {
+            Some(Cut::Host)
+        }
+        _ => None,
+    }
 }
 
 /// why no connection to `url`'s host and port was made, naming both, since the port is often
@@ -1141,6 +1209,33 @@ fn gave_up(
         )),
         None => error.help(help),
     }
+}
+
+/// what to do on a machine that cannot reach `url`'s host, as `unreached` says: what the cache
+/// holds needs no network, where more tries would reach nothing.
+fn offline_help(url: &Url, unreached: Unreached) -> String {
+    let network = match unreached {
+        Unreached::Anything => "a network".to_owned(),
+        Unreached::Host => format!("a network that reaches {}", host(url)),
+    };
+    format!(
+        "connect this machine to {network}, then run the same command again. what the cache already holds needs no network: add --offline, or set FETCHLOOM_OFFLINE=1, to use it"
+    )
+}
+
+/// the error for a request to `url` from a machine that cannot reach its host, as `unreached`
+/// says and `reason` showed: no other try reaches it.
+fn cut_off_from(url: &Url, unreached: Unreached, reason: &str) -> Error {
+    let message = match unreached {
+        Unreached::Anything => format!(
+            "this machine has no network, so {} cannot be reached",
+            host(url)
+        ),
+        Unreached::Host => format!("this machine has no route to {}", host(url)),
+    };
+    Error::new(Kind::NetworkUnreachable, message)
+        .detail(reason.to_owned())
+        .help(offline_help(url, unreached))
 }
 
 fn rate_limited(url: &Url, asked: Duration) -> Error {
@@ -2360,7 +2455,11 @@ mod tests {
         let mut ended = None;
         for _ in 0..1000 {
             net.outage.answered();
-            let tried = retry.unreachable("could not connect to example.org:443".to_owned(), false);
+            let tried = retry.unreachable(
+                Cut::Host,
+                "could not connect to example.org:443".to_owned(),
+                false,
+            );
             if let Err(error) = tried.await {
                 ended = Some(error);
                 break;
@@ -2389,7 +2488,11 @@ mod tests {
         let began = tokio::time::Instant::now();
         let mut ended = None;
         for _ in 0..1000 {
-            let tried = retry.unreachable("could not connect to example.org:443".to_owned(), false);
+            let tried = retry.unreachable(
+                Cut::Route,
+                "could not connect to example.org:443".to_owned(),
+                false,
+            );
             if let Err(error) = tried.await {
                 ended = Some(error);
                 break;
@@ -2410,7 +2513,8 @@ mod tests {
     }
 
     /// with no retries a lost network is not waited for either, and where nobody watches the
-    /// wait for it is short: the request gives up once it has passed, after its tries.
+    /// wait for a network lost partway is short: the request gives up once it has passed, after
+    /// its tries.
     #[tokio::test(start_paused = true)]
     async fn a_lost_network_waits_only_as_long_as_retries_and_watching_allow() {
         let url = Url::parse("https://example.org/file").unwrap();
@@ -2420,11 +2524,15 @@ mod tests {
         ] {
             let (net, heard) = told();
             let net = net.with_retries(retries).with_watched(watched);
+            net.outage.answered();
             let mut retry = Retry::new(&net, &url);
             let began = tokio::time::Instant::now();
             let error = loop {
-                let tried =
-                    retry.unreachable("could not connect to example.org:443".to_owned(), false);
+                let tried = retry.unreachable(
+                    Cut::Route,
+                    "could not connect to example.org:443".to_owned(),
+                    false,
+                );
                 if let Err(error) = tried.await {
                     break error;
                 }
@@ -2497,12 +2605,138 @@ mod tests {
         let url = Url::parse("https://example.org/file").unwrap();
         let (net, heard) = told();
         let mut retry = Retry::new(&net, &url);
-        let mut waiting = std::pin::pin!(retry.unreachable("no route".to_owned(), false));
+        let mut waiting =
+            std::pin::pin!(retry.unreachable(Cut::Route, "no route".to_owned(), false));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         net.outage.answered();
         assert!(waiting.as_mut().poll(&mut context).is_ready());
         assert!(heard.lock().unwrap().is_empty());
+    }
+
+    /// a job that heard from no host ends its request at once where this machine has no route to
+    /// the host's network, or none out of itself: waiting brings no route to a node without one.
+    /// the error says which, names offline mode, which uses what the cache holds, and offers no
+    /// more tries.
+    #[tokio::test(start_paused = true)]
+    async fn a_job_with_no_route_to_its_host_ends_at_once_and_names_offline() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        let nowhere = "this machine has no network, so example.org cannot be reached";
+        let no_route = "this machine has no route to example.org";
+        for (cut, routed, said) in [
+            (
+                Cut::Route,
+                (|| Some(true)) as fn() -> Option<bool>,
+                no_route,
+            ),
+            (Cut::Route, || None, no_route),
+            (Cut::Route, || Some(false), nowhere),
+            (Cut::Lookup, || Some(false), nowhere),
+            (Cut::Proxy, || Some(false), nowhere),
+        ] {
+            let (mut net, heard) = told();
+            net.routed = routed;
+            let net = net.with_watched(false);
+            let mut retry = Retry::new(&net, &url);
+            let began = tokio::time::Instant::now();
+            let error = retry
+                .unreachable(
+                    cut,
+                    "could not connect to example.org:443".to_owned(),
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert_eq!(began.elapsed(), Duration::ZERO, "{cut:?}");
+            assert_eq!(error.kind, Kind::NetworkUnreachable, "{cut:?}");
+            assert_eq!(error.message, said, "{cut:?}");
+            assert_eq!(error.details, ["could not connect to example.org:443"]);
+            let help = error.help.unwrap_or_default();
+            assert!(
+                help.contains("add --offline, or set FETCHLOOM_OFFLINE=1"),
+                "{help}"
+            );
+            assert!(!help.contains("FETCHLOOM_RETRIES"), "{help}");
+            assert!(
+                heard.lock().unwrap().is_empty(),
+                "{cut:?}: no wait to tell of"
+            );
+        }
+    }
+
+    /// a lookup that failed for now, or a proxy out of reach, on a machine with a route out, as
+    /// on a lab's own network, or where it cannot tell, is a moment's trouble and is waited for,
+    /// as is one host out of reach.
+    #[tokio::test(start_paused = true)]
+    async fn a_job_with_a_route_out_waits_for_a_lookup_that_failed() {
+        let url = Url::parse("http://mirror.lab/file").unwrap();
+        for (cut, routed) in [
+            (Cut::Lookup, (|| Some(true)) as fn() -> Option<bool>),
+            (Cut::Lookup, || None),
+            (Cut::Proxy, || Some(true)),
+            (Cut::Proxy, || None),
+            (Cut::Host, || Some(false)),
+        ] {
+            let (mut net, _) = told();
+            net.routed = routed;
+            let net = net.with_watched(false);
+            let mut retry = Retry::new(&net, &url);
+            let mut waiting = std::pin::pin!(retry.unreachable(cut, "no answer".to_owned(), false));
+            let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+            assert!(waiting.as_mut().poll(&mut context).is_pending(), "{cut:?}");
+        }
+    }
+
+    /// a connection a proxy carries opens to the proxy alone, so a route it lacks is the proxy's.
+    #[test]
+    fn no_route_on_a_proxied_request_is_the_proxys() {
+        use std::io::ErrorKind;
+        assert_eq!(
+            cut_by(ErrorKind::NetworkUnreachable, false),
+            Some(Cut::Route)
+        );
+        assert_eq!(
+            cut_by(ErrorKind::NetworkUnreachable, true),
+            Some(Cut::Proxy)
+        );
+        assert_eq!(cut_by(ErrorKind::NetworkDown, true), Some(Cut::Proxy));
+        assert_eq!(cut_by(ErrorKind::HostUnreachable, true), Some(Cut::Host));
+        assert_eq!(cut_by(ErrorKind::ConnectionRefused, false), None);
+    }
+
+    /// a person watching may bring the network back, so a run they watch waits for it; once its
+    /// tries run out with no route to the host, the help names offline mode rather than more
+    /// tries. a lookup that failed on a machine with a route keeps the help a lost connection gets.
+    #[tokio::test(start_paused = true)]
+    async fn a_watched_run_without_a_route_ends_naming_offline() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        for (cut, routed, offline) in [
+            (Cut::Route, (|| Some(true)) as fn() -> Option<bool>, true),
+            (Cut::Lookup, || Some(false), true),
+            (Cut::Lookup, || Some(true), false),
+        ] {
+            let (mut net, _) = told();
+            net.routed = routed;
+            let net = net.with_retries(0);
+            let mut retry = Retry::new(&net, &url);
+            let error = retry
+                .unreachable(
+                    cut,
+                    "could not connect to example.org:443".to_owned(),
+                    false,
+                )
+                .await
+                .unwrap_err();
+            assert!(
+                error
+                    .message
+                    .starts_with("gave up on example.org after 1 try"),
+                "{}",
+                error.message
+            );
+            let help = error.help.unwrap_or_default();
+            assert_eq!(help.contains("--offline"), offline, "{cut:?}: {help}");
+        }
     }
 
     /// an answer from any host ends a wait for the network at once.
@@ -2512,7 +2746,8 @@ mod tests {
         let (net, _) = told();
         let mut retry = Retry::new(&net, &url);
         retry.lost = 10;
-        let mut waiting = std::pin::pin!(retry.unreachable("no route".to_owned(), false));
+        let mut waiting =
+            std::pin::pin!(retry.unreachable(Cut::Route, "no route".to_owned(), false));
         let mut context = std::task::Context::from_waker(std::task::Waker::noop());
         assert!(waiting.as_mut().poll(&mut context).is_pending());
         net.outage.answered();

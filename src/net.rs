@@ -295,6 +295,11 @@ pub(crate) struct Net {
     outage: failure::Outage,
     /// how long requests wait for a lost network before their tries count again.
     outage_wait: Duration,
+    /// a person watches the run, who may bring the network back, as a job's node will not.
+    watched: bool,
+    /// whether this machine has a route out of itself, if it can tell, which tells a machine
+    /// without a network from a lookup that failed for now.
+    routed: fn() -> Option<bool>,
     rate: Option<Arc<Rate>>,
     split: Split,
     /// how long a request waits for an answer, after its connection opens, and how long an
@@ -527,6 +532,8 @@ impl Net {
             paces: pace::Paces::default(),
             outage: failure::Outage::default(),
             outage_wait: failure::LONGEST_OUTAGE,
+            watched: true,
+            routed: address::routed,
             rate: None,
             idle: TIMEOUT,
             connect: CONNECT,

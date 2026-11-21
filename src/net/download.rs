@@ -1158,10 +1158,9 @@ impl Net {
                     unreachable,
                 }) => {
                     Self::release_for_wait(&mut state.permits);
-                    if unreachable {
-                        retry.unreachable(reason, has_copy).await?;
-                    } else {
-                        retry.wait(reason, retry_after, has_copy).await?;
+                    match unreachable {
+                        Some(cut) => retry.unreachable(cut, reason, has_copy).await?,
+                        None => retry.wait(reason, retry_after, has_copy).await?,
                     }
                 }
             }

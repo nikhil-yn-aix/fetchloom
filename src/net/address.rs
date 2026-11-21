@@ -891,6 +891,74 @@ impl reqwest::dns::Resolve for Resolver {
     }
 }
 
+/// whether this machine has a route out of itself, as linux's routing tables list them: `None`
+/// where it cannot tell, so only a machine shown to have no route at all counts as one without a
+/// network.
+#[cfg(target_os = "linux")]
+pub(crate) fn routed() -> Option<bool> {
+    let read = |path| std::fs::read_to_string(path).ok();
+    routed_by(
+        read("/proc/net/route").as_deref(),
+        read("/proc/net/ipv6_route").as_deref(),
+    )
+}
+
+/// [`routed`] where no routing table can be read.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn routed() -> Option<bool> {
+    None
+}
+
+/// [`routed`] from linux's ipv4 and ipv6 routing tables, `four` and `six` as `/proc/net/route`
+/// and `/proc/net/ipv6_route` list them, either `None` where it could not be read. a route out in
+/// either shows a network; none shows there is none only where both were read, the ipv4 one with
+/// its head line, since a table this machine could not read may hold the route.
+#[cfg(any(target_os = "linux", test))]
+fn routed_by(four: Option<&str>, six: Option<&str>) -> Option<bool> {
+    let four = four.filter(|four| four.starts_with("Iface"));
+    if four.is_some_and(four_routes_out) || six.is_some_and(six_routes_out) {
+        Some(true)
+    } else if four.is_some() && six.is_some() {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// whether a route that is up, and no rejection, goes through `iface`, which is not loopback,
+/// with `flags` as linux's routing tables write them.
+#[cfg(any(target_os = "linux", test))]
+fn usable(iface: &str, flags: &str) -> bool {
+    const UP: u32 = 0x1;
+    const REJECT: u32 = 0x200;
+    iface != "lo"
+        && u32::from_str_radix(flags, 16).is_ok_and(|flags| flags & UP != 0 && flags & REJECT == 0)
+}
+
+/// whether linux's ipv4 routing table, `/proc/net/route`, holds a [`usable`] route.
+#[cfg(any(target_os = "linux", test))]
+fn four_routes_out(table: &str) -> bool {
+    table.lines().skip(1).any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        matches!(fields[..], [iface, _, _, flags, ..] if usable(iface, flags))
+    })
+}
+
+/// whether linux's ipv6 routing table, `/proc/net/ipv6_route`, holds a [`usable`] route other
+/// than a link-local or multicast one, which every interface that is up has, on a network or not.
+#[cfg(any(target_os = "linux", test))]
+fn six_routes_out(table: &str) -> bool {
+    table.lines().any(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        matches!(fields[..], [to, _, _, _, _, _, _, _, flags, iface]
+        if usable(iface, flags)
+            && u128::from_str_radix(to, 16).is_ok_and(|to| {
+                let to = Ipv6Addr::from(to);
+                !to.is_multicast() && !to.is_unicast_link_local()
+            }))
+    })
+}
+
 /// addresses of this machine or its local network rather than the internet. 198.18.0.0/15 stays
 /// public: clash and mihomo answer every name with a fake address there.
 pub(crate) fn is_private(ip: IpAddr) -> bool {
@@ -989,6 +1057,50 @@ mod tests {
 
     fn ip(text: &str) -> IpAddr {
         text.parse().unwrap()
+    }
+
+    /// only a route out through an interface other than loopback shows a network, as one on a
+    /// lab's own network alone does; a machine whose interfaces are down or show nothing but
+    /// ipv6's own link-local and multicast routes has none. a table that could not be read, or
+    /// reads as no table, may hold the route, so without a route in the other it tells nothing.
+    #[test]
+    fn a_route_out_shows_a_network_and_only_both_tables_read_show_none() {
+        const FOUR: &str =
+            "Iface\tDestination\tGateway \tFlags\tRefCnt\tUse\tMetric\tMask\t\tMTU\tWindow\tIRTT\n";
+        let four = |routes: &str| format!("{FOUR}{routes}");
+        let six = "00000000000000000000000000000001 80 00000000000000000000000000000000 00 00000000000000000000000000000000 00000000 00000002 00000000 80200001       lo\n\
+            00000000000000000000000000000000 00 00000000000000000000000000000000 00 00000000000000000000000000000000 ffffffff 00000001 00000000 00200200       lo\n\
+            fe800000000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001     eth0\n\
+            ff000000000000000000000000000000 08 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000002 00000000 00000001     eth0\n";
+        let global = format!(
+            "{six}20010db8000000000000000000000000 40 00000000000000000000000000000000 00 00000000000000000000000000000000 00000100 00000001 00000000 00000001     eth0\n"
+        );
+        let lan = four("eth0\t0000000A\t00000000\t0001\t0\t0\t0\t000000FF\t0\t0\t0\n");
+        let default = four("eth0\t00000000\t0101A8C0\t0003\t0\t0\t100\t00000000\t0\t0\t0\n");
+        let rejected = four("eth0\t0000000A\t00000000\t0201\t0\t0\t0\t000000FF\t0\t0\t0\n");
+        let down = four("eth0\t0000000A\t00000000\t0000\t0\t0\t0\t000000FF\t0\t0\t0\n");
+        let looped = four("lo\t0000007F\t00000000\t0001\t0\t0\t0\t000000FF\t0\t0\t0\n");
+        let none = four("");
+        for (four, six, routed) in [
+            (Some(none.as_str()), Some(""), Some(false)),
+            (Some(none.as_str()), Some(six), Some(false)),
+            (Some(rejected.as_str()), Some(six), Some(false)),
+            (Some(down.as_str()), Some(six), Some(false)),
+            (Some(looped.as_str()), Some(""), Some(false)),
+            (Some(lan.as_str()), Some(""), Some(true)),
+            (Some(default.as_str()), Some(six), Some(true)),
+            (Some(none.as_str()), Some(global.as_str()), Some(true)),
+            // a table this machine could not read
+            (Some(none.as_str()), None, None),
+            (None, Some(six), None),
+            (None, None, None),
+            (Some(lan.as_str()), None, Some(true)),
+            (None, Some(global.as_str()), Some(true)),
+            // a file that reads as no ipv4 table at all
+            (Some(""), Some(six), None),
+        ] {
+            assert_eq!(routed_by(four, six), routed, "{four:?} {six:?}");
+        }
     }
 
     #[test]

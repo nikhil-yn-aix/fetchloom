@@ -81,7 +81,7 @@ a lab that would rather not share a cache can share a [mirror](mirrors.md): a fo
 
 ## no internet on compute nodes
 
-a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. an offline job still reads a folder [mirror](mirrors.md) on a shared disk. [CI](ci.md) shows the same idea for build machines.
+a node without internet can still use the data the cache holds. prepare online, on the login node, then use `--offline` or `FETCHLOOM_OFFLINE=1` in jobs. a job that leaves it out on a node with no route to the source, or no network at all, ends at once, and its error names `--offline`. an offline job still reads a folder [mirror](mirrors.md) on a shared disk. [CI](ci.md) shows the same idea for build machines.
 
 ## backups and copies
 
