@@ -18,7 +18,7 @@ fetchloom push [options] [name]...
 
 | option | effect |
 |---|---|
-| `--to <folder>` | the mirror's folder, or an S3 bucket below a prefix, as `s3://lab-data/fetchloom`. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2 |
+| `--to <folder>` | the mirror's folder, or an S3 bucket below a prefix, as `s3://lab-data/fetchloom`. without it, the `push_to` setting names it, from the [settings file](../reference/environment.md#settings-file) or `FETCHLOOM_PUSH_TO`; with neither, push stops with `usage`, exit 2. a folder in a git work tree that no ignore rule keeps it out of, as `--to mirror` inside a project is, gets a `git.folder_in_tree` warning, and a mirror inside a project or such a work tree gets no closing line for teammates, since it is a folder of this machine's |
 | `--verify` | read back each copy already on a folder mirror and replace one whose bytes are not the pinned ones; without it a copy of the right size counts as there. a bucket refuses it, since S3 checked each file when push sent it |
 | `-n`, `--dry-run` | say what would be downloaded, what would be copied and what is there already; change nothing |
 

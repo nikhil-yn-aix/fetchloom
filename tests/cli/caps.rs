@@ -659,6 +659,49 @@ fn settings_says_the_usual_file_is_unread_under_a_named_one() -> Result {
     Ok(())
 }
 
+/// a cache or mirror folder `settings set` saves in a git work tree, its top too, as a relative
+/// folder given in a project lands, is warned of, since `git add .` there would take what
+/// fetchloom writes in it for every project; one an ignore rule keeps out of git, or one outside
+/// any repository, is not.
+#[test]
+fn a_folder_saved_in_a_git_work_tree_is_warned_of() -> Result {
+    let sandbox = Sandbox::new()?;
+    settings_file(&sandbox)?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return crate::support::skipped("git", "git is not installed");
+    }
+    std::fs::write(sandbox.work().join(".gitignore"), "/kept/\n")?;
+    let outside = sandbox.folder("elsewhere")?;
+    let warned = |key: &str, folder: &str| -> Result<Vec<String>> {
+        let output = sandbox.run(&["--json", "settings", "set", key, folder])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(0), "{document}");
+        Ok(document["warnings"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|warning| warning["kind"] == "git.folder_in_tree")
+            .map(|warning| warning["message"].as_str().unwrap_or_default().to_owned())
+            .collect())
+    };
+    let cache = warned("cache", "relative/path")?;
+    let [message] = cache.as_slice() else {
+        return Err(format!("one warning for the cache, not {cache:?}").into());
+    };
+    assert!(
+        message.starts_with("the cache folder ")
+            && message.contains("relative")
+            && message.contains(" is in the git repository at "),
+        "{message}"
+    );
+    assert_eq!(warned("push_to", "mirror")?.len(), 1);
+    assert_eq!(warned("mirrors", ".")?.len(), 1, "the repository's own top");
+    assert_eq!(warned("cache", "kept/cache")?, Vec::<String>::new());
+    let elsewhere = outside.join("cache").display().to_string();
+    assert_eq!(warned("cache", &elsewhere)?, Vec::<String>::new());
+    Ok(())
+}
+
 #[test]
 fn a_bad_settings_file_stops_commands_but_not_help_or_version() -> Result {
     let sandbox = Sandbox::new()?;

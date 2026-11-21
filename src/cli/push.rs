@@ -1802,6 +1802,17 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
         );
     }
     output.done("Ok", &everything(&planned.datasets));
+    if let To::Folder { root, .. } = target {
+        let root = std::path::absolute(root).unwrap_or_else(|_| root.clone());
+        super::settings::tell_in_git(output, "push", &root);
+        // a mirror inside a project, or a repository git takes it into, is a folder of this
+        // machine's, no teammate's to name
+        if crate::project::Project::find(&root).is_some()
+            || crate::project::git::taking(&root).is_some()
+        {
+            return;
+        }
+    }
     output.next(&format!(
         "teammates run `fetchloom settings set mirrors {}`, naming any mirrors they use already too",
         crate::suggested::shell_word(&target.to_string())

@@ -355,6 +355,47 @@ fn a_push_into_a_folder_a_group_shares_lets_the_group_push_there() -> Result {
     Ok(())
 }
 
+/// a push into a folder of its own project, which git would take, says so, and names no folder
+/// of this machine's for teammates to read; a push to a folder outside the project still does,
+/// until that folder is a repository's own top.
+#[test]
+fn a_push_into_its_own_project_is_warned_of_and_tells_teammates_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return crate::support::skipped("git", "git is not installed");
+    }
+    let _source = project(&sandbox)?;
+    let inside = sandbox.run(&["--yes", "push", "--to", "mirror"])?;
+    let stderr = text(&inside.stderr)?;
+    assert_eq!(inside.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: the mirror folder ")
+            && stderr.contains(" is in the git repository at "),
+        "{stderr}"
+    );
+    // the closing line shows only at a terminal
+    #[cfg(target_os = "linux")]
+    {
+        let outside = sandbox.folder("lab")?.join("mirror");
+        for (to, told) in [
+            (Path::new("mirror"), false),
+            (outside.as_path(), true),
+            (outside.as_path(), false),
+        ] {
+            if !told && to == outside {
+                crate::merge::git(&sandbox, &outside, &["init", "-q"])?;
+            }
+            let push = sandbox.command(&["--yes", "push", "--to", &to.to_string_lossy()]);
+            let Some(screen) = sandbox.on_a_terminal_running(&push)? else {
+                return Ok(());
+            };
+            assert_eq!(screen.contains("teammates run"), told, "{to:?}: {screen}");
+            assert_eq!(screen.contains("git repository"), !told, "{to:?}: {screen}");
+        }
+    }
+    Ok(())
+}
+
 /// the dry run also lists what the push would ask about.
 #[test]
 fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {

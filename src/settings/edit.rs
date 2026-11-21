@@ -50,6 +50,9 @@ pub(crate) struct Changed {
     pub(crate) broken: Option<Stops>,
     /// the mirror or push folders the new value names that are not there.
     pub(crate) missing: Vec<PathBuf>,
+    /// the folders the new value names that fetchloom writes in: the cache's, or a mirror's or a
+    /// push's.
+    pub(crate) written_in: Vec<PathBuf>,
 }
 
 /// sets `name` to `values` in the settings file `var` locates: for a list, every value, each split
@@ -91,6 +94,7 @@ pub(crate) fn set(
         created: !found,
         broken: None,
         missing: missing(key, &value),
+        written_in: written_in(key, &value),
     };
     if before.is_some() && before.as_ref().and_then(read_as) == read_as(&after) {
         changed.broken = whole(&changed.found_at, &text, &text, usable)?;
@@ -142,6 +146,7 @@ pub(crate) fn unset(var: Var<'_>, name: &str, usable: Usable<'_>) -> Result<Chan
         created: false,
         broken: None,
         missing: Vec::new(),
+        written_in: Vec::new(),
     };
     if !removed(&mut document, name) {
         changed.broken = whole(&changed.found_at, &text, &text, usable)?;
@@ -341,6 +346,26 @@ fn missing(key: &str, value: &Value) -> Vec<PathBuf> {
             _ => None,
         })
         .collect()
+}
+
+/// the folders `value` names for `key` that fetchloom writes in: the cache's, and each folder a
+/// mirror or a push names.
+fn written_in(key: &str, value: &Value) -> Vec<PathBuf> {
+    let items = match value {
+        Value::Text(text) => std::slice::from_ref(text),
+        Value::List(items) => items.as_slice(),
+    };
+    match key {
+        "cache" => items.iter().map(PathBuf::from).collect(),
+        "mirrors" | "push_to" => items
+            .iter()
+            .filter_map(|item| match crate::mirror::Location::parse(item, None) {
+                Ok(crate::mirror::Location::Folder(folder)) => Some(folder),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
 }
 
 /// the folders a folder given on the command line may lead from.

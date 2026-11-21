@@ -15,7 +15,7 @@ fetchloom settings set <key> <value>...
 fetchloom settings unset <key>
 ```
 
-there are no command-specific options. [global options](global-options.md) apply; the mirrors `--mirror` names show in the `mirrors` row. `settings set` saves one setting in the settings file and `settings unset` takes it out; `fetchloom help settings set` says how. `settings set cache` refuses a folder runs would refuse, such as one holding other files, as [cache folder](../reference/cache-folder.md#location) says. on windows, `settings set cache` to a folder outside your user profile makes each run that opens the cache warn with `cache.foreign`, since such a folder may let other users of the machine change it, as [cache folder](../reference/cache-folder.md) says.
+there are no command-specific options. [global options](global-options.md) apply; the mirrors `--mirror` names show in the `mirrors` row. `settings set` saves one setting in the settings file and `settings unset` takes it out; `fetchloom help settings set` says how. `settings set cache` refuses a folder runs would refuse, such as one holding other files, as [cache folder](../reference/cache-folder.md#location) says. a relative folder is taken from the folder you run it in, so one given inside a project lands there: a cache, `mirrors` or `push_to` folder in a git work tree that no ignore rule keeps it out of is saved with a `git.folder_in_tree` warning, since `git add .` there would take what fetchloom writes in it for every project. on windows, `settings set cache` to a folder outside your user profile makes each run that opens the cache warn with `cache.foreign`, since such a folder may let other users of the machine change it, as [cache folder](../reference/cache-folder.md) says.
 
 ## what it shows
 

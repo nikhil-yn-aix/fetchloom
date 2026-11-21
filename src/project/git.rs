@@ -609,6 +609,31 @@ pub(crate) fn known(root: &Path, paths: &[&str]) -> Option<Known> {
     Some(known)
 }
 
+/// the top of the git work tree `folder` is in, which may not be there yet, when git there would
+/// take what fetchloom writes in it, as `git add .` does: no ignore rule leaves it out, and none
+/// can for the top itself. none outside a work tree, or where git cannot tell, as without git.
+pub(crate) fn taking(folder: &Path) -> Option<PathBuf> {
+    let folder = std::path::absolute(folder).ok()?;
+    let existing = folder.ancestors().find(|above| above.exists())?;
+    let top = super::Project::repository(existing)?;
+    let below: Vec<&str> = folder
+        .strip_prefix(top)
+        .ok()?
+        .iter()
+        .map(std::ffi::OsStr::to_str)
+        .collect::<Option<_>>()?;
+    let git = on_path()?;
+    if below.is_empty() {
+        return Some(top.to_path_buf());
+    }
+    let path = below.join("/");
+    // check-ignore says 1 for a path no rule leaves out, and 0 for one a rule does
+    match run(&git, top, &["check-ignore", "-q", "--", &path]) {
+        Err(Some(1)) => Some(top.to_path_buf()),
+        _ => None,
+    }
+}
+
 /// what git prints for `arguments`, which read objects: with `--no-lazy-fetch` where git knows the
 /// option, else without it. either way git has no transport, so a missing object is never fetched.
 fn read_objects(git: &Path, root: &Path, arguments: &[&str]) -> Option<Vec<u8>> {

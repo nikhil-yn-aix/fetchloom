@@ -171,6 +171,11 @@ pub(super) fn change(
     };
     let overridden_by = crate::settings::edit::overridden(var, &changed.key);
     tell_changed(&context.output, &changed, overridden_by);
+    if changed.written {
+        for folder in &changed.written_in {
+            tell_in_git(&context.output, &changed.key, folder);
+        }
+    }
     if changed.key == "cache" && changed.written && overridden_by.is_none() {
         tell_old_cache(context, &changed);
     }
@@ -226,6 +231,44 @@ fn usable(settings: &crate::settings::Settings, sets_it: bool) -> Vec<Stops> {
         });
     }
     stops
+}
+
+/// warns when `folder`, which the setting `key` names for every project on this machine, or a
+/// push wrote to for `key` "push", is in a git work tree that would take what fetchloom writes
+/// there, as a relative folder given inside a project lands.
+pub(super) fn tell_in_git(output: &Output, key: &str, folder: &std::path::Path) {
+    let Some(top) = crate::project::git::taking(folder) else {
+        return;
+    };
+    let (what, help) = if key == "cache" {
+        (
+            format!(
+                "the cache folder {} is in the git repository at {}, so `git add .` there takes every file the cache holds, for every project on this machine",
+                units::path(folder),
+                units::path(&top)
+            ),
+            "choose a folder outside it with `fetchloom settings set cache <folder>`, or run `fetchloom settings unset cache` for the usual one".to_owned(),
+        )
+    } else {
+        (
+            format!(
+                "the mirror folder {} is in the git repository at {}, so `git add .` there takes every file pushed to it",
+                units::path(folder),
+                units::path(&top)
+            ),
+            if key == "push" {
+                format!(
+                    "push to a folder outside any repository, on a disk your teammates reach, as in `{}`",
+                    crate::suggested::command("push --to /mnt/lab/fetchloom")
+                )
+            } else {
+                format!(
+                    "keep a mirror outside any repository, on a disk your teammates reach, as in `fetchloom settings set {key} /mnt/lab/fetchloom`"
+                )
+            },
+        )
+    };
+    output.warn_with(Warning::GitFolderInTree, &what, &help);
 }
 
 /// says what `changed` did: the key's value before and after, and in which file, then, when a

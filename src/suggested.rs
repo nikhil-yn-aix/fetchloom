@@ -1029,6 +1029,8 @@ pub(crate) mod tests {
         let elsewhere = [
             ("src/cli/diff.rs", "git commit -a"),
             ("src/cli/project.rs", "git commit -a"),
+            ("src/cli/settings.rs", "git add ."),
+            ("src/cli/settings.rs", "git add ."),
             ("src/cli/status.rs", "git rm"),
             ("src/project/lock/lists.rs", "git add {FOLDER}"),
             ("src/project/lock/lists.rs", "git commit -a"),
