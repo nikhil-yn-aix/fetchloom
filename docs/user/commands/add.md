@@ -64,6 +64,8 @@ warning: a later run downloads from http://127.0.0.1:19450, a private address, o
   next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
 ```
 
+a link-local or cloud metadata address, such as `169.254.169.254`, where a cloud machine gives out its own keys, gets the warning without a line to write, and the closing line asks a clone nothing about it: a cloned project may ask for such an address to read those keys, so no message offers a command that lists one.
+
 a new link with nothing at it, or an id its source does not know, is fixed on the command line, since data.toml has no entry for it yet. from a real run in an empty folder:
 
 ```text

@@ -590,7 +590,8 @@ fn a_listed_private_bucket_is_read_as_the_machines_service_account() -> Result {
 }
 
 /// a link data.toml gives to the metadata server is refused before any request, though the
-/// machine's account may be asked there for the buckets the person listed.
+/// machine's account may be asked there for the buckets the person listed, and its help gives
+/// no command to paste that would let the clone's link through.
 #[test]
 fn a_cloned_project_cannot_reach_the_metadata_server() -> Result {
     let sandbox = Sandbox::new()?;
@@ -613,6 +614,15 @@ fn a_cloned_project_cannot_reach_the_metadata_server() -> Result {
         format!(
             "fetchloom will not follow {link}: it points at the private address 169.254.169.254"
         )
+    );
+    let help = error["help"].as_str().ok_or("no help")?;
+    assert!(!help.contains("allowed_origins http"), "{help}");
+    assert!(!help.contains("FETCHLOOM_ALLOWED_ORIGINS"), "{help}");
+    assert!(
+        help.ends_with(
+            "list its origin in allowed_origins yourself, as https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/ says"
+        ),
+        "{help}"
     );
     assert!(metadata.requests().is_empty());
     Ok(())

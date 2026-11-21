@@ -48,7 +48,9 @@ pub(crate) use download::{
     Divert, Event, Expect, Expired, Fetch, Fetched, LFS_LARGEST, Listed, Origin, Probed, Resumable,
 };
 pub(crate) use endpoint::Endpoint;
-pub(crate) use failure::{MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing};
+pub(crate) use failure::{
+    METADATA_HELP, MOST_RETRIES, MOVED_HELP, RETRIES, offline as offline_missing,
+};
 #[cfg(debug_assertions)]
 pub(crate) use google::test_token_endpoint;
 pub(crate) use google::{Authorized, DriveAnswered, Google, Private};

@@ -39,7 +39,8 @@ fn proxy_verdicts_are_cached_and_typed_origins_skip_preflight() {
 
 /// a name this machine cannot look up goes to the proxy, as where only the proxy resolves names,
 /// a cdn's included, unless it looks like a host of a private network, as
-/// metadata.google.internal does; then only the exact origin a person gave goes.
+/// metadata.google.internal does; then only the exact origin a person gave goes, and the refusal
+/// offers no command that lists it, since only the proxy knows where it leads.
 #[test]
 fn a_name_only_the_proxy_can_look_up_goes_unless_it_looks_internal() {
     let unknown = || std::io::Error::new(std::io::ErrorKind::NotFound, "Name or service not known");
@@ -54,6 +55,7 @@ fn a_name_only_the_proxy_can_look_up_goes_unless_it_looks_internal() {
             Looked::Private(
                 "metadata.google.internal resolves to the private address 169.254.169.254, and a proxy would reach it"
                     .to_owned(),
+                true,
             ),
         ),
     ] {
@@ -66,11 +68,18 @@ fn a_name_only_the_proxy_can_look_up_goes_unless_it_looks_internal() {
     let typed = Typed::default();
     let check = |link: &str| block_on(proxies.check(&Url::parse(link).unwrap(), &typed));
     assert!(check("https://objects.githubusercontent.example/release.csv").is_ok());
-    let refused = check("https://metadata.google.internal/computeMetadata/v1/").unwrap_err();
+    let link = "https://metadata.google.internal/computeMetadata/v1/";
+    let refused = check(link).unwrap_err();
     assert_eq!(
         refused.to_string(),
         "this machine cannot look up metadata.google.internal, a name of a private network, so only the proxy knows where it leads"
     );
+    assert_eq!(refused.no_command, Some(NoCommand::Unseen));
+    let help = crate::net::failure::refused(&Url::parse(link).unwrap(), &refused)
+        .help
+        .unwrap_or_default();
+    assert!(!help.contains("allowed_origins http"), "{help}");
+    assert!(!help.contains("FETCHLOOM_ALLOWED_ORIGINS"), "{help}");
     typed.add(&Url::parse("http://metadata.google.internal/").unwrap());
     assert!(check("http://metadata.google.internal/computeMetadata/v1/").is_ok());
     assert!(

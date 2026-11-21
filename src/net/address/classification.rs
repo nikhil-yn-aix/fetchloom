@@ -280,6 +280,38 @@ fn embedded_ipv4_ranges_are_checked_in_each_supported_ipv6_prefix() {
     assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
+/// link-local addresses and the clouds' metadata services, whose refusal offers no command to
+/// paste, are told apart from the rest of the private ranges, in every IPv6 form of them too.
+#[test]
+fn metadata_addresses_are_told_apart_from_other_private_ones() {
+    for (address, metadata) in [
+        ("169.254.169.254", true),
+        ("169.254.170.2", true),
+        ("169.254.0.1", true),
+        ("192.0.0.192", true),
+        ("100.100.100.200", true),
+        ("fd00:ec2::254", true),
+        ("fe80::1", true),
+        ("::ffff:169.254.169.254", true),
+        ("::169.254.169.254", true),
+        ("64:ff9b::a9fe:a9fe", true),
+        ("2002:a9fe:a9fe::1", true),
+        ("10.0.0.5", false),
+        ("127.0.0.1", false),
+        ("192.168.1.1", false),
+        ("192.0.0.9", false),
+        ("100.64.0.1", false),
+        ("fd00:ec2::253", false),
+        ("fd00::1", false),
+        ("::1", false),
+        ("8.8.8.8", false),
+    ] {
+        let ip: IpAddr = address.parse().unwrap();
+        assert_eq!(is_metadata(ip), metadata, "{address}");
+        assert!(is_private(ip) || !metadata, "{address} is private too");
+    }
+}
+
 #[test]
 fn scoped_and_malformed_literals_cannot_enter_the_url_address_path() {
     for text in [
@@ -387,10 +419,15 @@ async fn public_numeric_proxy_targets_are_not_refused() {
 
 #[tokio::test]
 async fn private_numeric_proxy_targets_name_the_refused_address() {
-    for address in ["127.0.0.1", "169.254.169.254", "::1"] {
-        let Looked::Private(reason) = system_lookup(address, 443).await else {
+    for (address, metadata) in [
+        ("127.0.0.1", false),
+        ("169.254.169.254", true),
+        ("::1", false),
+    ] {
+        let Looked::Private(reason, found) = system_lookup(address, 443).await else {
             panic!("{address} was not refused");
         };
         assert!(reason.contains(address), "{reason}");
+        assert_eq!(found, metadata, "{address}");
     }
 }

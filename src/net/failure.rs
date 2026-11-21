@@ -939,24 +939,40 @@ pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
     let Some(allowed) = &reason.allowed else {
         return error.help("open the link in a browser to see where it leads");
     };
-    let remedy = allowed.remedy(&url.origin());
     let trusted = &reason.trusted_on_host;
-    if trusted.is_empty() {
-        return error.help(format!("if you trust that server, {remedy}"));
-    }
-    let (are, covered) = if trusted.len() == 1 {
-        ("is", "that origin")
+    let error = if trusted.is_empty() {
+        error
     } else {
-        ("are", "those origins")
-    };
-    error
-        .detail(format!(
+        let (are, covered) = if trusted.len() == 1 {
+            ("is", "that origin")
+        } else {
+            ("are", "those origins")
+        };
+        error.detail(format!(
             "only {} {are} trusted on {}, and trust covers {covered} alone",
             units::listed(trusted, "and"),
             host(url)
         ))
-        .help(format!("to reach it too, {remedy}"))
+    };
+    match reason.no_command {
+        Some(address::NoCommand::Metadata) => return error.help(METADATA_HELP),
+        Some(address::NoCommand::Unseen) => return error.help(UNSEEN_HELP),
+        None => {}
+    }
+    let remedy = allowed.remedy(&url.origin());
+    if trusted.is_empty() {
+        return error.help(format!("if you trust that server, {remedy}"));
+    }
+    error.help(format!("to reach it too, {remedy}"))
 }
+
+/// the help for a link-local or metadata address: a cloned project may have asked for it, so no
+/// command a person could paste lists it.
+pub(crate) const METADATA_HELP: &str = "that is a link-local or cloud metadata address, where a cloud machine gives out its own keys, never a dataset, so fetchloom offers no command to let it through. to reach your own server there, list its origin in allowed_origins yourself, as https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/ says";
+
+/// the help for a name of a private network only the proxy can look up, which may lead to a
+/// cloud's metadata service, so no command a person could paste lists it.
+const UNSEEN_HELP: &str = "it may lead to a cloud's metadata service, where a cloud machine gives out its own keys, so fetchloom offers no command to let it through. to reach your own server there, list its origin in allowed_origins yourself, as https://nikhil-yn-aix.github.io/fetchloom/user/reference/environment/ says";
 
 pub(super) fn interrupted(url: &Url) -> Error {
     Error::new(
@@ -1213,6 +1229,42 @@ mod tests {
             split: crate::net::Splitting::Never,
         };
         Net::new(options, Arc::default(), Arc::default(), notify)
+    }
+
+    /// a refusal of a link-local or metadata address, as a cloned data.toml may ask for, offers no
+    /// command to paste, only where to read how to list an origin, whatever origins are trusted on
+    /// its host; any other private address keeps its command.
+    #[test]
+    fn a_refusal_of_a_metadata_address_offers_no_command() {
+        let typed = address::Typed::default();
+        for (link, metadata) in [
+            ("http://169.254.169.254/latest/meta-data/", true),
+            ("http://[fd00:ec2::254]/latest/", true),
+            ("http://10.0.0.5:9001/a.zip", false),
+        ] {
+            let url = Url::parse(link).unwrap();
+            let reason = typed.check(&url).unwrap_err();
+            let help = refused(&url, &reason).help.unwrap_or_default();
+            assert_eq!(&*help == METADATA_HELP, metadata, "{link}: {help}");
+            assert_eq!(
+                !help.contains("allowed_origins http"),
+                metadata,
+                "{link}: {help}"
+            );
+            assert_eq!(
+                !help.contains("FETCHLOOM_ALLOWED_ORIGINS"),
+                metadata,
+                "{link}: {help}"
+            );
+        }
+        let url = Url::parse("http://169.254.169.254:8080/latest/").unwrap();
+        let mut reason = address::Refused::new("it points at the private address 169.254.169.254");
+        reason.allowed = Some(address::Allowed::default());
+        reason.trusted_on_host = vec!["http://169.254.169.254".to_owned()];
+        reason.no_command = Some(address::NoCommand::Metadata);
+        let error = refused(&url, &reason);
+        assert_eq!(error.details.len(), 1, "{:?}", error.details);
+        assert_eq!(error.help.as_deref(), Some(METADATA_HELP));
     }
 
     /// a refusal also says how to reach this origin.

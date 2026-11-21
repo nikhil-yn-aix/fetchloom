@@ -1629,13 +1629,21 @@ fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>) {
         allowed
             .origins
             .extend(rest.iter().map(|origin| (*origin).clone()));
+        let help = if unlisted
+            .iter()
+            .any(|origin| work.net.on_metadata_address(origin))
+        {
+            crate::net::METADATA_HELP.to_owned()
+        } else {
+            allowed.remedy(last)
+        };
         context.output.warn_detailed(
             Warning::NetworkPrivateOrigin,
             &format!(
                 "a later run downloads from {}, {what}, only once allowed_origins lists {them}",
                 units::listed(&named, "and")
             ),
-            Some(&allowed.remedy(last)),
+            Some(&help),
             &named,
         );
     }
@@ -1646,13 +1654,18 @@ fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>) {
         ),
         None => committed(work.project).to_owned(),
     };
-    if private.is_empty() {
+    // a clone is never told to paste a command that lets a link-local or metadata address in
+    let pasted: Vec<&url::Origin> = private
+        .iter()
+        .filter(|origin| !work.net.on_metadata_address(origin))
+        .collect();
+    if pasted.is_empty() {
         context.output.next(&format!(
             "commit {committed}; anyone who clones runs `fetchloom sync`"
         ));
         return;
     }
-    let words: Vec<String> = private
+    let words: Vec<String> = pasted
         .iter()
         .map(|origin| crate::suggested::shell_word(&origin.ascii_serialization()).into_owned())
         .collect();

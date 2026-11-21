@@ -31,6 +31,8 @@ struct Hosts {
     allowed: Allowed,
     /// names this run's lookups for a trusted origin found on a private address.
     private: HashSet<String>,
+    /// those of them found on a link-local or metadata address, as [`is_metadata`] says.
+    metadata: HashSet<String>,
     /// names this run's lookups found, which a lookup that later says they do not exist cannot
     /// make unknown: a mac whose network is gone is said to answer every lookup so.
     resolved: HashSet<String>,
@@ -148,9 +150,23 @@ impl Typed {
         }
     }
 
-    /// the refusal of `host`'s private address, `reason`, which `allowed_origins` can lift.
-    fn refused(&self, reason: String, host: &str) -> Refused {
-        self.hosts().refused(reason, &key(host))
+    /// whether `origin` is on a link-local or metadata address, as [`is_metadata`] says: its host
+    /// is one written out, or a name this run's lookups for a trusted origin found on one.
+    pub(crate) fn on_metadata_address(&self, origin: &url::Origin) -> bool {
+        let url::Origin::Tuple(_, host, _) = origin else {
+            return false;
+        };
+        match host {
+            Host::Ipv4(ip) => is_metadata(IpAddr::V4(*ip)),
+            Host::Ipv6(ip) => is_metadata(IpAddr::V6(*ip)),
+            Host::Domain(name) => self.hosts().metadata.contains(&key(name)),
+        }
+    }
+
+    /// the refusal of `host`'s private address, `reason`, which `allowed_origins` can lift,
+    /// offering no command that lists it for `no_command`.
+    fn refused(&self, reason: String, host: &str, no_command: Option<NoCommand>) -> Refused {
+        self.hosts().refused(reason, &key(host), no_command)
     }
 
     /// whether the origin of `url` is trusted.
@@ -205,7 +221,7 @@ impl Typed {
         }
         let host = key(host);
         if hosts.proxies.contains(&host) {
-            return Err(hosts.refused(PROXY_ASKED.to_owned(), &host));
+            return Err(hosts.refused(PROXY_ASKED.to_owned(), &host, None));
         }
         let ip = match url.host() {
             Some(Host::Ipv4(ip)) => IpAddr::V4(ip),
@@ -213,7 +229,11 @@ impl Typed {
             _ => return Ok(()),
         };
         if is_private(ip) {
-            return Err(hosts.refused(format!("it points at the private address {ip}"), &host));
+            return Err(hosts.refused(
+                format!("it points at the private address {ip}"),
+                &host,
+                is_metadata(ip).then_some(NoCommand::Metadata),
+            ));
         }
         Ok(())
     }
@@ -232,6 +252,12 @@ impl super::Net {
         self.typed.on_private_address(origin)
     }
 
+    /// whether `origin` is on a link-local or metadata address, as [`is_metadata`] says, as far
+    /// as its host or this run's lookups say.
+    pub(crate) fn on_metadata_address(&self, origin: &url::Origin) -> bool {
+        self.typed.on_metadata_address(origin)
+    }
+
     /// the refusal a request for `url` meets before it is sent, as a private address written out
     /// that no trusted origin covers; a name's address is known only once it is looked up.
     pub(crate) fn refusal(&self, url: &Url) -> Option<crate::error::Error> {
@@ -242,12 +268,14 @@ impl super::Net {
 
 impl Hosts {
     /// the refusal of `host`'s private address, `reason`, naming the origins trusted on `host`,
-    /// given as [`key`] makes it, and quoting `allowed_origins`, which can lift it.
-    fn refused(&self, reason: String, host: &str) -> Refused {
+    /// given as [`key`] makes it, and quoting `allowed_origins`, which can lift it, in a command
+    /// unless `no_command` says why none is offered.
+    fn refused(&self, reason: String, host: &str, no_command: Option<NoCommand>) -> Refused {
         Refused {
             reason,
             trusted_on_host: self.origins_on(host),
             allowed: Some(self.allowed.clone()),
+            no_command,
         }
     }
 
@@ -292,6 +320,19 @@ pub(crate) struct Refused {
     pub(crate) trusted_on_host: Vec<String>,
     /// the `allowed_origins` setting, for a refusal that listing the origin there lifts.
     pub(crate) allowed: Option<Allowed>,
+    /// why the refusal offers no command that lists the origin in `allowed_origins`, when it
+    /// offers none.
+    pub(crate) no_command: Option<NoCommand>,
+}
+
+/// why a refusal offers no command a person could paste to let the request through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NoCommand {
+    /// the address is link-local or a cloud's metadata service, as [`is_metadata`] says.
+    Metadata,
+    /// a name of a private network this machine cannot look up, which may lead to one, as
+    /// metadata.google.internal does.
+    Unseen,
 }
 
 impl Refused {
@@ -301,6 +342,7 @@ impl Refused {
             reason: reason.into(),
             trusted_on_host: Vec::new(),
             allowed: None,
+            no_command: None,
         }
     }
 }
@@ -584,9 +626,14 @@ impl Proxies {
                     "this machine cannot look up {name}, a name of a private network, so only the proxy knows where it leads"
                 ),
                 &name,
+                Some(NoCommand::Unseen),
             )),
             Looked::Public | Looked::Unknown => Ok(()),
-            Looked::Private(reason) => Err(typed.refused(reason, &name)),
+            Looked::Private(reason, metadata) => Err(typed.refused(
+                reason,
+                &name,
+                metadata.then_some(NoCommand::Metadata),
+            )),
         }
     }
 
@@ -606,7 +653,7 @@ impl Proxies {
         if typed.trusts(url) || !self.hosts().contains(&host) {
             return Ok(());
         }
-        Err(typed.refused(PROXY_ASKED.to_owned(), &host))
+        Err(typed.refused(PROXY_ASKED.to_owned(), &host, None))
     }
 
     /// the hosts of the proxies requests go through, as [`key`] gives them: those the variables
@@ -666,7 +713,7 @@ impl Proxies {
         if let Some(lookup) = &self.test_lookup {
             return lookup(name.to_owned(), port)
                 .await
-                .map_or(Looked::Public, Looked::Private);
+                .map_or(Looked::Public, |reason| Looked::Private(reason, false));
         }
         system_lookup(name, port).await
     }
@@ -683,8 +730,9 @@ impl Proxies {
 enum Looked {
     /// public addresses alone.
     Public,
-    /// a private address, which the proxy would reach, for this reason.
-    Private(String),
+    /// a private address, which the proxy would reach, for this reason, and whether it is a
+    /// link-local or metadata address, as [`is_metadata`] says.
+    Private(String, bool),
     /// no address: a split dns, or a name such as metadata.google.internal, leads where only the
     /// proxy knows.
     Unknown,
@@ -729,10 +777,13 @@ fn looked(name: &str, found: std::io::Result<Vec<SocketAddr>>) -> Looked {
         return Looked::Unknown;
     };
     match found.iter().find(|address| is_private(address.ip())) {
-        Some(address) => Looked::Private(format!(
-            "{name} resolves to the private address {}, and a proxy would reach it",
-            address.ip()
-        )),
+        Some(address) => Looked::Private(
+            format!(
+                "{name} resolves to the private address {}, and a proxy would reach it",
+                address.ip()
+            ),
+            found.iter().any(|address| is_metadata(address.ip())),
+        ),
         None => Looked::Public,
     }
 }
@@ -814,8 +865,14 @@ impl reqwest::dns::Resolve for Resolver {
                 .filter(|address| allowed || !is_private(address.ip()))
                 .collect();
             if kept.is_empty() && !found.is_empty() {
-                let refused =
-                    typed.refused(format!("{host} resolves only to private addresses"), &host);
+                let refused = typed.refused(
+                    format!("{host} resolves only to private addresses"),
+                    &host,
+                    found
+                        .iter()
+                        .any(|address| is_metadata(address.ip()))
+                        .then_some(NoCommand::Metadata),
+                );
                 return Err(Box::new(refused) as Box<dyn std::error::Error + Send + Sync>);
             }
             // noted so an add can say its typed origin needs allowed_origins later, with no
@@ -823,6 +880,9 @@ impl reqwest::dns::Resolve for Resolver {
             let mut hosts = typed.hosts();
             if reach == Reach::Trusted && kept.iter().any(|address| is_private(address.ip())) {
                 hosts.private.insert(key(&host));
+            }
+            if reach == Reach::Trusted && kept.iter().any(|address| is_metadata(address.ip())) {
+                hosts.metadata.insert(key(&host));
             }
             hosts.resolved.insert(host);
             drop(hosts);
@@ -866,6 +926,29 @@ pub(crate) fn is_private(ip: IpAddr) -> bool {
                     .or_else(|| six_to_four(ip))
                     .is_some_and(|mapped| is_private(IpAddr::V4(mapped)))
                 || local_nat64(ip)
+        }
+    }
+}
+
+/// whether `ip` is link-local, or where a cloud keeps the metadata service that hands each machine
+/// its own keys: `169.254.169.254` and the rest of `169.254.0.0/16`, `fe80::/10`, oracle's
+/// `192.0.0.192`, alibaba's `100.100.100.200` and aws's `fd00:ec2::254`, in IPv6 forms of them
+/// too. no dataset is served there, so a refusal offers no command that lets a request through.
+pub(crate) fn is_metadata(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(ip) => {
+            ip.is_link_local()
+                || ip == Ipv4Addr::new(192, 0, 0, 192)
+                || ip == Ipv4Addr::new(100, 100, 100, 200)
+        }
+        IpAddr::V6(ip) => {
+            ip.is_unicast_link_local()
+                || ip == Ipv6Addr::new(0xfd00, 0xec2, 0, 0, 0, 0, 0, 0x254)
+                || ip
+                    .to_ipv4()
+                    .or_else(|| nat64(ip))
+                    .or_else(|| six_to_four(ip))
+                    .is_some_and(|mapped| is_metadata(IpAddr::V4(mapped)))
         }
     }
 }
@@ -1034,7 +1117,7 @@ mod tests {
         assert!(typed.may_resolve_privately("lab.local", Reach::Trusted));
         assert!(!typed.may_resolve_privately("lab.local", Reach::Public));
         assert!(!typed.may_resolve_privately("other.local", Reach::Trusted));
-        let on = |host| typed.refused(String::new(), host).trusted_on_host;
+        let on = |host| typed.refused(String::new(), host, None).trusted_on_host;
         assert_eq!(on("Lab.Local"), ["http://lab.local:8080"]);
         assert_eq!(on("other.local"), Vec::<String>::new());
     }
