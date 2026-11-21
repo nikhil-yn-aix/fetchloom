@@ -2548,3 +2548,44 @@ fn status_verify_reads_both_large_files_ahead() -> Result {
     assert_eq!(told[0], told[1]);
     Ok(())
 }
+
+/// a sync that places some datasets and then fails for another, as one whose link answers 404,
+/// still registers its project, as every sync does, so `cache gc` keeps the files it placed.
+#[test]
+fn a_sync_that_places_some_datasets_registers_its_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let source = Routes::start(vec![
+        ("/files/iris.csv".to_owned(), file(IRIS, "\"i\"")),
+        ("/files/wine.csv".to_owned(), file(WINE, "\"w\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&[
+        "add",
+        &format!("{}/files/iris.csv", source.url),
+        &format!("{}/files/wine.csv", source.url),
+    ])?)?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    source.change(vec![(
+        "/files/wine.csv".to_owned(),
+        crate::support::reply("404 Not Found", &[("Content-Length", "0")], b""),
+    )]);
+    let cache = sandbox.folder("clone-cache")?;
+    let run = |args: &[&str]| {
+        sandbox
+            .command_in(&clone, args)
+            .env("FETCHLOOM_CACHE", &cache)
+            .output()
+    };
+    let synced = run(&["sync"])?;
+    assert_eq!(synced.status.code(), Some(10), "{}", text(&synced.stderr)?);
+    assert!(clone.join("data/iris/iris.csv").exists());
+    let freed = run(&["--json", "cache", "gc", "--now"])?;
+    ok(&freed)?;
+    let document = json(&freed)?;
+    assert_eq!(document["result"]["removed_objects"], 0, "{document}");
+    assert!(crate::support::object(&cache, IRIS).exists());
+    Ok(())
+}

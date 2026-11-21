@@ -1685,10 +1685,18 @@ async fn sync_surveyed(
         complete: false,
     });
     let refetched = refetched(&survey, &work.scope);
-    let placement = work
+    let placement = match work
         .place(manifest, &lock, plan, force, survey, synced)
         .await
-        .map_err(|error| refetched.iter().cloned().fold(error, Error::detail))?;
+    {
+        Ok(placement) => placement,
+        Err(error) => {
+            // data.lock pins what this run placed and downloaded before it failed, which gc keeps
+            // only for a registered project
+            register(work);
+            return Err(refetched.iter().cloned().fold(error, Error::detail));
+        }
+    };
     work.context.stop.finish();
     work.drop_unpacked(&lock);
     register(work);
