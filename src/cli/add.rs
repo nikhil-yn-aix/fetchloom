@@ -473,7 +473,7 @@ fn list_in_project(path: &Path, root: &Path, here: &Path) -> Result<String, Erro
         ));
     }
     let found = std::fs::canonicalize(here.join(path))
-        .map_err(|err| Error::io(format_args!("could not read {typed}"), &err))?;
+        .map_err(|err| super::links::unread(&typed, path, here, &err))?;
     if !found.is_file() {
         return Err(Error::new(
             Kind::Usage,

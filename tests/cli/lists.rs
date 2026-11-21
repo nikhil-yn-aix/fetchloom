@@ -605,3 +605,26 @@ fn a_list_cut_off_partway_is_read_again_from_its_start() -> Result {
     );
     Ok(())
 }
+
+/// a list that is not there, as a typo in its name gives, is a usage error with help, as a path
+/// `add` is given that names nothing is, and changes nothing.
+#[test]
+fn a_list_that_is_not_there_is_a_usage_error() -> Result {
+    let sandbox = Sandbox::new()?;
+    for command in ["add", "get"] {
+        let output = sandbox.run(&["--json", command, "-i", "linsk.txt"])?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{command}: {document}");
+        assert_eq!(
+            document["errors"][0]["kind"], "usage",
+            "{command}: {document}"
+        );
+        assert!(
+            document["errors"][0]["help"].is_string(),
+            "{command}: {document}"
+        );
+        assert!(!sandbox.work().join("data.toml").exists());
+        assert!(!sandbox.work().join(".fetchloom").exists());
+    }
+    Ok(())
+}

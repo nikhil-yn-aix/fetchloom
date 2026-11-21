@@ -59,9 +59,31 @@ fn read_links(path: &Path, most: usize) -> Result<Vec<Listed>, Error> {
         return listed("stdin", std::io::stdin().lock(), most);
     }
     let name = crate::shown::mask_query(&path.display().to_string()).into_owned();
-    let file = std::fs::File::open(path)
-        .map_err(|err| Error::io(format_args!("could not read {name}"), &err))?;
+    let file = std::fs::File::open(path).map_err(|err| {
+        let here = std::env::current_dir().unwrap_or_default();
+        unread(&name, path, &here, &err)
+    })?;
     listed(&name, file, most)
+}
+
+/// why the list `-i` names as `shown`, at `path` from `here`, could not be read: one that is not
+/// there is a mistake on the command line, as a path that names nothing is, not a fault of the disk.
+pub(super) fn unread(shown: &str, path: &Path, here: &Path, err: &std::io::Error) -> Error {
+    if err.kind() != std::io::ErrorKind::NotFound {
+        return Error::io(format_args!("could not read {shown}"), err);
+    }
+    let error = Error::new(
+        Kind::Usage,
+        format!("there is no file \"{shown}\" for -i to read"),
+    );
+    if path.is_relative() && !shown.starts_with('~') {
+        error.help(format!(
+            "check the path: fetchloom reads {shown} from {}",
+            crate::units::path(here)
+        ))
+    } else {
+        error.help("check the path")
+    }
 }
 
 /// the links the list `name` that `reading` gives holds, at most `most`, each with the hash its
