@@ -4,7 +4,7 @@
 use std::collections::HashSet;
 
 use super::args::Remove;
-use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known};
+use super::project::{Outcome, Report, committed, dry_run_done, find, hold, known_with_rest};
 use super::sync::disk::{Folders, Survey};
 use super::sync::{Scope, place};
 use super::{Context, open_cache, peek_cache};
@@ -269,24 +269,26 @@ fn distinct(asked: Vec<String>) -> Vec<String> {
 /// command line that leaves it out.
 fn named(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
     for name in names {
-        known(manifest, name, "remove").map_err(|error| match exclusion(manifest, name) {
-            Some(help) => error.help(help),
-            None if names.len() > 1
-                && crate::name::closest(name, manifest.datasets.keys().map(String::as_str))
-                    .is_none() =>
-            {
-                let others: Vec<&str> = names
-                    .iter()
-                    .map(String::as_str)
-                    .filter(|other| other != name)
-                    .collect();
-                let instead = format!("fetchloom remove {}", others.join(" "));
-                error.help(format!(
-                    "leave it out, as in `{}`",
-                    super::meant(&[name], &[], instead)
-                ))
+        known_with_rest(manifest, name, "", "remove", names).map_err(|error| {
+            match exclusion(manifest, name) {
+                Some(help) => error.help(help),
+                None if names.len() > 1
+                    && crate::name::closest(name, manifest.datasets.keys().map(String::as_str))
+                        .is_none() =>
+                {
+                    let others: Vec<&str> = names
+                        .iter()
+                        .map(String::as_str)
+                        .filter(|other| other != name)
+                        .collect();
+                    let instead = format!("fetchloom remove {}", others.join(" "));
+                    error.help(format!(
+                        "leave it out, as in `{}`",
+                        super::meant(&[name], &[], instead)
+                    ))
+                }
+                None => error,
             }
-            None => error,
         })?;
     }
     Ok(())

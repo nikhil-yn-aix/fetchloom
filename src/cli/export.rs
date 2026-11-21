@@ -109,9 +109,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     }
     let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;
-    for name in &args.names {
-        super::project::known(&manifest, name, "export")?;
-    }
+    super::project::known_each(&manifest, &args.names, "export")?;
     let lock = if args.names.is_empty() {
         project.lock()?
     } else {

@@ -307,9 +307,7 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
     }
     let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;
-    for name in &args.names {
-        super::project::known(&manifest, name, "audit")?;
-    }
+    super::project::known_each(&manifest, &args.names, "audit")?;
     let wanted = |name: &str| args.names.is_empty() || args.names.iter().any(|named| named == name);
     let output = &context.output;
     let mut report = Report {

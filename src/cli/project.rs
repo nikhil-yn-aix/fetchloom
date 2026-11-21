@@ -473,9 +473,7 @@ pub(super) fn selected(
     if names.is_empty() {
         return Ok(Scope::All);
     }
-    for name in names {
-        known(manifest, name, command)?;
-    }
+    known_each(manifest, names, command)?;
     Ok(Scope::Only(names.iter().cloned().collect()))
 }
 
@@ -956,8 +954,8 @@ pub(super) async fn lock(context: &Context, args: args::Lock) -> Result<Report, 
             Upgrade::All
         }
         Some(names) => {
+            known_each(&manifest, &names, "lock --upgrade")?;
             for name in &names {
-                known(&manifest, name, "lock --upgrade")?;
                 if manifest.datasets[name].is_import() {
                     let at = output_from_here(&project, &manifest, name);
                     return Err(local::no_newer(name, at.as_deref()));
@@ -2171,16 +2169,29 @@ fn unchecked(who: &str, path: &std::path::Path) -> Error {
 /// refuses a name data.toml does not have, suggesting the closest as `command` would take it, as
 /// `path` in `fetchloom path iris`; a link typed as a name is shown with its secrets masked.
 pub(super) fn known(manifest: &Manifest, name: &str, command: &str) -> Result<(), Error> {
-    known_with_rest(manifest, name, "", command)
+    known_with_rest(manifest, name, "", command, &[])
+}
+
+/// [`known`] for each of `names`, given together: an example names a dataset none of them is,
+/// or leaves the name out where it would repeat one given.
+pub(super) fn known_each(
+    manifest: &Manifest,
+    names: &[String],
+    command: &str,
+) -> Result<(), Error> {
+    names
+        .iter()
+        .try_for_each(|name| known_with_rest(manifest, name, "", command, names))
 }
 
 /// [`known`] for a name typed with `rest` after it, such as `/iris.csv` in `irs/iris.csv`,
-/// which a guess at the name keeps.
+/// which a guess at the name keeps, among the names `given` together, none or all with it.
 pub(super) fn known_with_rest(
     manifest: &Manifest,
     name: &str,
     rest: &str,
     command: &str,
+    given: &[String],
 ) -> Result<(), Error> {
     if manifest.datasets.contains_key(name) {
         return Ok(());
@@ -2193,8 +2204,22 @@ pub(super) fn known_with_rest(
         ),
     );
     let typed = format!("{name}{rest}");
+    let others: Vec<&str> = given
+        .iter()
+        .map(String::as_str)
+        .filter(|other| *other != name)
+        .collect();
+    let leave_out = |error: Error| {
+        let shown = super::meant(
+            &[&typed],
+            &[],
+            format!("fetchloom {command} {}", others.join(" ")),
+        );
+        error.help(format!("leave it out, as in `{shown}`"))
+    };
     Err(
         match name::closest(name, manifest.datasets.keys().map(String::as_str)) {
+            Some(best) if others.contains(&best) => leave_out(error),
             Some(best) => {
                 let shown = super::meant(
                     &[&typed],
@@ -2212,11 +2237,11 @@ pub(super) fn known_with_rest(
             )),
             None => {
                 let names: Vec<&str> = manifest.datasets.keys().map(String::as_str).collect();
-                let shown = super::meant(
-                    &[&typed],
-                    &names[..1],
-                    format!("fetchloom {command} {}", names[0]),
-                );
+                let Some(other) = names.iter().find(|name| !others.contains(name)) else {
+                    return Err(leave_out(error));
+                };
+                let shown =
+                    super::meant(&[&typed], &[other], format!("fetchloom {command} {other}"));
                 error.help(format!("name one of {}, as in `{shown}`", names.join(", ")))
             }
         },

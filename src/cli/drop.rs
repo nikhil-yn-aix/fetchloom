@@ -12,7 +12,7 @@ use serde::Serialize;
 
 use super::args;
 use super::probe::{self, Ask, Found, Lack, Pinned};
-use super::project::{dry_run_done, find, hold, known};
+use super::project::{dry_run_done, find, hold, known_each};
 use super::sync::Scope;
 use super::sync::disk::{Folders, Survey};
 use super::sync::place::{self, Placement};
@@ -116,10 +116,6 @@ impl Checked {
     }
 }
 
-#[expect(
-    clippy::too_many_lines,
-    reason = "every name is checked before anything is dropped"
-)]
 pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, Error> {
     let mut given: Vec<String> = Vec::with_capacity(args.names.len());
     for name in args.names {
@@ -135,9 +131,7 @@ pub(super) async fn run(context: &Context, args: args::Drop) -> Result<Report, E
         Some(hold(context, &project, "drop").await?)
     };
     let (_, manifest) = project.manifest()?;
-    for name in &given {
-        known(&manifest, name, "drop")?;
-    }
+    known_each(&manifest, &given, "drop")?;
     let lock = project.lock()?.unwrap_or_default();
     lock.refuse_waiting(given.iter().map(String::as_str))?;
     let marked = project.dropped();

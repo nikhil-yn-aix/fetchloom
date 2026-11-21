@@ -44,7 +44,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
         None => (target.as_str(), None),
     };
     let rest = &target[name.len()..];
-    known_with_rest(&manifest, name, rest, "path").map_err(|error| {
+    known_with_rest(&manifest, name, rest, "path", &[]).map_err(|error| {
         match held_by(&project, &manifest, &target) {
             Some(help) => error.help(help),
             None => error,
@@ -67,7 +67,7 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
             Waited::Ready(path) => path,
             Waited::Held(held) => {
                 let (text, manifest) = project.manifest()?;
-                known_with_rest(&manifest, name, rest, "path")?;
+                known_with_rest(&manifest, name, rest, "path", &[])?;
                 let read = project.lock_and_text()?;
                 if let Some(path) = ready_path(
                     context,
@@ -548,7 +548,7 @@ async fn hold_path(
         }
         before = current;
         let (_, manifest) = project.manifest()?;
-        known_with_rest(&manifest, name, rest, "path")?;
+        known_with_rest(&manifest, name, rest, "path", &[])?;
         let lock = pins(project, &manifest, name)?;
         ready_path(
             context,

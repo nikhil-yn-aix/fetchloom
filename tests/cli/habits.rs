@@ -316,3 +316,60 @@ fn a_failed_sync_records_nothing_it_never_told() -> Result {
     );
     Ok(())
 }
+
+/// a name data.toml lacks, typed beside one it has, gets an example that never repeats the one
+/// given: another dataset's name where data.toml has one, else the command line without it, as
+/// for a typo of a name given already.
+#[test]
+fn a_typo_beside_a_name_never_gets_that_name_twice() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Routes::start(vec![
+        (PATH.to_owned(), file(IRIS, "\"v1\"")),
+        ("/files/wine.csv".to_owned(), file(b"a,b\n1,2\n", "\"w1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    add_ok(&sandbox, &format!("{}{PATH}", server.url))?;
+    let refused = |args: &[&str]| -> Result<String> {
+        let output = sandbox.run(args)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {stderr}");
+        Ok(stderr)
+    };
+    for command in [
+        &["sync"][..],
+        &["audit"],
+        &["export"],
+        &["drop"],
+        &["lock", "--upgrade"],
+        &["push", "--to", "mirror"],
+    ] {
+        // push takes its folder after the names
+        let (named, after) = if command[0] == "push" {
+            command.split_at(1)
+        } else {
+            (command, &[][..])
+        };
+        let typed: Vec<&str> = [named, &["iris", "nosuch"], after].concat();
+        let meant: Vec<&str> = [named, &["iris"], after].concat();
+        let stderr = refused(&typed)?;
+        let help = format!("help: leave it out, as in `fetchloom {}`", meant.join(" "));
+        assert!(stderr.contains(&help), "{typed:?}: {stderr}");
+    }
+    add_ok(&sandbox, &format!("{}/files/wine.csv", server.url))?;
+    let stderr = refused(&["sync", "iris", "nosuch"])?;
+    assert!(
+        stderr.contains("help: name one of iris, wine, as in `fetchloom sync iris wine`"),
+        "{stderr}"
+    );
+    for command in ["sync", "remove"] {
+        let stderr = refused(&[command, "iris", "irs"])?;
+        let help = format!("help: leave it out, as in `fetchloom {command} iris`");
+        assert!(stderr.contains(&help), "{stderr}");
+    }
+    let stderr = refused(&["sync", "wine", "irs"])?;
+    assert!(
+        stderr.contains("help: did you mean `fetchloom sync wine iris`?"),
+        "{stderr}"
+    );
+    Ok(())
+}

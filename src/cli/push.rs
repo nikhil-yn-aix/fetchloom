@@ -14,7 +14,7 @@ use serde::Serialize;
 use super::Context;
 use super::args;
 use super::fetch::data_folder::DataFolder;
-use super::project::{find, known, locked};
+use super::project::{find, known_each, locked};
 use super::sync::{Loop, Scope, place};
 use crate::cache::Cache;
 use crate::digest::Sha256;
@@ -283,9 +283,7 @@ pub(super) fn run(context: &Context, args: &args::Push) -> Result<Report, Error>
     let target = target(context, args)?;
     let project = find(context)?;
     let (_, manifest) = project.manifest()?;
-    for name in &args.names {
-        known(&manifest, name, "push")?;
-    }
+    known_each(&manifest, &args.names, "push")?;
     let lock = project.lock()?;
     let datasets = pushed(context, &manifest, &args.names, lock.as_ref())?;
     if datasets.is_empty() {
