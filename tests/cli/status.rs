@@ -328,9 +328,9 @@ fn a_settled_status_answers_in_a_room_its_unread_rows_would_overrun() -> Result 
     ok(&run(&["add", "../long"], None)?)?;
     ok(&run(&["sync"], None)?)?;
     let base: u64 = if cfg!(target_env = "musl") {
-        20 << 20
+        28 << 20
     } else {
-        8 << 20
+        16 << 20
     };
     // the three files' count fits beside data.toml's manifest, its text and 1,000 bytes a dataset,
     // and the first row's excess, but not the first two rows'

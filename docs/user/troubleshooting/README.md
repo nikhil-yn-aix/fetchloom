@@ -64,8 +64,8 @@ fetchloom settings set rate 500K
 in a container with a memory limit, fetchloom compares what reading a project's files takes, about 650 bytes a file data.lock pins, with what the limit leaves, and stops before reading them when that is too little, with `local.io`, exit 50. a list in `data.lock.d` whose paths and URLs are longer than most counts twice what each holds past 650 bytes as it is read, and stops the same way partway, saying the read takes at least that much and naming the dataset whose list holds them. data.toml is weighed the same way before it is read, and what its datasets hold then counts against data.lock's files; the error then says how much of the room data.toml, read already, holds. in a container limited to 64 MiB, the status of a project of 100,000 files says:
 
 ```text
-error: reading this project's 100,000 files takes about 70.0 MiB of memory, more than the 60.6 MiB this container leaves fetchloom
-  help: raise the container's memory limit by 9.3 MiB or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files
+error: reading this project's 100,000 files takes about 78.0 MiB of memory, more than the 60.6 MiB this container leaves fetchloom
+  help: raise the container's memory limit by 17.4 MiB or more, or name one dataset, as in `fetchloom path <name>`, which reads only its files
 ```
 
 `fetchloom path <name>` and a sync of named datasets already in place read only those datasets' pins and records, so they still answer there. memory a system has available outside a container is not checked: past it the system pages memory out rather than ending the run.

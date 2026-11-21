@@ -30,12 +30,15 @@ const VERSION: u32 = 1;
 /// a lower bound on the memory a read takes per pinned file: a status or settled sync peaked at
 /// 76.7 MiB on glibc and 92.5 MiB on musl for 100,000 files, and 690 and 668 MiB for 1,000,001.
 const PER_FILE: u64 = 650;
-/// what a run holds before it reads a project, which the musl build's allocator starts larger.
-const BASE: u64 = if cfg!(target_env = "musl") {
-    20 << 20
-} else {
-    8 << 20
-};
+/// what a run holds beside a project's pins, [`base`] of this build.
+const BASE: u64 = base(cfg!(target_env = "musl"));
+
+/// what a run holds beside a project's pins: what it holds before it reads the project, which the
+/// musl build's allocator starts larger, and 8 MiB more, since a status of 20,000 to 40,000 files
+/// held up to 6.5 MiB past the pins as it read the data folder, and the kernel ended it there.
+const fn base(musl: bool) -> u64 {
+    if musl { 28 << 20 } else { 16 << 20 }
+}
 
 /// the memory a container's limit leaves this run, past which the kernel ends it with no word.
 /// what a system without such a limit has available is no such wall: it can page out instead.
@@ -2750,6 +2753,30 @@ mod tests {
             .collect();
         assert!(fits(&zeta, BASE + PER_FILE).is_ok());
         assert!(fits(&zeta, BASE + PER_FILE - 1).is_err());
+    }
+
+    /// the estimate refuses every room the kernel was seen to end a status in: for the static
+    /// build, a settled project of this many imported files in a cgroup with no swap, the least
+    /// room, in tenths of a MiB, it lived through five times out of five. a room a MiB smaller
+    /// ended it at least once, past the estimate the check made then.
+    #[test]
+    fn the_estimate_covers_what_a_static_status_was_seen_to_need() {
+        for (files, tenths) in [
+            (15_000_u64, 309_u64),
+            (20_000, 389),
+            (25_000, 409),
+            (30_000, 449),
+            (40_000, 489),
+        ] {
+            let lived = (tenths << 20) / 10;
+            let need = base(true) + files * PER_FILE;
+            assert!(
+                need >= lived,
+                "{files} files: {} counted, {} needed",
+                crate::units::size(need),
+                crate::units::size(lived)
+            );
+        }
     }
 
     /// a list is weighed as it is read: a row whose path and link run past what [`PER_FILE`]
