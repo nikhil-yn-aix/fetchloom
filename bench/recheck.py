@@ -132,6 +132,17 @@ def environment(root, cache, origin):
     return env
 
 
+def one_each(links):
+    """the dataset the harness names for each link of a project it writes, by the link: the link's
+    last part without its suffix."""
+    return {link: Path(link).stem for link in links}
+
+
+def zipped(origin):
+    """the zip case's one dataset, by its link."""
+    return {f"{origin}/members.zip": "members"}
+
+
 def conflict(ours, theirs):
     """two sides of a file as git leaves them after a merge in diff3 style, with an empty base."""
     return f"<<<<<<< ours\n{ours}||||||| base\n=======\n{theirs}>>>>>>> theirs\n"
@@ -155,12 +166,12 @@ def prepare(root, arm, binary, signature, origin):
         if done.returncode:
             raise RuntimeError(f"{arm}: fetchloom {' '.join(map(str, args))} exited {done.returncode}: {done.stderr.strip()}")
 
-    def one_each(project, cache, listing):
+    def each(project, cache, listing):
         """a project with a dataset for each link of the list, pinned by `lock`, as several links
         typed for one add make them."""
         project.mkdir(parents=True, exist_ok=True)
-        links = (src / listing).read_text().split()
-        (project / "data.toml").write_text("".join(f'[datasets.{Path(link).stem}]\nref = "{link}"\n\n' for link in links))
+        datasets = one_each((src / listing).read_text().split())
+        (project / "data.toml").write_text("".join(f'[datasets.{name}]\nref = "{link}"\n\n' for link, name in datasets.items()))
         fetchloom(project, cache, "lock")
 
     for name in ("files", "tiny"):
@@ -168,12 +179,12 @@ def prepare(root, arm, binary, signature, origin):
     fetchloom(folder / "tiny", "tiny-cache", "add", src / "tiny")
     fetchloom(folder / "tiny", "tiny-cache", "sync")
     fetchloom(folder / "large", "large-cache", "add", src / "large")
-    one_each(folder / "many", "many-cache", "many.txt")
+    each(folder / "many", "many-cache", "many.txt")
     (folder / "zip").mkdir()
-    (folder / "zip" / "data.toml").write_text(f'[datasets.members]\nref = "{origin}/members.zip"\n')
+    (folder / "zip" / "data.toml").write_text("".join(f'[datasets.{name}]\nref = "{link}"\n' for link, name in zipped(origin).items()))
     fetchloom(folder / "zip", "zip-cache", "lock")
     for side in ("ours", "theirs"):
-        one_each(folder / side, "merge-cache", f"{side}.txt")
+        each(folder / side, "merge-cache", f"{side}.txt")
     for name in ("data.toml", "data.lock"):
         write(folder / "merge" / name, conflict((folder / "ours" / name).read_text(),
                                                 (folder / "theirs" / name).read_text()).encode())
@@ -209,28 +220,38 @@ def expected(root, origin):
     return dict(links=links, members=members, big=fixtures.sha256(www / "big.bin"))
 
 
-def layout(project, sources):
-    """each file a project's datasets must leave, at the path fetchloom places it, with the SHA-256
-    its source serves: a link's file in its dataset's folder under the link's last part, and a zip's
-    members in its dataset's folder, as a sole archive's are. the datasets are the project's own, as
-    its build named them; a link the server never served expects bytes no file has."""
+def named(project, refs):
+    """the dataset name a project's data.toml gives each requested ref once the run that added them
+    is over; a ref it left out, or a data.toml it left unreadable, has none."""
     try:
         datasets = tomllib.loads((project / "data.toml").read_text())["datasets"]
-    except (OSError, ValueError, KeyError):
-        return {"data.toml": None}
+        names = {entry.get("ref"): name for name, entry in datasets.items()}
+    except (OSError, ValueError, KeyError, AttributeError):
+        names = {}
+    return {ref: names.get(ref) for ref in refs}
+
+
+def expect_files(requested, sources):
+    """each file the requested refs must leave, at the path fetchloom places it in the dataset named
+    for each, with the SHA-256 its source serves: a link's file under the link's last part, and a
+    zip's members, as a sole archive's are. a ref with no dataset, or one the server never served,
+    expects bytes no file has."""
     expect = {}
-    for name, entry in datasets.items():
-        ref = entry.get("ref", "")
-        if ref.endswith(".zip"):
-            expect.update({f"data/{name}/{member}": digest for member, digest in sources["members"].items()})
-        else:
-            expect[f"data/{name}/{ref.rsplit('/', 1)[-1]}"] = sources["links"].get(ref)
+    for ref, name in requested.items():
+        files = dict(sources["members"]) if ref.endswith(".zip") else {ref.rsplit("/", 1)[-1]: sources["links"].get(ref)}
+        for file, digest in files.items():
+            if name is None:
+                expect[f"{ref} has no dataset: {file}"] = None
+            else:
+                expect[f"data/{name}/{file}"] = digest
     return expect
 
 
 def placed(folder, expect):
     """what is wrong with the files a run left under folder, against each path's SHA-256: one line
-    counting those missing or wrong, or none."""
+    counting those missing or wrong, or none; an empty expectation checks nothing, so it fails."""
+    if not expect:
+        return [f"no file was expected under {folder}, so nothing was checked"]
     wrong = 0
     for path, digest in expect.items():
         try:
@@ -243,10 +264,14 @@ def placed(folder, expect):
 def cases(root, arm, binary, folder, origin, sources):
     """each case's command, folder and environment for one arm, and for a case that downloads or
     places files, what gives the folder it leaves them in and each one's path and SHA-256 once it
-    ran, as its own data.toml names them; prep and post run outside the clock."""
+    ran: the refs the case requests, read from the harness's own inputs before any clock starts, at
+    the paths the arm's layout gives them; prep and post run outside the clock."""
     work = root / "work" / FOLDERS[arm]
     env = functools.partial(environment, root, origin=origin)
     fl = str(binary)
+    added = (root / "src" / "links.txt").read_text().split()
+    places = expect_files(one_each((root / "src" / "many.txt").read_text().split()), sources)
+    unpacks = expect_files(zipped(origin), sources)
 
     def emptied(*paths):
         return lambda: [remove(path) for path in paths]
@@ -259,14 +284,15 @@ def cases(root, arm, binary, folder, origin, sources):
         verify=dict(argv=[fl, "--json", "status", "--verify"], cwd=folder / "large", env=env(folder / "large-cache")),
         place=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "place", env=env(folder / "many-cache"),
                    prep=lambda: fresh(work / "place", folder / "many"), post=emptied(work / "place"),
-                   outputs=lambda: (work / "place", layout(work / "place", sources))),
-        add_links=dict(argv=[fl, "-q", "--yes", "add", *(root / "src" / "links.txt").read_text().split()], cwd=work / "links",
+                   outputs=lambda: (work / "place", places)),
+        # add names its datasets as the arm does, so each link it was given is looked up in what it wrote
+        add_links=dict(argv=[fl, "-q", "--yes", "add", *added], cwd=work / "links",
                        env=env(work / "links-cache"), post=emptied(work / "links", work / "links-cache"),
                        prep=lambda: (work / "links").mkdir(parents=True, exist_ok=True),
-                       outputs=lambda: (work / "links", layout(work / "links", sources))),
+                       outputs=lambda: (work / "links", expect_files(named(work / "links", added), sources))),
         zip=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "zip", env=env(work / "zip-cache"),
                  prep=lambda: fresh(work / "zip", folder / "zip"), post=emptied(work / "zip", work / "zip-cache"),
-                 outputs=lambda: (work / "zip", layout(work / "zip", sources))),
+                 outputs=lambda: (work / "zip", unpacks)),
         get=dict(argv=[fl, "-q", "--yes", "get", f"{origin}/big.bin", "-o", str(work / "get" / "big.bin")],
                  cwd=root, env=env(work / "get-cache"), post=emptied(work / "get", work / "get-cache"),
                  prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True),
@@ -323,13 +349,16 @@ def measure(name, specs, rounds, seed, out, cpus, timeout):
                 spec["prep"]()
             result = run.measure(spec["argv"], spec["cwd"], spec["env"], out / "logs" / f"{name}-{FOLDERS[arm]}.log",
                                  timeout, cpus=cpus)
-            checks = placed(*spec["outputs"]()) if spec.get("outputs") else []
+            outputs = spec["outputs"]() if spec.get("outputs") else None
+            checks = placed(*outputs) if outputs else []
             if spec.get("post"):
                 spec["post"]()
             status = "passed" if result["exit_code"] == 0 and not result["timeout"] and not checks else "failed"
             row = dict(result, kind="recheck", tool=arm, scenario=name, filesystem="local", profile="recheck",
                        round=number, warmup=number == 0, status=status, checks=checks, quick=False, count=None,
                        file_size=None, load=os.getloadavg()[0])
+            if outputs:
+                row["expected_files"] = len(outputs[1])
             run.append(out / "runs.jsonl", row)
 
 

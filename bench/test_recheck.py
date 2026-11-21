@@ -139,6 +139,7 @@ class MeasureTests(unittest.TestCase):
                     recheck.measure("place", specs, 1, 1729, out, None, 5)
                 rows = [json.loads(line) for line in (out / "runs.jsonl").read_text().splitlines()]
                 self.assertEqual({row["status"] for row in rows}, {status}, rows)
+                self.assertEqual({row["expected_files"] for row in rows}, {1})
                 self.assertEqual(rows[-1]["checks"], [] if status == "passed" else
                                  [f"1 of 1 expected files are missing or wrong under {placed}"])
             self.assertEqual(done, ["run", "check", "post"] * 4)
@@ -159,21 +160,29 @@ class MeasureTests(unittest.TestCase):
             self.assertEqual(recheck.placed(root, expect), [f"2 of 2 expected files are missing or wrong under {root}"])
             self.assertEqual(recheck.placed(root, {"data/c/c.bin": digest[b"1"], "data/a/a.bin": None}),
                              [f"2 of 2 expected files are missing or wrong under {root}"])
+            # nothing expected is nothing checked, never a pass
+            self.assertEqual(recheck.placed(root, {}), [f"no file was expected under {root}, so nothing was checked"])
 
-    def test_each_dataset_of_a_project_expects_its_files_where_fetchloom_places_them(self):
-        sources = dict(links={"http://h/links/l00000.bin": "1" * 64, "http://h/many/m00001.bin": "2" * 64},
+    def test_every_requested_ref_is_owed_its_file_even_when_the_run_left_its_dataset_out(self):
+        served = {"http://h/links/l00000.bin": b"1", "http://h/links/l00001.bin": b"2"}
+        sources = dict(links={ref: hashlib.sha256(data).hexdigest() for ref, data in served.items()},
                        members={"m00000.bin": "3" * 64, "m00001.bin": "4" * 64}, big="5" * 64)
         with tempfile.TemporaryDirectory() as folder:
             project = Path(folder)
-            self.assertEqual(recheck.layout(project, sources), {"data.toml": None})
-            (project / "data.toml").write_text('[datasets.l00000]\nref = "http://h/links/l00000.bin"\n\n'
-                                                '[datasets.second]\nref = "http://h/many/m00001.bin"\n\n'
-                                                '[datasets.members]\nref = "http://h/members.zip"\n\n'
-                                                '[datasets.stray]\nref = "http://h/links/l00009.bin"\n')
-            self.assertEqual(recheck.layout(project, sources),
-                             {"data/l00000/l00000.bin": "1" * 64, "data/second/m00001.bin": "2" * 64,
-                              "data/members/m00000.bin": "3" * 64, "data/members/m00001.bin": "4" * 64,
-                              "data/stray/l00009.bin": None})
+            self.assertEqual(recheck.named(project, list(served)), dict.fromkeys(served))
+            # the run added one of the two links, under a name of its own, and a link nobody asked for
+            (project / "data.toml").write_text('[datasets.first]\nref = "http://h/links/l00000.bin"\n\n'
+                                                '[datasets.other]\nref = "http://h/links/l00009.bin"\n')
+            (project / "data/first").mkdir(parents=True)
+            (project / "data/first/l00000.bin").write_bytes(b"1")
+            expect = recheck.expect_files(recheck.named(project, list(served)), sources)
+            self.assertEqual(expect, {"data/first/l00000.bin": sources["links"]["http://h/links/l00000.bin"],
+                                      "http://h/links/l00001.bin has no dataset: l00001.bin": None})
+            self.assertEqual(recheck.placed(project, expect), [f"1 of 2 expected files are missing or wrong under {project}"])
+        # a zip's members go in its dataset's folder, and a zip with no dataset owes every one of them
+        self.assertEqual(recheck.expect_files({"http://h/members.zip": "members"}, sources),
+                         {"data/members/m00000.bin": "3" * 64, "data/members/m00001.bin": "4" * 64})
+        self.assertEqual(list(recheck.expect_files({"http://h/members.zip": None}, sources).values()), [None, None])
 
 
 def build(path, program=BUILD):
@@ -222,9 +231,24 @@ class PreparationTests(unittest.TestCase):
         self.assertEqual({name: spec["outputs"]()[0].name for name, spec in specs.items() if "outputs" in spec},
                          dict(place="place", add_links="links", zip="zip", get="get"))
         specs["place"]["prep"]()
-        self.assertEqual(sorted(specs["place"]["outputs"]()[1]), [f"data/m0000{index}/m0000{index}.bin" for index in range(4)])
+        expect = specs["place"]["outputs"]()[1]
+        self.assertEqual(sorted(expect), [f"data/m0000{index}/m0000{index}.bin" for index in range(4)])
+        # what place owes comes from the links it was given, so a run that emptied its project owes them still
+        (work / "place/data.toml").write_text("")
+        self.assertEqual(specs["place"]["outputs"]()[1], expect)
+        self.assertEqual(sorted(specs["zip"]["outputs"]()[1]), [f"data/members/m0000{index}.bin" for index in range(3)])
         self.assertEqual(specs["get"]["outputs"]()[1], {"big.bin": served["big"]})
         specs["place"]["post"]()
+        # add owes a file for each link it was given, though its data.toml kept only one of them
+        added = (self.root / "src/links.txt").read_text().split()
+        specs["add_links"]["prep"]()
+        (work / "links/data.toml").write_text(f'[datasets.only]\nref = "{added[0]}"\n')
+        kept = work / "links/data/only" / added[0].rsplit("/", 1)[-1]
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes((self.root / "www/links" / kept.name).read_bytes())
+        self.assertEqual(recheck.placed(*specs["add_links"]["outputs"]()),
+                         [f"{len(added) - 1} of {len(added)} expected files are missing or wrong under {work / 'links'}"])
+        specs["add_links"]["post"]()
         (folder / "many/data/stray.bin").parent.mkdir(parents=True)
         (folder / "many/data/stray.bin").write_bytes(b"")
         specs["place"]["prep"]()
