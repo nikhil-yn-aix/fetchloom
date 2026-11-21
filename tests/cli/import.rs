@@ -590,27 +590,15 @@ fn a_folder_that_holds_the_project_or_a_datasets_files_is_refused() -> Result {
 }
 
 /// data a project keeps in data/ already, as cookiecutter's data/raw, is pinned where it is, as
-/// an output: its files stay, writable, and a teammate gets them at data/raw. its bare name may
-/// be search words too, so without --as it is refused with the line that adds it.
+/// an output: its files stay, writable, and a teammate gets them at data/raw. no dataset's name
+/// holds a `/`, so the folder is the one meant, typed with `./` or without.
 #[test]
 fn data_already_in_the_data_folder_is_pinned_where_it_is() -> Result {
     let sandbox = Sandbox::new()?;
     let work = sandbox.work();
     fs::create_dir_all(work.join("data/raw"))?;
     fs::write(work.join("data/raw/visits.csv"), b"id\n1\n")?;
-    let output = sandbox.run(&["--json", "add", "data/raw"])?;
-    assert_eq!(output.status.code(), Some(2), "{}", text(&output.stdout)?);
-    let error = &json(&output)?["errors"][0];
-    assert_eq!(
-        error["message"],
-        "\"data/raw\" is a folder here, so fetchloom did not search for it"
-    );
-    assert_eq!(
-        error["help"],
-        "run `fetchloom add ./data/raw` to pin it, or `fetchloom search data/raw` to search"
-    );
-    assert!(!work.join("data.toml").exists());
-    let added = sandbox.run(&["add", "./data/raw"])?;
+    let added = sandbox.run(&["add", "data/raw"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     assert_eq!(
         fs::read_to_string(work.join("data.toml"))?,
@@ -620,6 +608,13 @@ fn data_already_in_the_data_folder_is_pinned_where_it_is() -> Result {
     assert!(
         !work.join("data/raw/raw").exists(),
         "never nested in itself"
+    );
+    let again = sandbox.run(&["add", "./data/raw"])?;
+    let stderr = text(&again.stderr)?;
+    assert_eq!(again.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Ok raw is pinned as data/raw holds it"),
+        "{stderr}"
     );
     Ok(())
 }

@@ -456,13 +456,14 @@ fn helps_after_a_run_with_c_reach_the_project_from_where_it_ran() -> Result {
         ours.contains(&format!("run `fetchloom -C {typed} lock` without them")),
         "{ours}"
     );
-    let visits = work.join("data").join("visits");
+    // a bare word naming a folder may be search words too, so it is refused with the path
+    let visits = work.join("visits");
     fs::create_dir_all(&visits)?;
     fs::write(visits.join("a.csv"), "a\n")?;
-    let inside = told(&["-C", &typed, "add", "data/visits"])?;
+    let inside = told(&["-C", &typed, "add", "visits"])?;
     assert!(
         inside.contains(&format!(
-            "run `fetchloom -C {typed} add ./data/visits` to pin it"
+            "run `fetchloom -C {typed} add ./visits` to pin it"
         )),
         "{inside}"
     );

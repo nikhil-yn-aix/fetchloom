@@ -349,9 +349,12 @@ fn request(args: &mut Add, project: &Project, mirrored: bool) -> Result<Request,
     if let Some(refused) = output_gone(&link, project, mirrored) {
         return Err(refused);
     }
-    // with --as, a folder of the project is pinned where it is, as `add data/processed --as
-    // processed` reads; without it, the word may be search words too
-    if local::is_path(&link) || (args.name.is_some() && names_project_folder(&link, project)) {
+    // with --as, a folder of the project a bare word names is pinned where it is, as `add results
+    // --as results` reads; without it, a bare word may be search words too
+    if local::is_path(&link)
+        || (args.name.is_some() && names_project_folder(&link, project))
+        || written_here(&link)
+    {
         if args.no_sync {
             // a mistyped path is told first, as an add without --no-sync tells it
             let here = std::env::current_dir()
@@ -363,6 +366,17 @@ fn request(args: &mut Add, project: &Project, mirrored: bool) -> Result<Request,
     }
     super::search::refuse_local(&link, true)?;
     Ok(Request::Link(link))
+}
+
+/// whether `word`, which is no path as typed, names a file or folder here and holds what no
+/// dataset's name can, a `/` or `\` between names or a file type, so no search could mean it:
+/// `data/processed` is `./data/processed`, while a bare `iris` beside a folder may be search words.
+fn written_here(word: &str) -> bool {
+    let word = word.trim();
+    let written = word.contains(['/', '\\']) || local::reads_as_path(word);
+    written
+        && !word.contains(':')
+        && std::env::current_dir().is_ok_and(|here| local::here(word, &here).is_some())
 }
 
 /// whether `word`, which is no path as typed, names a folder inside `project`, the one the add

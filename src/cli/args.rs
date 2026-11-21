@@ -931,8 +931,7 @@ pub(crate) struct DryRun {
 pub(crate) struct Add {
     /// search words, a link, a DOI, an id such as zenodo:3608990, or a path to files on this
     /// machine, such as ./flowers, which are copied into the cache. a folder of the project, such
-    /// as data/processed with --as, stays where it is, as an output. several links add a dataset
-    /// each
+    /// as data/processed, stays where it is, as an output. several links add a dataset each
     #[arg(value_name = "link", help_heading = "arguments")]
     pub(crate) links: Vec<String>,
 
