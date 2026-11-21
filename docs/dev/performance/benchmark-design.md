@@ -125,7 +125,7 @@ A live service's speed changes from minute to minute, so live results give each 
 | Peak memory | The largest resident set among the command's processes, as GNU time reports it |
 | Disk used | The free-space change of the dedicated filesystem, so links and reflinks count once |
 | Requests, bytes, connections and protocols | The server's log for that run |
-| Requests in flight | Per host, the most at once, HTTP/2 streams included: each request counts from its arrival until nginx logged it, and for at least the link's round trip, since a client sends its next request on a slot only after the last answer reaches it, less 2 ms for the log's millisecond clock. On lan a request answered within 2 ms does not count. A run over 4 is flagged, not failed |
+| Requests in flight | Per host, the most at once, HTTP/2 streams included: each request counts from its arrival until nginx logged it, and for at least the link's round trip, since a client sends its next request on a slot only after the last answer reaches it, less 2 ms for the log's millisecond clock. On lan a request answered within 2 ms does not count, so there the figure is an estimate with a 2 ms floor, and the results say so beside it. A run over 4 is flagged, not failed |
 | Server body bytes / dataset size | In s7 and s10, the body bytes of the server's whole and partial answers for the file, over its size |
 | Time lost to a dropped link | In s10, each tool's total time against its own s1 on the same link |
 | Correctness | A gate, not a measure: every expected file's SHA-256, outside the clock |

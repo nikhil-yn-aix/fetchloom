@@ -30,6 +30,7 @@ def summarize(rows):
         return median(values) if values else None
     cpu = [r.get("user_seconds", 0) + r.get("sys_seconds", 0) for r in successful]
     peaks = [max(r["peak_in_flight"].values(), default=0) for r in rows if r.get("peak_in_flight") is not None]
+    floors = [r.get("in_flight_floor_ms") or 0 for r in rows if r.get("peak_in_flight") is not None]
     process = [r["process"]["wall_seconds"] for r in successful if r.get("process")]
     return dict(clock=next((r["clock"] for r in successful if r.get("clock")), None),
                 import_seconds=metric("import_seconds"), process=median(process) if process else None,
@@ -39,7 +40,8 @@ def summarize(rows):
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
                 cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
                 requests=metric("requests"), connections=metric("connections"), body_bytes_ratio=metric("body_bytes_ratio"),
-                in_flight=max(peaks) if peaks else None, over_budget=sum(bool(r.get("over_budget")) for r in rows))
+                in_flight=max(peaks) if peaks else None, in_flight_floor_ms=max(floors, default=0),
+                over_budget=sum(bool(r.get("over_budget")) for r in rows))
 
 
 def link(profile, shaping=None):
@@ -669,13 +671,19 @@ def case_section(case):
     title = TITLES[case["scenario"]]
     rounds = max(item["rounds"] for item in summaries.values())
     judged = case["judged"]
+    floor = max(item.get("in_flight_floor_ms") or 0 for item in summaries.values())
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
-             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | disk | requests | connections | most in flight to a host | failures |",
+             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
              "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
         lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(tool, judged)} | {said(tool, judged)} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
     lines += verdict_lines(case)
+    if floor:
+        lines.append(f"\nthe most in flight on this link is an estimate, with a floor of {floor} ms: with no round trip to wait "
+                     f"for, a request counts only while nginx served it, less {floor} ms for its log's millisecond clock, so "
+                     f"a request answered within {floor} ms is not counted, and a tool over the budget by such short "
+                     "requests can go unflagged.")
     if case["scenario"] in NOOP:
         lines.append(f"\n{NOOP_CHECKS}")
     for tool, entry in summaries.items():

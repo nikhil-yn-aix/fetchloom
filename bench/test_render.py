@@ -424,6 +424,20 @@ class PageTests(Quiet):
         self.assertIn("| n/a | 1 | 6, over the budget in 1 of 1 runs | 0/1 |", page)
         self.assertIn("- politeness budget: at most 4 requests in flight to one host, for every tool", page)
 
+    def test_the_most_in_flight_on_lan_is_called_an_estimate_with_its_floor(self):
+        rows = [lab_row(peak_in_flight={"lab.flb": 3}, in_flight_floor_ms=2), lab_row(tool="curl", peak_in_flight={"lab.flb": 4}),
+                lab_row(profile="home", peak_in_flight={"lab.flb": 4}, in_flight_floor_ms=0)]
+        page = self.render(rows, dict(kind="lab", quick=True, budget=4))
+        cases = {part.splitlines()[0]: part for part in page.split("\n## ")[1:]}
+        lan = next(part for heading, part in cases.items() if heading.startswith("s1: ") and render.LINKS["lan"] in heading)
+        home = next(part for heading, part in cases.items() if heading.startswith("s1: ") and render.LINKS["home"] in heading)
+        self.assertIn("| connections | most in flight to a host, estimated | failures |", lan)
+        self.assertIn("\nthe most in flight on this link is an estimate, with a floor of 2 ms: with no round trip to wait for, a "
+                      "request counts only while nginx served it, less 2 ms for its log's millisecond clock, so a request "
+                      "answered within 2 ms is not counted, and a tool over the budget by such short requests can go unflagged.", lan)
+        self.assertIn("| connections | most in flight to a host | failures |", home)
+        self.assertNotIn("an estimate", home)
+
     def test_a_library_timed_inside_a_warm_interpreter_says_so_with_its_import_beside(self):
         rows = [lab_row(), lab_row(tool="pooch", wall_seconds=2, clock="call inside a warm interpreter", import_seconds=.42,
                                    process=dict(wall_seconds=3.1, user_seconds=1, sys_seconds=0))]

@@ -374,10 +374,12 @@ class HelperTests(unittest.TestCase):
         # under a millisecond: a client's own pace at home, never more than four at once
         paced = [line("lab.flb", 1, worker + 21 * turn, 0) for worker in range(4) for turn in range(5)]
         result = run.parse_access(paced, set(), rtt_ms=20)
-        self.assertEqual((result["peak_in_flight"], result["peak_connections"], result["connections"]),
-                         ({"lab.flb": 4}, {"lab.flb": 1}, 1))
-        # the same answers on lan, where nothing holds a request open but the server's own time
-        self.assertEqual(run.parse_access(paced, set(), rtt_ms=0)["peak_in_flight"], {"lab.flb": 0})
+        self.assertEqual((result["peak_in_flight"], result["peak_connections"], result["connections"], result["in_flight_floor_ms"]),
+                         ({"lab.flb": 4}, {"lab.flb": 1}, 1, 0))
+        # the same answers on lan, where nothing holds a request open but the server's own time, so
+        # those answered within the log's 2 ms are missed and the row says where its count stops
+        lan = run.parse_access(paced, set(), rtt_ms=0)
+        self.assertEqual((lan["peak_in_flight"], lan["in_flight_floor_ms"]), ({"lab.flb": 0}, 2))
         # six streams sent at once are six in flight however fast the server answered them
         burst = [line("lab.flb", 1, 5, 0) for _ in range(6)]
         self.assertEqual(run.parse_access(burst, set(), rtt_ms=20)["peak_in_flight"], {"lab.flb": 6})

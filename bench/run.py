@@ -223,7 +223,8 @@ def group(pgid):
 def parse_access(lines, file_paths, rtt_ms=0):
     """what the server's json access log says a run asked for: requests, bytes served, the body bytes
     of whole and partial answers for these file paths, each host's and protocol's requests, the
-    connections, and per host the most requests and connections in flight at once."""
+    connections, and per host the most requests and connections in flight at once, with the
+    request time at or under which a request is not counted in flight, 0 when every one is."""
     result = dict(requests=0, bytes_served=0, file_bytes_served=0, hosts=Counter(), protocols=Counter(),
                   connections=0, most_requests_per_connection=0)
     spans, connections = defaultdict(list), defaultdict(list)
@@ -252,6 +253,7 @@ def parse_access(lines, file_paths, rtt_ms=0):
         joined[host].append((min(start for start, _ in held), max(end for _, end in held)))
     result["peak_in_flight"] = {host: most_at_once(held) for host, held in sorted(spans.items())}
     result["peak_connections"] = {host: most_at_once(held) for host, held in sorted(joined.items())}
+    result["in_flight_floor_ms"] = SLACK_MS if rtt_ms <= SLACK_MS else 0
     result["hosts"], result["protocols"] = dict(result["hosts"]), dict(result["protocols"])
     return result
 
