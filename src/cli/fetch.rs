@@ -3793,6 +3793,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("http://lab.example/data.csv").unwrap()),
             label: "data.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let stored = crate::cache::tests::store(&cache, b"a,b\n1,2\n");
