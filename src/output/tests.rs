@@ -1387,6 +1387,42 @@ fn a_wait_for_another_program_counts_on_a_terminal() {
     assert_eq!(piped.said(), [format!("    Waiting {text}")]);
 }
 
+/// a wait on an owner record another system wrote lost its verb and, at 80 columns, the middle of
+/// the path to delete, and a ctrl-c erased it: words too long for a line are told whole once, the
+/// live line counting under them.
+#[test]
+fn a_wait_too_long_for_a_line_is_told_whole_and_counts_below() {
+    let owner = "/datadisk/fl-perf/qa-ux/p5-adversary/work/conc/cc/.fetchloom/owner";
+    let text = format!(
+        "for `fetchloom sync` (windows, pid 4242, started 2026-11-19T02:00:00Z) working in this project; if that process is gone, delete {owner}"
+    );
+    let mut terminal = telling(false).fitted(Some(|| Some(80)));
+    terminal.bars = Some(indicatif::MultiProgress::with_draw_target(
+        indicatif::ProgressDrawTarget::term_like(Box::new(Screen::default())),
+    ));
+    let live = terminal.waiting("Waiting", &text);
+    assert_eq!(live.told().as_deref(), Some(""));
+    let said = terminal.said();
+    assert_eq!(said.len(), 1, "{said:?}");
+    let lines: Vec<&str> = said[0].lines().collect();
+    assert!(
+        lines[0].starts_with("    Waiting for `fetchloom sync` (windows, pid 4242,"),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|line| line.trim_start() == owner),
+        "{lines:#?}"
+    );
+    assert!(lines.iter().all(|line| line.len() <= 80), "{lines:#?}");
+    let short = "for `fetchloom add` (pid 7) working in this project";
+    let quick = terminal.waiting("Waiting", short);
+    assert_eq!(
+        quick.told().as_deref(),
+        Some(short),
+        "a line that fits stays live"
+    );
+}
+
 /// placing many files once went untold for seconds after `Imported`.
 #[test]
 fn lasting_work_is_told_once_it_lasts() {

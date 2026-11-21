@@ -1052,14 +1052,24 @@ impl Output {
     }
 
     /// a wait for another program, which a person may sit through for a while: on a terminal a
-    /// live line that counts its seconds until dropped, elsewhere one line, as a log needs.
+    /// live line that counts its seconds until dropped, elsewhere one line, as a log needs. words
+    /// too long for the terminal's line are told whole once, wrapped, and the live line under them
+    /// counts the seconds alone, so what they say stays after a ctrl-c.
     pub(crate) fn waiting(&self, verb: &'static str, text: &str) -> Bar {
-        if self.bars.is_some() {
-            self.bar(verb, text.to_owned())
-        } else {
+        if self.bars.is_none() {
             self.step(verb, text);
-            Bar::hidden()
+            return Bar::hidden();
         }
+        // a live line cut to fit hid the file to delete in the middle of the folder's path
+        let line = verb_line(verb, text, Tone::Work, false);
+        if self
+            .columns()
+            .is_some_and(|width| units::columns(&line) > width)
+        {
+            self.step(verb, text);
+            return self.bar(verb, String::new());
+        }
+        self.bar(verb, text.to_owned())
     }
 
     /// a wait ends when dropped, with elapsed time on a terminal and occasional lines elsewhere.
