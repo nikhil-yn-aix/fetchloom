@@ -8,14 +8,12 @@ use super::{Scope, Upgrade};
 use crate::project::lock::{Lock, Locked};
 use crate::project::manifest::Manifest;
 
-/// an entry of data.lock carried over to the name data.toml gives it now.
+/// an entry of data.lock carried over to the name data.toml gives it now, the old name's entry
+/// gone.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::cli) struct Rename {
     pub(in crate::cli) old: String,
     pub(in crate::cli) new: String,
-    /// whether the old entry went: a run of named datasets that leaves the old name out keeps
-    /// its entry until a run of every dataset.
-    pub(super) moved: bool,
 }
 
 /// `lock` with its entries carried to the names data.toml gives them now, as a relock of every
@@ -94,18 +92,19 @@ fn pairs_by_key<'a, K: Ord>(
         .collect()
 }
 
-fn rename_to(name: &mut String, new: &str, moved: bool) -> Rename {
+fn rename_to(name: &mut String, new: &str) -> Rename {
     Rename {
         old: std::mem::replace(name, new.to_owned()),
         new: new.to_owned(),
-        moved,
     }
 }
 
-/// carries the entries of renamed fetched datasets into `kept` under their new names, for new names
-/// the run may pin, matched one to one by spec and `extract`: one from `others` moves, and one from
-/// `kept`, which a named run leaves alone, is copied. both keep data.lock's name order. an import
-/// stays: every import's table reads `ref = "local"`, so a match tells no rename from a new table.
+/// carries the entries of renamed fetched datasets into `kept` under their new names, for the new
+/// names in `scope` the run may pin, matched one to one by spec and `extract` among every name
+/// data.toml has, so a named run pairs only what a run of all would. the old entry moves, from
+/// `others` or from `kept`, where a named run leaves it, since no table in data.toml has its name
+/// any more. `kept` keeps data.lock's name order. an import stays: every import's table reads
+/// `ref = "local"`, so a match tells no rename from a new table.
 pub(super) fn carry(
     manifest: &Manifest,
     scope: &Scope,
@@ -140,11 +139,7 @@ pub(super) fn carry(
         });
     let new = manifest.datasets.iter().filter_map(|(name, entry)| {
         let source = &entry.source;
-        (scope.includes(name)
-            && !upgrade.includes(name)
-            && !given.contains(name.as_str())
-            && !pinned(name))
-        .then(|| {
+        (!upgrade.includes(name) && !given.contains(name.as_str()) && !pinned(name)).then(|| {
             (
                 (
                     Cow::Owned(crate::project::lock::spec(source)),
@@ -154,21 +149,20 @@ pub(super) fn carry(
             )
         })
     });
-    let matches = pairs_by_key(old, new);
+    let mut matches = pairs_by_key(old, new);
+    matches.retain(|_, new| scope.includes(new));
     if matches.is_empty() {
         return Vec::new();
     }
     let mut renamed = Vec::with_capacity(matches.len());
-    for index in 0..kept.len() {
-        if let Some(new) = matches.get(&kept[index].name) {
-            let mut copied = kept[index].clone();
-            renamed.push(rename_to(&mut copied.name, new, false));
-            kept.push(copied);
+    for locked in kept.iter_mut() {
+        if let Some(new) = matches.get(&locked.name) {
+            renamed.push(rename_to(&mut locked.name, new));
         }
     }
     for mut locked in others.extract_if(.., |locked| matches.contains_key(&locked.name)) {
         let new = &matches[&locked.name];
-        renamed.push(rename_to(&mut locked.name, new, true));
+        renamed.push(rename_to(&mut locked.name, new));
         kept.push(locked);
     }
     kept.sort_by(|a, b| a.name.cmp(&b.name));
@@ -258,7 +252,6 @@ mod tests {
             [Rename {
                 old: "before".into(),
                 new: "zeta".into(),
-                moved: true
             }]
         );
         let mut zeta = before;
@@ -267,35 +260,46 @@ mod tests {
         assert_eq!(others, [imported]);
     }
 
+    /// a run of one name moves the old entry it takes over, as a run of all would, and takes none
+    /// another name in data.toml answers too, though that name is outside the run.
     #[test]
-    fn named_rename_copies_the_pin_and_excludes_other_new_names() {
-        let manifest = Manifest::parse(
-            "[datasets.chosen]\nref = \"https://example.org/source\"\n[datasets.other]\nref = \"https://example.org/source\"\n",
-        )
-        .unwrap();
+    fn a_named_run_moves_a_renamed_pin_unless_another_name_answers_it() {
         let old = fetched("old", "https://example.org/source", true);
-        let mut kept = vec![old.clone()];
-        let mut others = Vec::new();
-        let renamed = carry(
-            &manifest,
-            &Scope::Only(["chosen".to_owned()].into()),
-            &Upgrade::Nothing,
-            &HashSet::new(),
-            &mut kept,
-            &mut others,
-        );
-        assert_eq!(
-            renamed,
-            [Rename {
-                old: "old".into(),
-                new: "chosen".into(),
-                moved: false
-            }]
-        );
-        let mut chosen = old.clone();
-        chosen.name = "chosen".into();
-        assert_eq!(kept, [chosen, old]);
-        assert_eq!(others, []);
+        for (other, moved) in [
+            ("https://example.org/elsewhere", true),
+            ("https://example.org/source", false),
+        ] {
+            let manifest = Manifest::parse(&format!(
+                "[datasets.chosen]\nref = \"https://example.org/source\"\n[datasets.other]\nref = {other:?}\n"
+            ))
+            .unwrap();
+            let mut kept = vec![old.clone()];
+            let mut others = Vec::new();
+            let renamed = carry(
+                &manifest,
+                &Scope::Only(["chosen".to_owned()].into()),
+                &Upgrade::Nothing,
+                &HashSet::new(),
+                &mut kept,
+                &mut others,
+            );
+            let mut chosen = old.clone();
+            chosen.name = "chosen".into();
+            if moved {
+                assert_eq!(
+                    renamed,
+                    [Rename {
+                        old: "old".into(),
+                        new: "chosen".into(),
+                    }]
+                );
+                assert_eq!(kept, [chosen]);
+            } else {
+                assert_eq!(renamed, [], "{other}");
+                assert_eq!(kept, std::slice::from_ref(&old), "{other}");
+            }
+            assert_eq!(others, []);
+        }
     }
 
     #[test]

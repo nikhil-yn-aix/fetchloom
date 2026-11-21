@@ -1085,8 +1085,9 @@ fn a_removal_that_deletes_a_list_git_has_says_to_commit_data_lock_d() -> Result 
     Ok(())
 }
 
-/// the source serves other bytes now, which a relock that asked it would pin. a sync of one name,
-/// as `path` runs, changes no other entry, so it copies the pin; the next lock drops the old one.
+/// the source serves other bytes now, which a relock that asked it would pin. a sync of the new
+/// name alone moves the pin as a sync of all does, so the data.lock it asks to commit passes
+/// `lock --check`.
 #[test]
 fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1125,16 +1126,22 @@ fn a_renamed_dataset_keeps_its_pin_without_asking_the_source() -> Result {
     assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
 
     rename("flowers", "petals")?;
-    let found = sandbox.run(&["path", "petals"])?;
-    assert_eq!(found.status.code(), Some(0), "{}", text(&found.stderr)?);
-    assert!(pinned("petals")? && pinned("flowers")?);
-    let locked = sandbox.run(&["lock"])?;
+    let named = sandbox.run(&["sync", "petals"])?;
+    let stderr = text(&named.stderr)?;
+    assert_eq!(named.status.code(), Some(0), "{stderr}");
     assert!(
-        text(&locked.stderr)?.contains("Removed flowers from data.lock\n"),
-        "{}",
-        text(&locked.stderr)?
+        stderr.contains("Renamed flowers to petals in data.lock · its pin stays\n"),
+        "{stderr}"
     );
     assert!(pinned("petals")? && !pinned("flowers")?);
+    assert_eq!(sandbox.run(&["lock", "--check"])?.status.code(), Some(0));
+    // the named sync leaves the old name's files, which a plain sync then removes
+    let old = sandbox.work().join("data/flowers/iris.csv");
+    assert!(old.exists());
+    let synced = sandbox.run(&["sync", "--locked"])?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert!(!old.exists());
+    assert_eq!(fs::read(sandbox.work().join("data/petals/iris.csv"))?, IRIS);
     assert_eq!(server.requests().len(), 1, "only the add asked the source");
     Ok(())
 }

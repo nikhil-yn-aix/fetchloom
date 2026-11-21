@@ -2575,7 +2575,7 @@ impl Verbs {
 }
 
 /// the names of the datasets whose pins `lock` changes beside `before`: new, moved or gone, a
-/// rename counting its new name and, when the old entry went, its old one.
+/// rename counting its old name and its new one.
 pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
     let mut names: Vec<String> = lock
         .datasets
@@ -2594,10 +2594,12 @@ pub(super) fn repinned(before: &Before, lock: &Lock) -> Vec<String> {
                 .iter()
                 .map(|waiting| waiting.name.clone()),
         )
-        .chain(before.renamed.iter().flat_map(|rename| {
-            let old = rename.moved.then(|| rename.old.clone());
-            std::iter::once(rename.new.clone()).chain(old)
-        }))
+        .chain(
+            before
+                .renamed
+                .iter()
+                .flat_map(|rename| [rename.new.clone(), rename.old.clone()]),
+        )
         .collect();
     names.sort();
     names.dedup();
@@ -2699,25 +2701,15 @@ fn lock_lines(
         if is_told(&rename.new) {
             continue;
         }
-        lines.push(if rename.moved {
-            (
-                verbs.renamed,
-                format!(
-                    "{} to {} in {} · its pin stays",
-                    rename.old,
-                    rename.new,
-                    lock::FILE
-                ),
-            )
-        } else {
-            (
-                verbs.pinned,
-                format!(
-                    "{}, renamed from {} · its pin stays",
-                    rename.new, rename.old
-                ),
-            )
-        });
+        lines.push((
+            verbs.renamed,
+            format!(
+                "{} to {} in {} · its pin stays",
+                rename.old,
+                rename.new,
+                lock::FILE
+            ),
+        ));
     }
     let dropped = before
         .dropped(lock)
