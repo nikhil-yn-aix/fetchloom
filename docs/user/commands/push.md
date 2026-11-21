@@ -164,8 +164,8 @@ the work counters count what push downloaded, as for a sync, and `data_folder_ob
 | 0 | every file the datasets need is on the mirror |
 | 1 | nobody said yes to data that asks first, or data.lock is out of date |
 | 2 | a usage error, such as no folder or a web address |
-| 10 | in mirror-only mode, a file it needs is on no mirror |
-| 20 | offline, a file it needs is not in the cache |
+| 10 | in mirror-only mode, a file it needs is on no mirror, `network.refused` |
+| 20 | offline, a file it needs is not in the cache, `offline.missing` |
 | 30 | a download or a pushed file read back holds other bytes than expected, or the cache's copy holds other bytes than its pin |
 | 50 | the folder is not a mirror, something else replaced a file push wrote, data.lock pins a file at a size its cached bytes do not have, or the disk refused a write or is full |
 | 130 | a stop |
