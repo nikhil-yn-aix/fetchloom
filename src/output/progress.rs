@@ -2060,7 +2060,7 @@ mod tests {
             "10 files".to_owned(),
             (0, 1),
             (hour, hour),
-            false,
+            (false, None),
             say,
         );
         let begun = ticker.begun();
@@ -2076,7 +2076,7 @@ mod tests {
             "10 files".to_owned(),
             (0, 1),
             (hour, hour),
-            false,
+            (false, None),
             say,
         );
         assert!(ticker.shared.as_ref().unwrap().begin(None));
