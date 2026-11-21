@@ -723,8 +723,9 @@ fn a_file_checked_by_size_alone_says_so_and_a_later_change_warns() -> Result {
 
 /// a server that names no `ETag`, only `Last-Modified`, as python's `http.server`, answers 304 for
 /// a file changed under its old date, as `cp -p` or `rsync -t` leave it. `audit` finds the change
-/// by its size, and `lock --upgrade` agrees: it pins the new bytes. while the size holds, the 304
-/// stands and the upgrade downloads nothing.
+/// by its size, and `lock --upgrade` agrees: it pins the new bytes. while the size holds, the
+/// answer for the file's first byte, which states its date and size, stands and the upgrade
+/// downloads nothing.
 #[test]
 fn audit_and_an_upgrade_agree_on_a_file_changed_under_its_old_date() -> Result {
     const DATE: &str = "Thu, 01 Jan 2026 00:00:00 GMT";
@@ -751,7 +752,7 @@ fn audit_and_an_upgrade_agree_on_a_file_changed_under_its_old_date() -> Result {
     let asked = &source.requests()[added..];
     let dated_ask = format!("if-modified-since: {}", DATE.to_ascii_lowercase());
     assert!(
-        asked.iter().any(|head| head.contains(&dated_ask)),
+        asked.iter().any(|head| head.contains("range: bytes=0-0")),
         "{asked:?}"
     );
     assert!(
