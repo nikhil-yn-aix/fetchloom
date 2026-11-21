@@ -101,6 +101,8 @@ struct Moved {
     /// about how long the transfer takes, as fetchloom foresaw it from the speeds it remembers,
     /// which the bar shows until it can tell its own time left.
     foreseen: Mutex<Option<String>>,
+    /// the most room the bar's counters took so far, which they keep.
+    room: Mutex<Room>,
 }
 
 /// a download's next try, as its bar tells it.
@@ -128,6 +130,7 @@ impl Moved {
             marks: Mutex::new([(Instant::now(), 0); 2]),
             untimed: AtomicBool::new(false),
             foreseen: Mutex::new(None),
+            room: Mutex::new(Room::default()),
         }
     }
 
@@ -238,6 +241,24 @@ impl Moved {
             left: (!self.untimed.load(Ordering::Relaxed)).then_some(left),
             foreseen,
         }
+    }
+
+    /// widens `counters` to the most room each took on this bar, which it keeps: the count, the
+    /// rate and a time left only ever widen the line, so the cut in its name stays put as they
+    /// narrow, while a stall's or a try's words take their own room only as long as they show.
+    fn hold(&self, counters: &mut Counters) {
+        let mut held = self.room.lock().unwrap_or_else(PoisonError::into_inner);
+        let room = counters.room;
+        held.count = held.count.max(room.count);
+        held.done = held.done.max(room.done);
+        held.rate = held.rate.max(room.rate);
+        if counters.timed {
+            held.then = held.then.max(room.then);
+        }
+        counters.room = Room {
+            then: room.then.max(held.then),
+            ..*held
+        };
     }
 
     /// how long since the bar last moved.
@@ -603,6 +624,7 @@ fn style(
                 // a transfer's counters keep the room they grow to, so its name's cut stays put
                 if bar.is_some() {
                     counters.steady(total);
+                    moved.hold(&mut counters);
                 }
                 let width = usize::from(console::Term::stderr().size().1);
                 let meter = bar.as_ref().map(|(bar, percent)| (bar.as_str(), *percent));
@@ -657,8 +679,19 @@ struct Counters {
     rate: Option<String>,
     /// what comes after: the time left, a stall, a try to come, a stop, or how long a wait lasted.
     then: Option<String>,
-    /// the room each keeps, in the order above.
-    room: [usize; 3],
+    room: Room,
+    /// whether what comes after is a time left.
+    timed: bool,
+}
+
+/// the room a bar's counters keep: the count, whole and as its bytes alone, the rate and what
+/// comes after.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Room {
+    count: usize,
+    done: usize,
+    rate: usize,
+    then: usize,
 }
 
 /// which form of a bar's count a line keeps.
@@ -673,45 +706,49 @@ enum Count {
 impl Counters {
     /// counters with `count`, a `rate` and what comes `then`, each given the room it takes now.
     fn new(count: Option<String>, rate: Option<String>, then: Option<String>) -> Counters {
-        let room = [&count, &rate, &then]
-            .map(|part| part.as_deref().map_or(0, console::measure_text_width));
+        let width = |part: &Option<String>| part.as_deref().map_or(0, console::measure_text_width);
+        let room = Room {
+            count: width(&count),
+            done: width(&count.as_deref().map(done_alone)),
+            rate: width(&rate),
+            then: width(&then),
+        };
         Counters {
             count,
             rate,
             then,
             room,
+            timed: false,
         }
     }
 
     /// gives a transfer's counters the room they grow to, with `total` its length when known:
-    /// the count at its end, the rate and the time left at their widest.
+    /// the count at its widest, at its end or below one of its unit, as `0.94/6.0 MiB` is, whole
+    /// and as its bytes alone, and the rate and the time left at theirs.
     fn steady(&mut self, total: Option<u64>) {
-        let whole = total.map_or(0, |total| {
-            console::measure_text_width(&fraction(total, total))
-        });
-        self.room[0] = self.room[0].max(whole);
-        self.room[1] = self.room[1].max(RATE_WIDEST);
-        if total.is_some() {
-            self.room[2] = self.room[2].max(LEFT_WIDEST);
+        if let Some(total) = total {
+            for count in [fraction(total, total), fraction(0, total)] {
+                let done = console::measure_text_width(&done_alone(&count));
+                self.room.count = self.room.count.max(console::measure_text_width(&count));
+                self.room.done = self.room.done.max(done);
+            }
+            self.room.then = self.room.then.max(LEFT_WIDEST);
         }
+        self.room.rate = self.room.rate.max(RATE_WIDEST);
     }
 
     /// what a line shows of them, with `rate`, the count in its `count` form and what comes
     /// `then`, and the room that takes, a transfer's counters yet to come with theirs.
     fn kept(&self, rate: bool, count: Count, then: bool) -> (String, usize) {
-        let count = match (count, &self.count) {
-            (Count::Whole, whole) => Some((whole.clone(), self.room[0])),
-            (Count::Done, Some(whole)) => {
-                let done = done_alone(whole);
-                let width = console::measure_text_width(&done);
-                Some((Some(done), width))
-            }
-            _ => None,
+        let count = match count {
+            Count::Whole => Some((self.count.clone(), self.room.count)),
+            Count::Done => Some((self.count.as_deref().map(done_alone), self.room.done)),
+            Count::Uncounted => None,
         };
         let parts: Vec<(Option<String>, usize)> = [
             count,
-            rate.then(|| (self.rate.clone(), self.room[1])),
-            then.then(|| (self.then.clone(), self.room[2])),
+            rate.then(|| (self.rate.clone(), self.room.rate)),
+            then.then(|| (self.then.clone(), self.room.then)),
         ]
         .into_iter()
         .flatten()
@@ -891,13 +928,19 @@ fn measure(
         .foreseen
         .filter(|_| timed.left.is_some() && total.is_some() && !still)
         .map(|foreseen| format!("{foreseen} left"));
-    let then = match left {
-        Some(left) => Some(format!("{} left", units::seconds(whole_up(left)))),
-        None if foreseen.is_some() => foreseen,
-        None if done == 0 && elapsed >= MOMENT && !still => Some(units::seconds(elapsed)),
-        None => None,
+    let (then, timed) = match left {
+        Some(left) => (
+            Some(format!("{} left", units::seconds(whole_up(left)))),
+            true,
+        ),
+        None if foreseen.is_some() => (foreseen, true),
+        None if done == 0 && elapsed >= MOMENT && !still => (Some(units::seconds(elapsed)), false),
+        None => (None, false),
     };
-    Counters::new(count, rate, then)
+    Counters {
+        timed,
+        ..Counters::new(count, rate, then)
+    }
 }
 
 /// how long the `rest` of a transfer takes at `rate` bytes a second, the longest duration when a
@@ -1805,6 +1848,47 @@ mod tests {
         assert_eq!(early, cut("3.3/19.5 MiB · 979.7 KiB/s · 17 s left"));
         assert_eq!(early, cut("13.3/19.5 MiB · 1022.9 KiB/s · 7 s left"));
         assert!(early.contains('~'), "{early}");
+    }
+
+    /// a 6.0 MiB download once moved its name's cut as `0.94/6.0 MiB` became `1.0/6.0 MiB` at 80
+    /// columns, and `0.13 MiB` became `1.0 MiB` at 40, and a time left under a minute moved it
+    /// too: each counter keeps the most room it took on its bar, and a stall's words take theirs
+    /// only while they show.
+    #[test]
+    fn a_names_cut_stays_put_while_its_counters_narrow() {
+        let name = "tinystories1-data-train-00001-of-00004-5852b56a2bd28fd9.parquet";
+        let total = 6 << 20;
+        for width in [80, 40] {
+            let moved = Moved::new(Arc::default());
+            let cut = |done: u64, then: Option<&str>, timed: bool| {
+                let mut counters = Counters {
+                    timed,
+                    ..Counters::new(
+                        (done > 0).then(|| fraction(done, total)),
+                        Some("1.0 MiB/s".to_owned()),
+                        then.map(str::to_owned),
+                    )
+                };
+                counters.steady(Some(total));
+                moved.hold(&mut counters);
+                let meter = Some(("#---", Some(15)));
+                let line = render(name, "Downloading", meter, &counters, width, false);
+                line.split(' ').next().unwrap_or_default().to_owned()
+            };
+            // as a link once read at 40 columns, its time foreseen from its first frame
+            let first = cut(0, Some("under 10 s left"), true);
+            assert!(first.contains('~'), "{width}: {first}");
+            for (done, then) in [
+                (130 << 10, "under 10 s left"),
+                (1 << 20, "1 min 04 s left"),
+                (2 << 20, "59 s left"),
+            ] {
+                assert_eq!(first, cut(done, Some(then), true), "{width}: {done} {then}");
+            }
+            cut(3 << 20, Some("no data for 1 min 05 s"), false);
+            let after = cut(4 << 20, Some("3 s left"), true);
+            assert_eq!(first, after, "{width}: after a stall");
+        }
     }
 
     #[test]
