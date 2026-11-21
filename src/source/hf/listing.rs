@@ -357,7 +357,11 @@ mod tests {
             );
         let err = block_on(repo("datasets/stanfordnlp/no-such-dataset").resolve(&recorded, None))
             .unwrap_err();
-        assert_eq!(err.kind, Kind::AuthRequired);
+        assert_eq!(
+            err.kind,
+            Kind::ReferenceUnresolved,
+            "a typo as likely as a sign-in"
+        );
         assert_eq!(
             err.message,
             "huggingface.co has no dataset stanfordnlp/no-such-dataset, or it is private"
@@ -451,7 +455,7 @@ mod tests {
         );
         assert!(err.need.is_none(), "signing in cannot help");
         let err = block_on(repo("models/scikit-learn/irs").resolve(&recorded, None)).unwrap_err();
-        assert_eq!(err.kind, Kind::AuthRequired);
+        assert_eq!(err.kind, Kind::ReferenceUnresolved);
         assert_eq!(
             err.message,
             "huggingface.co has no model scikit-learn/irs, or it is private"

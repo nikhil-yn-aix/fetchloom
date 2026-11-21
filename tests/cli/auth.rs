@@ -933,16 +933,19 @@ fn hub() -> Result<Routes> {
 fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     let sandbox = Sandbox::new()?;
     let hub = hub()?;
-    for (reference, refused, first) in [
+    // a no keeps the refusal's own exit code: a name the hub may not know, or terms to accept
+    for (reference, refused, first, exit) in [
         (
             "hf:datasets/scikit-learn/irs",
             "huggingface.co has no dataset scikit-learn/irs, or it is private",
             "Check the name first at https://huggingface.co/datasets/scikit-learn/irs\n            hugging face answers alike for a name that does not exist and for a private one\n",
+            10,
         ),
         (
             "hf:datasets/bigcode/the-stack",
             "hf:datasets/bigcode/the-stack requires permission to download its files",
             "First accept the terms at https://huggingface.co/datasets/bigcode/the-stack",
+            40,
         ),
     ] {
         let mut add = sandbox.command(&["add", reference]);
@@ -957,7 +960,7 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
         else {
             return Ok(());
         };
-        assert_eq!(code, Some(40), "{screen}");
+        assert_eq!(code, Some(exit), "{screen}");
         assert!(!screen.contains("error:"), "{screen}");
         // a line told at a terminal starts with a return, which the lines below leave out
         let screen = screen.replace('\r', "");
@@ -984,7 +987,7 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     else {
         return Ok(());
     };
-    assert_eq!(code, Some(40), "{screen}");
+    assert_eq!(code, Some(10), "{screen}");
     let told = screen.find("error: huggingface.co has no dataset scikit-learn/irs");
     let asked = screen.find("sign in to hugging face now? [y/N]");
     assert!(
@@ -1489,7 +1492,7 @@ fn a_model_link_whose_name_a_dataset_has_gives_the_datasets_link() -> Result {
         "for the dataset, use https://huggingface.co/datasets/scikit-learn/iris"
     );
     let output = add("https://huggingface.co/scikit-learn/irs")?;
-    assert_eq!(output.status.code(), Some(40), "{}", text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(10), "{}", text(&output.stderr)?);
     assert_eq!(
         json(&output)?["errors"][0]["message"],
         "huggingface.co has no model scikit-learn/irs, or it is private"

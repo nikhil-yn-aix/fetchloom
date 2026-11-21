@@ -151,14 +151,22 @@ impl Repo {
     }
 
     /// the error for a repository the hub refused to show, alike for a private one and a typo.
+    /// asked without a key, the answer names no refusal of a key, so the reference is what is
+    /// unresolved; a key that went may be the one refused.
     fn unseen(&self, refused: &Error) -> Error {
-        let kind = kind_word(self.kind);
+        let word = kind_word(self.kind);
+        let sent = sent_key();
+        let kind = if sent.is_some() {
+            refused.kind
+        } else {
+            Kind::ReferenceUnresolved
+        };
         let error = Error::new(
-            refused.kind,
-            format!("huggingface.co has no {kind} {}, or it is private", self.id),
+            kind,
+            format!("huggingface.co has no {word} {}, or it is private", self.id),
         );
         let page = self.page();
-        match sent_key() {
+        match sent {
             // a sign-in saves a key the variable would still win over
             Some(Origin::Variable(name)) => error
                 .detail(format!("the key in {name} went with the request"))
@@ -183,8 +191,13 @@ impl Repo {
     /// [`Repo::unseen`] for the mirror `endpoint` names, which no hugging face token went to,
     /// unless one was `signed` for its host.
     fn unseen_by_mirror(&self, refused: &Error, endpoint: &Endpoint, signed: bool) -> Error {
+        let kind = if signed {
+            refused.kind
+        } else {
+            Kind::ReferenceUnresolved
+        };
         Error::new(
-            refused.kind,
+            kind,
             format!(
                 "{} has no {} {}, or it is private",
                 endpoint.host(),

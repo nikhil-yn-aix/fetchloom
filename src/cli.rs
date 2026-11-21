@@ -1059,6 +1059,7 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
                 if let Some(again) = context.refusal().filter(|again| !again.told) {
                     let error = with_key(again.error, "the key you signed in with", None);
                     context.output.error(&error);
+                    outcome = ExitCode::from(error.kind.exit_code());
                 }
             }
             Some((Ok(false), _)) => {}
@@ -1724,11 +1725,13 @@ fn with_key_here(error: Error, var: crate::machine::Var<'_>) -> Error {
 }
 
 /// `error`, a refusal signing in could lift, refused with `key`: its help says the key was refused
-/// or has no access, then `check`, and only a need for terms to accept stays.
+/// or has no access, then `check`, and only a need for terms to accept stays. a key went, so it is
+/// `auth.required`, even where a source that hides a name it does not know answered alike.
 fn with_key(mut error: Error, key: &str, check: Option<&str>) -> Error {
     let Some(need) = error.need.as_deref() else {
         return error;
     };
+    error.kind = Kind::AuthRequired;
     let check = check.map_or_else(String::new, |check| format!(": {check}"));
     let help = match (&need.maybe_missing, &need.terms) {
         (Some(page), _) => {

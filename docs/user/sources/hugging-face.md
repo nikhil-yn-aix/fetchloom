@@ -30,7 +30,7 @@ when every select pattern starts with a folder, as `sample/10BT/**` or `data/tra
 
 ## credentials
 
-public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/credentials.md). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value.
+public repositories need no account. a gated or private one needs a key whose account may read it: sign in with `fetchloom auth login hf`, set `HF_TOKEN`, or keep the token the hf command saved, in the [order environment gives](../reference/credentials.md). a gated repository also needs its owner's approval, which you ask for on its page; fetchloom cannot grant it. a key the hub refuses, as an old or wrong one, is named by where it comes from, `HF_TOKEN` or the token file, never by its value. the hub answers a name it does not have as it answers a private one, so a typo asked without a key stops with `reference.unresolved`, exit 10, as `huggingface.co has no dataset acme-lab/field-notes, or it is private`, its help saying to check the name and how to sign in; asked with a key, it is `auth.required`, exit 40, since the key may be what lacks access.
 
 ## a mirror of huggingface.co
 
