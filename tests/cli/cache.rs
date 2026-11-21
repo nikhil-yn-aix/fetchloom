@@ -2212,6 +2212,25 @@ fn imported_then_removed(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
         .join(&hex[2..]))
 }
 
+/// a registered project whose data.lock pins nothing now, as after its one dataset went, needs
+/// nothing: the report names it on no `Needed` line, and gc says no project needs a file.
+#[test]
+fn a_project_that_pins_nothing_needs_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    imported_then_removed(&sandbox)?;
+    let report = text(&sandbox.run(&["cache"])?.stderr)?;
+    assert!(report.contains("Used by "), "{report}");
+    assert!(!report.contains("Needed"), "{report}");
+    let freed = sandbox.run(&["cache", "gc", "--now", "--yes"])?;
+    let stderr = text(&freed.stderr)?;
+    assert_eq!(freed.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Cleaned the cache; no project needs any of its files\n"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a file imported from a folder comes back from no source once the cache frees it, so gc counts
 /// such bytes apart, and `--now` frees them only after a yes.
 #[test]

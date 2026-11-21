@@ -57,6 +57,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     let Found {
         needed,
         projects,
+        needing,
         unread,
         waiting,
         ..
@@ -111,7 +112,7 @@ pub(super) fn info(context: &Context) -> Result<Info, Error> {
     if unfinished.downloads > 0 {
         output.label("Unfinished", &unfinished_line(&unfinished));
     }
-    tell_usage(output, &usage, projects.len(), blocked);
+    tell_usage(output, &usage, needing, blocked);
     if usage.unneeded_objects > 0 {
         tell_waiting(output, &waiting);
     }
@@ -235,7 +236,8 @@ fn tell_usage(output: &Output, usage: &Usage, projects: usize, blocked: bool) {
         output.done("Ok", "the cache has no data files");
         return;
     }
-    if projects > 0 {
+    // a project's needed files may all be empty, so the objects tell, not the bytes
+    if projects > 0 && usage.objects > usage.unneeded_objects {
         output.label("Needed", &needed_line(usage, projects));
     }
     let unneeded = unneeded_line(usage, blocked);
@@ -411,7 +413,7 @@ pub(super) fn gc(context: &Context, now: bool, dry_run: bool) -> Result<Collecte
     if dry_run {
         return Ok(tell_dry_gc(context, swept, cache.pretended()));
     }
-    tell_swept(context, swept, found.projects.len())
+    tell_swept(context, swept, found.needing)
 }
 
 /// asks whether `gc --now` may free what was imported from files on this machine and no project
@@ -565,11 +567,14 @@ fn tell_swept(context: &Context, swept: Swept, projects: usize) -> Result<Collec
         .help(FAILED_ABOVE);
         return Err(error.with_report(&collected(swept)));
     }
-    let projects = units::count(projects as u64, "project", "projects");
-    output.done(
-        "Cleaned",
-        &format!("the cache, keeping files needed by {projects}"),
-    );
+    let kept_for = match projects {
+        0 => "the cache; no project needs any of its files".to_owned(),
+        _ => format!(
+            "the cache, keeping files needed by {}",
+            units::count(projects as u64, "project", "projects")
+        ),
+    };
+    output.done("Cleaned", &kept_for);
     if let Some(kept) = &kept {
         output.hint(kept);
     }
@@ -996,6 +1001,9 @@ impl Focus {
 struct Found {
     needed: Needed,
     projects: Vec<PathBuf>,
+    /// how many of `projects` pin any file, after what `fetchloom drop` freed there, so a report
+    /// counts only projects that need some.
+    needing: usize,
     stale_projects: Vec<PathBuf>,
     /// false when a registered project's data.toml was missing, so `needed` lacks what it needs.
     complete: bool,
@@ -1032,6 +1040,7 @@ fn needed_focused(
 ) -> Result<Found, Error> {
     let mut needed = Needed::default();
     let mut projects = Vec::new();
+    let mut needing = 0;
     let mut stale_projects = Vec::new();
     let mut complete = true;
     let mut unread = Vec::new();
@@ -1107,6 +1116,13 @@ fn needed_focused(
             .map(|lock| super::drop::kept_here(lock, &state.dropped))
             .filter(|_| !focus.is_some_and(|focus| focus.stands_for(&project.root)));
         if let Some(lock) = &lock {
+            if lock
+                .datasets
+                .iter()
+                .any(|dataset| !dataset.files.is_empty())
+            {
+                needing += 1;
+            }
             add_with_stop(&mut needed, cache, lock, kept.as_ref(), focus, stop)?;
             // an import's files are all kept while it waits, so only a fetched one goes uncounted
             waiting.extend(
@@ -1126,6 +1142,7 @@ fn needed_focused(
     Ok(Found {
         needed,
         projects,
+        needing,
         stale_projects,
         complete,
         unread,
