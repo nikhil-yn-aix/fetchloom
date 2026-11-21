@@ -344,8 +344,9 @@ fn tell_changed(
         (true, after) => output.done(
             if after.is_some() { "Saved" } else { "Removed" },
             &format!(
-                "{key} \u{b7} {} \u{2192} {} \u{b7} {file}",
+                "{key} \u{b7} {} {} {} \u{b7} {file}",
                 said(changed.before.as_ref()),
+                output.arrow(),
                 said(after.as_ref())
             ),
         ),

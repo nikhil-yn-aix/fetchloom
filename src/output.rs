@@ -767,6 +767,13 @@ impl Output {
         self.style.unicode
     }
 
+    /// the arrow fetchloom writes between a value and the one that replaced it, as in `not set →
+    /// 5`: `->` where only ascii shows. a line takes it as it is made, since [`shown`] leaves alone
+    /// the arrow a name holds, as `x→y.csv` in a command a line suggests.
+    pub(crate) fn arrow(&self) -> &'static str {
+        if self.style.unicode { "\u{2192}" } else { "->" }
+    }
+
     /// the width of the terminal a person watches the story on, or none for a pipe or a file.
     pub(crate) fn width(&self) -> Option<usize> {
         self.style

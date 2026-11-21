@@ -1123,6 +1123,17 @@ fn settings_set_and_unset_change_the_file_the_next_run_reads() -> Result {
     );
     let document = json(&sandbox.run(&["--json", "settings"])?)?;
     assert_eq!(shown(&document, "jobs")["origin"], "default");
+    // a cron job's locale shows only ascii, so the arrow is ascii too, as the dots are
+    let ascii = sandbox
+        .command(&["settings", "set", "retries", "5"])
+        .in_ascii()
+        .output()?;
+    let told = text(&ascii.stderr)?;
+    assert_eq!(ascii.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("      Saved retries - not set -> 5 - "),
+        "{told}"
+    );
     Ok(())
 }
 

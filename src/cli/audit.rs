@@ -132,7 +132,8 @@ impl Dataset {
         let changed = self
             .changed
             .iter()
-            .map(|change| format!("{} · {}", self.name, change.said()));
+            // an error's lines fill its JSON document too, which keeps one arrow whatever the locale
+            .map(|change| format!("{} · {}", self.name, change.said("\u{2192}")));
         newer.chain(changed).collect()
     }
 }
@@ -176,11 +177,12 @@ struct Change {
 }
 
 impl Change {
-    fn said(&self) -> String {
+    /// the change, with `arrow` between what data.lock pins and what the source says now.
+    fn said(&self, arrow: &str) -> String {
         if self.field == "title" {
-            format!("title \"{}\" → \"{}\"", self.pinned, self.now)
+            format!("title \"{}\" {arrow} \"{}\"", self.pinned, self.now)
         } else {
-            format!("{} {} → {}", self.field, self.pinned, self.now)
+            format!("{} {} {arrow} {}", self.field, self.pinned, self.now)
         }
     }
 }
@@ -1020,7 +1022,12 @@ fn tell_dataset(output: &Output, dataset: &Dataset, shown: Option<usize>) {
         );
     }
     if !dataset.changed.is_empty() {
-        let changed: Vec<String> = dataset.changed.iter().map(Change::said).collect();
+        let arrow = output.arrow();
+        let changed: Vec<String> = dataset
+            .changed
+            .iter()
+            .map(|change| change.said(arrow))
+            .collect();
         output.report(
             "Changed",
             &format!("{} · {}", dataset.name, changed.join(" · ")),
@@ -1340,7 +1347,7 @@ mod tests {
         };
         let said: Vec<String> = changes(&asked, &listing("Irises", Some("cc0-1.0"), Access::Login))
             .iter()
-            .map(Change::said)
+            .map(|change| change.said("\u{2192}"))
             .collect();
         assert_eq!(
             said,

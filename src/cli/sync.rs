@@ -3264,7 +3264,12 @@ pub(super) fn tell_upgrades(
         let mut facts = vec![if before.resolved == dataset.resolved {
             dataset.resolved.clone()
         } else {
-            format!("{} → {}", before.resolved, dataset.resolved)
+            format!(
+                "{} {} {}",
+                before.resolved,
+                output.arrow(),
+                dataset.resolved
+            )
         }];
         for (n, one, many) in [
             (changed, "file changed", "files changed"),

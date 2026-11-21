@@ -122,6 +122,13 @@ impl Fetchloom {
         self
     }
 
+    /// runs in a locale that shows only ascii, as a cron job's `LANG=C` does.
+    pub(crate) fn in_ascii(&mut self) -> &mut Self {
+        self.env("LANG", "C")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE")
+    }
+
     pub(crate) fn current_dir(&mut self, folder: impl AsRef<Path>) -> &mut Self {
         self.command.current_dir(folder);
         self

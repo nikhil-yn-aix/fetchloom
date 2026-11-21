@@ -857,6 +857,21 @@ fn a_terminal_without_unicode_gets_the_name_alone() {
     );
 }
 
+/// under `LANG=C` a cron log once read `Saved retries - not set → 5`, and writing every `→` as
+/// `->` then changed `x→y.csv` in the command a warning suggests: fetchloom's symbols have ascii
+/// forms, its arrow chosen as a line is made, and a name's own letters stay as they are.
+#[test]
+fn a_terminal_that_shows_only_ascii_gets_every_symbol_in_ascii() {
+    let line = "Saved retries \u{b7} a\u{2026} \u{203a} \u{2501} r\u{e9}sum\u{e9}";
+    assert_eq!(
+        super::shown(line, false),
+        "Saved retries - a... > - r\u{e9}sum\u{e9}"
+    );
+    assert_eq!(super::shown(line, true), line);
+    let suggested = "to keep your own, run `fetchloom exclude data/sim/x\u{2192}y.csv`";
+    assert_eq!(super::shown(suggested, false), suggested);
+}
+
 /// `Would` ends where every other verb does, however long its action.
 #[test]
 fn a_dry_run_verb_sits_in_the_verb_column() {

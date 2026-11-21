@@ -63,9 +63,10 @@ struct Dataset {
     /// not compared.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     unlisted: Vec<&'static str>,
-    /// what changed, in words, for the line that tells it.
+    /// the `select` and `exclude` patterns data.toml asks of it on each side, when its spec
+    /// changed and each side's data.toml tells them, for the line that tells it.
     #[serde(skip)]
-    said: Vec<String>,
+    patterns: Option<Patterns>,
     /// the name `from` gave the dataset, when only its name changed, as a rename in data.toml
     /// moves its pin.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -110,12 +111,13 @@ struct Link {
 }
 
 impl Link {
-    /// the host before and after, as a line names them, when the link goes to another host now.
-    fn moved(&self) -> Option<String> {
+    /// the host before and after, as a line names them with `arrow` between, when the link goes
+    /// to another host now.
+    fn moved(&self, arrow: &str) -> Option<String> {
         let (before, after) = (host(&self.before), host(&self.after));
         (before != after).then(|| {
             let shown = |host: Option<String>| host.unwrap_or_else(|| "no host".to_owned());
-            format!("link {} \u{2192} {}", shown(before), shown(after))
+            format!("link {} {arrow} {}", shown(before), shown(after))
         })
     }
 }
@@ -547,7 +549,7 @@ fn renamed(datasets: Vec<Dataset>, before: &Lock, after: &Lock) -> Vec<Dataset> 
             relinked: 0,
             files: Vec::new(),
             unlisted: Vec::new(),
-            said: Vec::new(),
+            patterns: None,
             renamed_from: Some(old.name),
         };
     }
@@ -618,7 +620,6 @@ fn dataset(
     if change == Change::Changed && fields.is_empty() && files.is_empty() && unlisted.is_empty() {
         return None;
     }
-    let said = fields_said(&fields, None);
     let count = |change: Change| files.iter().filter(|file| file.change == change).count() as u64;
     Some(Dataset {
         name: name.to_owned(),
@@ -630,15 +631,16 @@ fn dataset(
         fields,
         files,
         unlisted,
-        said,
+        patterns: None,
         renamed_from: None,
     })
 }
 
 /// each field that differs, in words: a version that is its link again is left to the link's
 /// line, and a spec, a hash of what data.toml asks, is said as what it stands for: the
-/// `patterns` each side asks, when they are known.
-fn fields_said(fields: &[Field], patterns: Option<&Patterns>) -> Vec<String> {
+/// `patterns` each side asks, when they are known. `arrow` stands between a value and the one
+/// that replaced it.
+fn fields_said(fields: &[Field], patterns: Option<&Patterns>, arrow: &str) -> Vec<String> {
     let field = |name: &str| fields.iter().find(|field| field.name == name);
     let value = |value: &Option<String>| {
         value
@@ -650,7 +652,7 @@ fn fields_said(fields: &[Field], patterns: Option<&Patterns>) -> Vec<String> {
         said.push(match changed.name {
             "spec" if field("ref").is_some() || field("web_page").is_some() => continue,
             "spec" if let Some(patterns) = patterns.filter(|patterns| patterns.differ()) => {
-                said.extend(patterns.said());
+                said.extend(patterns.said(arrow));
                 continue;
             }
             "spec" => "select or exclude changed in data.toml".to_owned(),
@@ -660,7 +662,7 @@ fn fields_said(fields: &[Field], patterns: Option<&Patterns>) -> Vec<String> {
                 (None, Some(after)) => format!("now an output, at {}", plain(after)),
                 (Some(before), None) => format!("no longer an output, was at {}", plain(before)),
                 _ => format!(
-                    "at {} \u{2192} {}",
+                    "at {} {arrow} {}",
                     value(&changed.before),
                     value(&changed.after)
                 ),
@@ -673,14 +675,14 @@ fn fields_said(fields: &[Field], patterns: Option<&Patterns>) -> Vec<String> {
                 continue;
             }
             "resolved" => format!(
-                "version {} \u{2192} {}",
+                "version {} {arrow} {}",
                 value(&changed.before),
                 value(&changed.after)
             ),
             "downloaded" if changed.after.as_deref() == Some("true") => "now downloaded".to_owned(),
             "downloaded" => "not downloaded yet".to_owned(),
             name => format!(
-                "{name} {} \u{2192} {}",
+                "{name} {} {arrow} {}",
                 value(&changed.before),
                 value(&changed.after)
             ),
@@ -715,8 +717,9 @@ impl Patterns {
         self.before != self.after
     }
 
-    /// a line for each key whose patterns differ, as `select ["*.csv"] → ["*.csv", "README"]`.
-    fn said(&self) -> Vec<String> {
+    /// a line for each key whose patterns differ, as `select ["*.csv"] → ["*.csv", "README"]`,
+    /// with `arrow` between the sides.
+    fn said(&self, arrow: &str) -> Vec<String> {
         let shown = |patterns: &[String]| {
             if patterns.is_empty() {
                 return "none".to_owned();
@@ -732,7 +735,7 @@ impl Patterns {
             .zip(self.before.iter().zip(&self.after))
             .filter(|(_, (before, after))| before != after)
             .map(|(key, (before, after))| {
-                format!("{key} {} \u{2192} {}", shown(before), shown(after))
+                format!("{key} {} {arrow} {}", shown(before), shown(after))
             })
             .collect()
     }
@@ -770,7 +773,7 @@ fn name_patterns(
         let Some(after) = asked(&now, &after, &spec.after) else {
             continue;
         };
-        dataset.said = fields_said(&dataset.fields, Some(&Patterns { before, after }));
+        dataset.patterns = Some(Patterns { before, after });
     }
 }
 
@@ -903,9 +906,9 @@ fn tell(context: &Context, datasets: &[Dataset], (from, to): (&str, &str), again
         .filter(|_| !output.shows_details())
         .map_or(usize::MAX, |_| SHOWN);
     for dataset in datasets {
-        let mut text = summary(dataset, from, to);
+        let mut text = summary(dataset, from, to, output.arrow());
         if output.shows_items() {
-            text.push_str(&file_lines(dataset, most, again));
+            text.push_str(&file_lines(dataset, most, again, output.arrow()));
         }
         output.answer(&text);
     }
@@ -932,10 +935,10 @@ fn tell(context: &Context, datasets: &[Dataset], (from, to): (&str, &str), again
 
 /// a line for each of `dataset`'s files, at most `most` of them, then one counting the rest that
 /// names `again`, which lists them all.
-fn file_lines(dataset: &Dataset, most: usize, again: &str) -> String {
+fn file_lines(dataset: &Dataset, most: usize, again: &str, arrow: &str) -> String {
     let mut text = String::new();
     for file in dataset.files.iter().take(most) {
-        let _ = write!(text, "\n{}", line(&dataset.name, file));
+        let _ = write!(text, "\n{}", line(&dataset.name, file, arrow));
     }
     let hidden = dataset.files.len().saturating_sub(most);
     if hidden > 0 {
@@ -948,9 +951,10 @@ fn file_lines(dataset: &Dataset, most: usize, again: &str) -> String {
     text
 }
 
-/// the line that says what changed in `dataset`: its fields, then how many files changed, or
-/// which of the sides, `from` and `to` as shown, lack its file list.
-fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
+/// the line that says what changed in `dataset`: its fields, each value then `arrow` then the one
+/// that replaced it, then how many files changed, or which of the sides, `from` and `to` as shown,
+/// lack its file list.
+fn summary(dataset: &Dataset, from: &str, to: &str, arrow: &str) -> String {
     let name = plain(&dataset.name);
     let files = match dataset.unlisted.as_slice() {
         [] => files_counted(dataset),
@@ -988,7 +992,7 @@ fn summary(dataset: &Dataset, from: &str, to: &str) -> String {
             format!("{} renamed to {name}; the same files", plain(before))
         }
         Change::Changed | Change::Relinked => {
-            let mut said = dataset.said.clone();
+            let mut said = fields_said(&dataset.fields, dataset.patterns.as_ref(), arrow);
             said.push(files);
             format!("{name} changed: {}", said.join("; "))
         }
@@ -1036,11 +1040,11 @@ fn files_counted(dataset: &Dataset) -> String {
 }
 
 /// a file's line: A, D or M, its path below the dataset's name, and its size, or for one that
-/// changed its size before and after.
-fn line(dataset: &str, file: &File) -> String {
+/// changed its size before and after, `arrow` between them.
+fn line(dataset: &str, file: &File, arrow: &str) -> String {
     let path = plain(&file.path);
     let dataset = plain(dataset);
-    let moved = file.link.as_ref().and_then(Link::moved);
+    let moved = file.link.as_ref().and_then(|link| link.moved(arrow));
     let link = moved
         .as_ref()
         .map(|moved| format!(", {moved}"))
@@ -1070,7 +1074,7 @@ fn line(dataset: &str, file: &File) -> String {
             }
         ),
         (Change::Changed, Some(before), Some(after)) => format!(
-            "M  {dataset}/{path}  {} \u{2192} {}{link}",
+            "M  {dataset}/{path}  {} {arrow} {}{link}",
             units::size(before.size),
             units::size(after.size)
         ),

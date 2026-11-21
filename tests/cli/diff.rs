@@ -56,6 +56,33 @@ fn done(sandbox: &Sandbox, folder: &Path, args: &[&str]) -> Result {
     Ok(())
 }
 
+/// under `LANG=C` a diff once wrote `M  sim/x->y.csv  20 B -> 19 B`, the file's own arrow turned
+/// into ascii with the one between its sizes: only the arrow fetchloom writes between them is.
+#[test]
+fn an_ascii_locale_keeps_the_arrow_a_file_name_holds() -> Result {
+    let sandbox = Sandbox::new()?;
+    let study = sandbox.work().join("study");
+    fs::create_dir_all(&study)?;
+    let named = "x%E2%86%92y.csv";
+    let routes = source(&sandbox, &[(named, FIRST)])?;
+    let url = format!("{}/files/{named}", routes.url);
+    done(&sandbox, &study, &["add", &url, "--as", "sim"])?;
+    if ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    ok(&sandbox, &["add", "."])?;
+    ok(&sandbox, &["commit", "-qm", "first"])?;
+    routes.change(vec![(format!("/files/{named}"), served(SECOND))]);
+    done(&sandbox, &study, &["lock", "--upgrade", "sim"])?;
+    let ascii = command(&sandbox, &study, &["diff"]).in_ascii().output()?;
+    let ascii = text(&ascii.stdout)?;
+    assert!(
+        ascii.ends_with("M  sim/x\u{2192}y.csv  20 B -> 19 B\n"),
+        "{ascii}"
+    );
+    Ok(())
+}
+
 /// a project in `study` below the repository's top: a source's file changes, one dataset goes and
 /// another comes, each file a line as `git diff --name-status` gives one, then the same between
 /// two commits as `--json` gives it.
@@ -126,6 +153,9 @@ fn diff_names_each_dataset_and_file_a_change_pins() -> Result {
             .collect::<Vec<_>>(),
         "-q keeps a line for each dataset alone"
     );
+    let ascii = command(&sandbox, &study, &["diff"]).in_ascii().output()?;
+    let ascii = text(&ascii.stdout)?;
+    assert!(ascii.ends_with("20 B -> 19 B\n"), "{ascii}");
 
     ok(&sandbox, &["add", "-A"])?;
     ok(&sandbox, &["commit", "-qm", "second"])?;

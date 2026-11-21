@@ -47,8 +47,12 @@ fn told(datasets: &[Dataset]) -> Vec<String> {
     datasets
         .iter()
         .flat_map(|dataset| {
-            std::iter::once(summary(dataset, "A", "B"))
-                .chain(dataset.files.iter().map(|file| line(&dataset.name, file)))
+            std::iter::once(summary(dataset, "A", "B", "\u{2192}")).chain(
+                dataset
+                    .files
+                    .iter()
+                    .map(|file| line(&dataset.name, file, "\u{2192}")),
+            )
         })
         .collect()
 }
@@ -203,11 +207,13 @@ fn a_terminal_shows_the_first_files_and_counts_the_rest() {
     let datasets = diffed(&before, &after);
     let again = "fetchloom diff HEAD~1 -v";
     assert_eq!(
-        file_lines(&datasets[0], 2, again),
+        file_lines(&datasets[0], 2, again, "\u{2192}"),
         "\nA  iris/a.csv  5 B\nA  iris/b.csv  5 B\nand 2 more \u{b7} `fetchloom diff HEAD~1 -v` names each"
     );
     assert_eq!(
-        file_lines(&datasets[0], usize::MAX, again).lines().count(),
+        file_lines(&datasets[0], usize::MAX, again, "\u{2192}")
+            .lines()
+            .count(),
         5
     );
 }
