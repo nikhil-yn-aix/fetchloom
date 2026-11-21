@@ -239,7 +239,10 @@ has the usual tasks.
   warnings  each with kind, message, details and help
   errors    none on success, else one, with kind, message, details, help
             and fix
-`fetchloom help --json` describes every command and its options.
+`fetchloom help --json` describes every command and its options. stderr
+stays empty with --json alone, so a script that reads both streams together
+still gets one document; add --progress to keep plain progress lines on
+stderr for a person watching a long download, as in a notebook.
 
 errors[0].kind, and the exit code it gives:
     1  unconfirmed, lock.outdated, data.not_ready

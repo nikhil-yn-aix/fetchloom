@@ -80,6 +80,13 @@ fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
             "{left}: {short}"
         );
     }
+    // a notebook that runs --json alone shows nothing while a download runs
+    let below_json = long
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("--json "))
+        .nth(1)
+        .unwrap_or_default();
+    assert!(below_json.trim_start().starts_with("--progress "), "{long}");
     for command in [
         "", "add", "get", "sync", "status", "path", "list", "remove", "search",
     ] {
