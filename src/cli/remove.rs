@@ -273,8 +273,11 @@ fn named(manifest: &Manifest, names: &[String]) -> Result<(), Error> {
             match exclusion(manifest, name) {
                 Some(help) => error.help(help),
                 None if names.len() > 1
-                    && crate::name::closest(name, manifest.datasets.keys().map(String::as_str))
-                        .is_none() =>
+                    && crate::name::closest(
+                        &name.to_lowercase(),
+                        manifest.datasets.keys().map(String::as_str),
+                    )
+                    .is_none() =>
                 {
                     let others: Vec<&str> = names
                         .iter()

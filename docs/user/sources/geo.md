@@ -18,7 +18,7 @@ fetchloom get geo:GSM2666939
 | `https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE1000` | accept an accession's page on GEO's site |
 | `https://ftp.ncbi.nlm.nih.gov/geo/series/GSE1nnn/GSE1000/` | accept an accession's folder on NCBI's file server; a link to a folder inside it, as `…/GSE1000/suppl/`, selects that folder |
 
-accessions are written in capitals, whatever case they are typed in. a link to one file on NCBI's file server stays an ordinary [URL](urls-and-dois.md), and so do NCBI's other pages. GEO DataSets (GDS) are not listed, nor the SOFT text GEO's site makes for an accession on request, as GEOquery downloads a sample's.
+accessions are written in capitals, whatever case they are typed in, while the dataset's name in data.toml is lowercase, as `gse1000`, since every dataset's name is. a command given the accession in capitals, as `fetchloom path GSE1000`, is refused with the name to use instead, as ``did you mean `fetchloom path gse1000`?``. a link to one file on NCBI's file server stays an ordinary [URL](urls-and-dois.md), and so do NCBI's other pages. GEO DataSets (GDS) are not listed, nor the SOFT text GEO's site makes for an accession on request, as GEOquery downloads a sample's.
 
 ## which files
 

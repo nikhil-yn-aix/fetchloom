@@ -2250,8 +2250,11 @@ pub(super) fn known_with_rest(
         );
         error.help(format!("leave it out, as in `{shown}`"))
     };
+    // fetchloom names datasets in lowercase, while a source may write the same id in capitals,
+    // as GEO's GSE60450
+    let lower = name.to_lowercase();
     Err(
-        match name::closest(name, manifest.datasets.keys().map(String::as_str)) {
+        match name::closest(&lower, manifest.datasets.keys().map(String::as_str)) {
             Some(best) if others.contains(&best) => leave_out(error),
             Some(best) => {
                 let shown = super::meant(
@@ -2306,6 +2309,30 @@ pub(crate) mod tests {
         assert_eq!(
             super::named_below(&below),
             ["analysis/", "two words/", "another folder"]
+        );
+    }
+
+    /// a name typed in capitals, as GEO writes GSE60450, meets the lowercase name fetchloom gave
+    /// the dataset, with what was typed after it kept.
+    #[test]
+    fn a_name_typed_in_capitals_suggests_the_dataset_in_lowercase() {
+        let manifest = super::Manifest::parse(
+            "[datasets.gse60450]\nref = \"geo:GSE60450\"\n\n[datasets.iris]\nref = \"https://example.org/iris.csv\"\n",
+        )
+        .unwrap();
+        let refused = super::known(&manifest, "GSE60450", "path").unwrap_err();
+        assert_eq!(
+            refused.message,
+            "data.toml has no dataset called \"GSE60450\""
+        );
+        assert_eq!(
+            refused.help.as_deref(),
+            Some("did you mean `fetchloom path gse60450`?")
+        );
+        let file = super::known_with_rest(&manifest, "GSE60450", "/suppl/a.txt", "path", &[]);
+        assert_eq!(
+            file.unwrap_err().help.as_deref(),
+            Some("did you mean `fetchloom path gse60450/suppl/a.txt`?")
         );
     }
 
