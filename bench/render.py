@@ -234,10 +234,13 @@ def judge(case, runs, comparator=None):
     99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict, against
     the comparator frozen before the runs in a headline case and against the fastest other tool that
     passed every run elsewhere, or the reason there is none. a reason that holds for the whole case,
-    such as a noisy machine, withholds every tool's verdict in it."""
+    such as a noisy machine or a campaign cut short of the rounds it planned, withholds every tool's
+    verdict in it."""
     key = (case["filesystem"], case["profile"], case["scenario"])
     headline = key in HEADLINE
     level = FAMILY if headline else .95
+    planned = case.get("planned")
+    plan = set(range(1, planned + 1)) if isinstance(planned, int) and planned > 0 else None
     rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
     base = rounds.get(ab.BASE, {})
     comparisons = {}
@@ -251,6 +254,12 @@ def judge(case, runs, comparator=None):
     own_failed = sum(row.get("status") != "passed" for row in base.values())
     if not base:
         withheld = "fetchloom did not run"
+    elif plan is None:
+        withheld = "its campaign's meta.json records no planned rounds for it"
+    elif base.keys() != plan:
+        # a campaign stopped early stops every arm alike, so its rounds still pair; only the plan shows it
+        withheld = (f"fetchloom ran {len(base)} of the {planned} planned rounds" if base.keys() < plan
+                    else f"fetchloom ran rounds other than the {planned} planned")
     elif own_failed:
         withheld = f"fetchloom failed {own_failed} of {len(base)} runs"
     elif over_budget(base) or (AA in rounds and over_budget(rounds[AA])):
@@ -286,6 +295,13 @@ def judge(case, runs, comparator=None):
         reason = None
     return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason, withheld=withheld,
                 rival=rival if reason is None else None, comparator=comparator if headline else None)
+
+
+def planned(metas):
+    """the measured rounds each case's campaign planned before its runs, from its meta.json, as
+    fs/profile/scenario."""
+    return {f"{case['filesystem']}/{case['profile']}/{case['id']}": case.get("rounds")
+            for meta in metas for case in meta.get("cases") or []}
 
 
 def frozen(metas):
@@ -424,6 +440,8 @@ def load_results(results):
     live_origins = {}
     for path in paths:
         meta, records = read_campaign(path)
+        # a case's plan is read from the campaign that lists it, so its rows must be that campaign's
+        listed = {(case.get("filesystem"), case.get("profile"), case.get("id")) for case in meta.get("cases") or []}
         datasets = {dataset["service"]: dataset for dataset in meta.get("datasets", [])}
         if len(datasets) != len(meta.get("datasets", [])):
             raise ValueError(f"live metadata repeats a service in {path.with_name('meta.json')}")
@@ -433,6 +451,8 @@ def load_results(results):
                 continue
             if row.get("kind") != meta["kind"] or row.get("quick") != meta["quick"]:
                 raise ValueError(f"mixed benchmark conditions in {path}")
+            if listed and row["kind"] == "lab" and (row.get("filesystem"), row.get("profile"), row.get("scenario")) not in listed:
+                raise ValueError(f"a row of a case its campaign never listed in {path}")
             if "tool" not in row:
                 if meta["kind"] == "live" and row.get("status") == "skipped":
                     continue
@@ -497,14 +517,17 @@ def group(rows, metas):
         if conditions.setdefault(key, condition) != condition:
             raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
         lab[key][row["tool"]].append(row)
-    check_chunks([meta for meta in metas if meta.get("kind") == "lab"])
-    comparators = frozen([meta for meta in metas if meta.get("kind") == "lab"])
+    campaigns = [meta for meta in metas if meta.get("kind") == "lab"]
+    check_chunks(campaigns)
+    comparators = frozen(campaigns)
+    plans = planned(campaigns)
     shaping = network_profiles(metas)
     cases = []
     for scenario, profile, fs in sorted(lab, key=lambda key: (lead(key[1]), key)):
         _, count, file_size = conditions[scenario, profile, fs]
         case = dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
-                    link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]))
+                    link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]),
+                    planned=plans.get(f"{fs}/{profile}/{scenario}"))
         cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs], comparators.get(f"{fs}/{profile}/{scenario}"))))
     # a dropped link's cost is set against the same tool's s1, the same file on the same link
     for case in cases:

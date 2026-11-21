@@ -74,7 +74,7 @@ class RenderTests(Quiet):
         try:
             rows = headline_rows(curl=2)
             (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
-            (root / "meta.json").write_text(json.dumps(dict(kind="lab", quick=False, comparators={"ext4/home/s1": "curl"})))
+            (root / "meta.json").write_text(json.dumps(lab_meta(rows, comparators={"ext4/home/s1": "curl"})))
             render.render(root, root / "report")
             self.assertTrue((charts / "hero-s1-home-ext4.svg").exists())
             self.assertTrue((charts / "hero-s1-home-ext4-dark.svg").exists())
@@ -127,7 +127,8 @@ class RenderTests(Quiet):
             self.assertEqual(page.count("- CPU:"), 1)
             self.assertEqual(page.count("- recorded"), 3)
             self.assertIn("xfs/lan/s1", page)
-            twice = dict(kind="lab", quick=False, cases=[dict(filesystem="ext4", profile="lan", id="s1")])
+            twice = dict(kind="lab", quick=False, cases=[dict(filesystem="ext4", profile="home", id="s1"),
+                                                         dict(filesystem="ext4", profile="lan", id="s1")])
             (root / "two" / "meta.json").write_text(json.dumps(twice))
             with self.assertRaisesRegex(ValueError, "twice"):
                 render.render(root, root / "report")
@@ -246,6 +247,17 @@ def lab_row(**changes):
                      count=1, file_size=4, status="passed", wall_seconds=1, round=1), **changes)
 
 
+def lab_meta(rows, rounds=None, **changes):
+    """a full lab campaign's meta.json for these rows, each case planned for `rounds` measured
+    rounds, by default as many as its rows ran."""
+    ran = {}
+    for row in rows:
+        key = (row["filesystem"], row["profile"], row["scenario"])
+        ran[key] = max(ran.get(key, 0), row["round"])
+    cases = [dict(filesystem=fs, profile=profile, id=scenario, rounds=rounds or most) for (fs, profile, scenario), most in ran.items()]
+    return dict(dict(kind="lab", quick=False, cases=cases), **changes)
+
+
 def headline_rows(rounds=10, scenario="s1", profile="home", aa=(1,), **walls):
     """ten full rounds of a case: fetchloom at 1 s, its a/a arm at the given walls in turn, and each
     other tool at its own wall."""
@@ -280,6 +292,8 @@ class LoadResultsTests(Quiet):
             ("a full run in a smoke campaign", [lab_row(quick=False)], dict(kind="lab", quick=True), "mixed benchmark conditions in"),
             ("no tool", [{k: v for k, v in lab_row().items() if k != "tool"}], dict(kind="lab", quick=True), "a measured row has no tool"),
             ("a round twice", [lab_row(), lab_row()], dict(kind="lab", quick=True), "duplicate measured row"),
+            ("a case not planned", [lab_row(), lab_row(scenario="s3")], lab_meta([lab_row()], quick=True),
+             "a row of a case its campaign never listed"),
             ("no reference", [dict(live_row, service="kaggle")], live, "live metadata has no reference dataset for kaggle"),
             ("other bytes", [dict(live_row, files={"a": "2"})], live, "live checked bytes do not match metadata for zenodo"),
         ]
@@ -382,7 +396,16 @@ class PageTests(Quiet):
         # fetchloom failed a run of the headline case; s3 on lan is clear, but describes and claims nothing
         rows = headline_rows(curl=2) + headline_rows(scenario="s3", profile="lan", curl=2)
         rows[0] = dict(rows[0], status="failed")
-        self.render(rows, dict(kind="lab", quick=False, comparators={"ext4/home/s1": "curl"}))
+        self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
+        cards = Path(self.printed.getvalue().split(" and ")[1].strip())
+        self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
+
+    def test_a_campaign_cut_short_of_its_planned_rounds_publishes_no_verdict(self):
+        # every arm stopped after 10 of the 20 planned rounds, so each still pairs with fetchloom
+        rows = headline_rows(curl=2)
+        page = self.render(rows, lab_meta(rows, rounds=20, comparators={"ext4/home/s1": "curl"}))
+        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | withheld |", page)
+        self.assertIn("\nno verdict: fetchloom ran 10 of the 20 planned rounds.", page)
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
 
@@ -401,7 +424,7 @@ class PageTests(Quiet):
         import xml.etree.ElementTree as ET
         rows = headline_rows(curl=3)
         rows[0] = dict(rows[0], wall_seconds=2)
-        self.render(rows, dict(kind="lab", quick=False, comparators={"ext4/home/s1": "curl"}))
+        self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         drawn = sorted(card.name for card in cards.glob("*.svg"))
         self.assertEqual(drawn, ["hero-s1-home-ext4-dark.svg", "hero-s1-home-ext4.svg", "s1-home-ext4-dark.svg", "s1-home-ext4.svg"])
@@ -429,7 +452,7 @@ class PageTests(Quiet):
         """one face rides in each card, source serif 4, and a hero card names its scenario as written,
         never in capitals."""
         import xml.etree.ElementTree as ET
-        self.render(headline_rows(curl=3), dict(kind="lab", quick=False, comparators={"ext4/home/s1": "curl"}))
+        self.render(headline_rows(curl=3), lab_meta(headline_rows(curl=3), comparators={"ext4/home/s1": "curl"}))
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         svg = "{http://www.w3.org/2000/svg}"
         hero = ET.parse(cards / "hero-s1-home-ext4.svg")
@@ -485,7 +508,8 @@ class PageTests(Quiet):
         self.assertIn("| fetchloom | 33.00 s | n/a | n/a | 1.000x |", page)
 
     def test_a_verdict_gives_the_seconds_before_the_ratio(self):
-        page = self.render(headline_rows(curl=2, aria2c=1.5), dict(kind="lab", quick=False, comparators={"ext4/home/s1": "curl"}))
+        rows = headline_rows(curl=2, aria2c=1.5)
+        page = self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
         self.assertIn("| time over fetchloom's, 99.2% interval | verdict |", page)
         self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
         self.assertIn("| fetchloom+aa | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | a/a arm, never a rival |", page)
@@ -512,11 +536,11 @@ class PageTests(Quiet):
 
 
 class VerdictTests(unittest.TestCase):
-    def judged(self, rows, scenario="s1", profile="home", filesystem="ext4", comparator=None):
+    def judged(self, rows, scenario="s1", profile="home", filesystem="ext4", comparator=None, planned=10):
         runs = {}
         for row in rows:
             runs.setdefault(row["tool"], []).append(row)
-        case = dict(scenario=scenario, profile=profile, filesystem=filesystem, summaries=render.summaries(runs))
+        case = dict(scenario=scenario, profile=profile, filesystem=filesystem, summaries=render.summaries(runs), planned=planned)
         return render.judge(case, runs, comparator)
 
     def test_a_headline_case_sets_fetchloom_against_the_comparator_frozen_before_its_runs(self):
@@ -552,7 +576,7 @@ class VerdictTests(unittest.TestCase):
 
     def test_a_verdict_needs_ten_paired_rounds_and_a_fetchloom_that_never_failed(self):
         poor = self.judged(headline_rows(rounds=9, scenario="s2r", profile="poor", curl=2), scenario="s2r", profile="poor",
-                           comparator="curl")
+                           comparator="curl", planned=9)
         self.assertEqual((poor["rival"], poor["reason"]), (None, "curl, the frozen comparator, has 9 paired rounds, fewer than 10"))
         rows = headline_rows(curl=2)
         rows[0] = dict(rows[0], status="failed")
@@ -562,10 +586,11 @@ class VerdictTests(unittest.TestCase):
         rows = headline_rows(curl=2)
         failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+aa", 4) else row for row in rows]
         missing = [row for row in rows if (row["tool"], row["round"]) != ("fetchloom+aa", 10)]
-        for changed, said in ((failed, "the a/a arm failed 1 of 10 runs, so it cannot measure this machine's noise"),
-                              (missing, "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise"),
-                              (headline_rows(rounds=9, curl=2), "the a/a arm has 9 paired rounds, fewer than 10, so it cannot measure this machine's noise")):
-            judged = self.judged(changed, comparator="curl")
+        for changed, planned, said in (
+                (failed, 10, "the a/a arm failed 1 of 10 runs, so it cannot measure this machine's noise"),
+                (missing, 10, "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise"),
+                (headline_rows(rounds=9, curl=2), 9, "the a/a arm has 9 paired rounds, fewer than 10, so it cannot measure this machine's noise")):
+            judged = self.judged(changed, comparator="curl", planned=planned)
             self.assertEqual((judged["rival"], judged["reason"], judged["withheld"]), (None, said, said))
             # the table's verdicts are withheld too, though curl's interval alone would say fetchloom faster
             self.assertIsNone(judged["comparisons"]["curl"]["word"])
@@ -574,6 +599,24 @@ class VerdictTests(unittest.TestCase):
         poor = self.judged([dict(row, scenario="s2r", profile="poor") for row in failed], scenario="s2r", profile="poor",
                            comparator="curl")
         self.assertEqual((poor["rival"], poor["withheld"]), ("curl", None))
+
+    def test_every_arm_must_run_the_rounds_its_campaign_planned(self):
+        # cut short together after 10 of 20 planned rounds, every arm still pairs with fetchloom
+        cut = headline_rows(curl=2)
+        judged = self.judged(cut, comparator="curl", planned=20)
+        said = "fetchloom ran 10 of the 20 planned rounds"
+        self.assertEqual((judged["rival"], judged["reason"], judged["withheld"]), (None, said, said))
+        self.assertEqual((judged["comparisons"]["curl"]["word"], render.said("curl", judged)), (None, "withheld"))
+        self.assertIsNone(render.hero(dict(scenario="s1", profile="home", summaries={}, judged=judged)))
+        self.assertEqual(self.judged(cut, comparator="curl")["rival"], "curl")
+        # no plan on record, or rounds the plan never had, keep no plan either
+        self.assertEqual(self.judged(cut, comparator="curl", planned=None)["reason"],
+                         "its campaign's meta.json records no planned rounds for it")
+        self.assertEqual(self.judged(cut, comparator="curl", planned=8)["reason"], "fetchloom ran rounds other than the 8 planned")
+        # fetchloom ran its plan, the a/a arm stopped short with the comparator: still no verdict
+        short = [row for row in headline_rows(rounds=20, curl=2) if row["tool"] == "fetchloom" or row["round"] <= 10]
+        self.assertEqual(self.judged(short, comparator="curl", planned=20)["withheld"],
+                         "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise")
 
     def test_a_run_over_the_budget_withholds_its_verdict_and_keeps_its_measurements(self):
         rows = headline_rows(curl=2, aria2c=1.5)
