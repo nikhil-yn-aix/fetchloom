@@ -53,7 +53,7 @@ unit tests sit beside their module, in `tests.rs`, `*_tests.rs` or another file 
 | `src/cli/get/preview.rs` | `get --dry-run`: what a get would fetch and where it would land, planned from the listings and the cache, writing nothing, not even the cache folder | `run` |  |
 | `src/cli/get/remembered.rs` | what an earlier `get` kept of a link only its source can list, which stands in for the listing offline | `keep`, `listing` |  |
 | `src/cli/search.rs` | `search`, its candidate rows, and the choice among candidates that `add` and `get` offer | `run`, `pick` | `Report`, `find` |
-| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache and the weekly size reminder | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop` |
+| `src/cli/cache.rs` | `cache`, `cache gc` and `cache verify`, the projects that use the cache and the weekly size reminder | `info`, `gc`, `verify` | `Info`, `Collected`, `needed_with`, `needed_for_drop`, `needing` |
 | `src/cli/cache/usage.rs` | where the cache's space goes, for `fetchloom cache` and the weekly reminder alike | `Usage::measure` | `Usage` |
 | `src/cli/audit.rs` | `audit`: whether a mirror or its source still serves each file data.lock pins, whether the source lists a newer version or changed a title, license or access, its `--json` result, and the check `--check` makes | `run` | `Report`, `listings`, `changes`, `tell`, `ready` |
 | `src/cli/auth.rs` | `auth`: signed-in accounts, signing in and out, and the offer to sign in after a refused download | `run`, `offer` | `Report` |

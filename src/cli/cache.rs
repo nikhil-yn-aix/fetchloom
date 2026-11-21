@@ -939,6 +939,66 @@ pub(in crate::cli) fn needed_besides(
     Ok(needed_focused(cache, Some(current), stop, false, false, Some(&focus))?.needed)
 }
 
+/// who needs any of `objects`, as gc reads what a project needs: whether `current`, the lock of
+/// the project at `here` without what a drop frees, does, and which other registered projects do.
+#[derive(Default)]
+pub(in crate::cli) struct Needing {
+    pub(in crate::cli) here: bool,
+    /// in the order the cache lists them. a project that cannot be read is left out, since this
+    /// only says who else needs them.
+    pub(in crate::cli) others: Vec<PathBuf>,
+}
+
+/// [`Needing`] for `objects`, `current` standing for the project at `here`.
+pub(in crate::cli) fn needing(
+    cache: &Cache,
+    (here, current): (&Path, Option<&Lock>),
+    objects: &HashSet<Sha256>,
+    stop: &Stop,
+) -> Result<Needing, Error> {
+    let mut found = Needing::default();
+    if objects.is_empty() {
+        return Ok(found);
+    }
+    let needs_any = |lock: &Lock, manifest: Option<&Manifest>| -> Result<bool, Error> {
+        let mut needs = Needed::default();
+        add_with_stop(&mut needs, cache, lock, manifest, None, stop)?;
+        Ok(needs.objects.iter().any(|digest| objects.contains(digest)))
+    };
+    if let Some(current) = current {
+        found.here = needs_any(current, None)?;
+    }
+    for root in cache.registered_projects(stop)? {
+        stop.check()?;
+        if same_project(here, &root) {
+            continue;
+        }
+        let project = Project::at(root);
+        let Ok(Some(text)) = manifest_of(cache, &project) else {
+            continue;
+        };
+        let kept = std::str::from_utf8(&text)
+            .ok()
+            .and_then(|text| Manifest::parse(text).ok());
+        let Ok(Some(lock)) = project.lock() else {
+            continue;
+        };
+        let (state, _) = project.state_within(&[], &|_| false);
+        let lock = super::drop::kept_here(lock, &state.dropped);
+        if needs_any(&lock, kept.as_ref())? {
+            found.others.push(project.root);
+        }
+    }
+    Ok(found)
+}
+
+/// whether `here` and `root` name one project folder.
+fn same_project(here: &Path, root: &Path) -> bool {
+    here == root
+        || fs::canonicalize(here)
+            .is_ok_and(|here| fs::canonicalize(root).is_ok_and(|root| here == root))
+}
+
 /// the archives a drop asks about, and which of their members the cache was found to hold.
 struct Focus {
     candidates: HashSet<Sha256>,
@@ -960,11 +1020,9 @@ impl Focus {
 
     /// whether the walk's `current` lock stands for the project at `root`.
     fn stands_for(&self, root: &Path) -> bool {
-        self.here.as_deref().is_some_and(|here| {
-            here == root
-                || fs::canonicalize(here)
-                    .is_ok_and(|here| fs::canonicalize(root).is_ok_and(|root| here == root))
-        })
+        self.here
+            .as_deref()
+            .is_some_and(|here| same_project(here, root))
     }
 
     /// whether one of the files of `archive` is among the candidates.

@@ -964,13 +964,11 @@ fn preview(
         context.threads,
         &context.stop,
     )?;
-    let freed: Vec<(&Sha256, &u64)> = objects
+    let (kept, freed): (Vec<_>, Vec<_>) = objects
         .sizes
         .iter()
-        .filter(|(digest, _)| {
-            !needed.objects.contains(*digest) && cache.find(digest, None).is_some()
-        })
-        .collect();
+        .filter(|(digest, _)| cache.find(digest, None).is_some())
+        .partition(|(digest, _)| needed.objects.contains(*digest));
     report.files = preview.changes.remove.len() as u64;
     report.objects = freed.len() as u64;
     let removed: u64 = preview
@@ -983,6 +981,13 @@ fn preview(
     context.output.step(
         "Would drop",
         &freed_line(report, "free", &manifest.data_dir),
+    );
+    tell_kept_for(
+        context,
+        &cache,
+        (&project.root, &current),
+        &kept,
+        "Would keep",
     );
     tell_kept(&context.output, &preview.placement, "would keep");
     report.placement = Some(preview.placement);
@@ -1135,8 +1140,12 @@ fn free(
     let mut digests: Vec<(&Sha256, &u64)> = objects.sizes.iter().collect();
     digests.sort();
     let (mut freed, mut bytes) = (0, 0);
+    let mut kept = Vec::new();
     for (digest, size) in digests {
         if needed.objects.contains(digest) {
+            if cache.find(digest, None).is_some() {
+                kept.push((digest, size));
+            }
             continue;
         }
         if let Some((root, label)) = context.mirrors.changed(digest) {
@@ -1167,7 +1176,64 @@ fn free(
     context
         .output
         .done("Dropped", &freed_line(report, "freed", &manifest.data_dir));
+    tell_kept_for(context, &cache, (&project.root, &current), &kept, "Kept");
     Ok(())
+}
+
+/// says, after `verb`, who keeps `kept` in the cache, files of the datasets freed that something
+/// else needs: other datasets of this project, as `current` pins them, or other projects on
+/// `cache`, up to three of them named, so a drop that frees less than its datasets hold says why.
+fn tell_kept_for(
+    context: &Context,
+    cache: &Cache,
+    here: (&Path, &Lock),
+    kept: &[(&Sha256, &u64)],
+    verb: &str,
+) {
+    const PROJECTS: usize = 3;
+    let objects = kept.iter().map(|(digest, _)| **digest).collect();
+    let needing =
+        match super::cache::needing(cache, (here.0, Some(here.1)), &objects, &context.stop) {
+            Ok(needing) => needing,
+            Err(error) => {
+                tracing::debug!(%error, "could not tell who keeps a dropped dataset's files");
+                return;
+            }
+        };
+    let mut who: Vec<String> = Vec::new();
+    if needing.here {
+        who.push("other datasets of this project".to_owned());
+    }
+    who.extend(
+        needing
+            .others
+            .iter()
+            .take(PROJECTS)
+            .map(|root| units::path(root)),
+    );
+    if needing.others.len() > PROJECTS {
+        who.push(units::count(
+            (needing.others.len() - PROJECTS) as u64,
+            "more project",
+            "more projects",
+        ));
+    }
+    if who.is_empty() {
+        return;
+    }
+    let bytes = kept
+        .iter()
+        .map(|(_, size)| **size)
+        .fold(0, u64::saturating_add);
+    context.output.step(
+        verb,
+        &format!(
+            "{} · {} in the cache for {}",
+            units::count(kept.len() as u64, "file", "files"),
+            units::size(bytes),
+            units::listed(&who, "and")
+        ),
+    );
 }
 
 /// the folders of `freeing`: an output's keeps the files data.lock pins, and any may keep a

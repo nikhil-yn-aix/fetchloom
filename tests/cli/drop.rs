@@ -332,6 +332,34 @@ fn gc_frees_what_only_a_dropped_dataset_pins() -> Result {
     Ok(())
 }
 
+/// a drop frees no cache file another project needs, and says which project keeps it, in its dry
+/// run too, so a drop that freed nothing does not read as failed.
+#[test]
+fn a_drop_names_the_project_that_keeps_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    ok(&sandbox.command_in(&clone, &["sync"]).output()?)?;
+    let kept = format!("1 file · 48 B in the cache for {}\n", clone.display());
+    for (args, verb) in [
+        (&["--yes", "drop", "iris", "--dry-run"][..], "Would keep"),
+        (&["--yes", "drop", "iris"], "Kept"),
+    ] {
+        let output = sandbox.run(args)?;
+        ok(&output)?;
+        let stderr = text(&output.stderr)?;
+        assert!(
+            stderr.contains(&format!("{verb} {kept}")),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert!(object(&sandbox.cache(), IRIS).exists());
+    Ok(())
+}
+
 /// a source that gives no answer leaves a file not checked: the dataset stays, with the exit a
 /// download would give, not as if the file were lost.
 #[test]
