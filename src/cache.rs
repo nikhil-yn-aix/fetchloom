@@ -389,7 +389,7 @@ pub(crate) fn unshared(root: &Path) -> Option<String> {
     if !sharing::group_shares(fs::metadata(root).ok()?.mode()) {
         return None;
     }
-    let mut fans: Vec<PathBuf> = ["objects", "keyed"]
+    let mut fans: Vec<PathBuf> = ["objects", "keyed", "partial"]
         .iter()
         .flat_map(|top| fs::read_dir(root.join(top)).into_iter().flatten().flatten())
         .map(|fan| fan.path())
@@ -1222,9 +1222,10 @@ impl Cache {
         let words = match err.kind() {
             io::ErrorKind::PermissionDenied => {
                 let words = format!("{} in {}", crate::error::said(&err), folder.display());
+                taken = self.closed_to_group(folder);
                 match self.denied_by_owner(folder) {
                     Some((owner, back)) => {
-                        taken = back;
+                        taken = back.or(taken);
                         format!("{words}, which belongs to {owner}")
                     }
                     None => words,
@@ -1249,6 +1250,35 @@ impl Cache {
                 cause: err,
             },
         )
+    }
+
+    /// the help for `folder`, which refused a write, in a cache a group shares where the folder
+    /// lets the group no write: its owner gives the group its write, as the clusters guide says,
+    /// rather than a member leaving the group's cache.
+    fn closed_to_group(&self, folder: &Path) -> Option<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let found = fs::symlink_metadata(folder).ok()?;
+            if !self.sharing.is_shared() || !found.is_dir() || found.mode() & 0o020 != 0 {
+                return None;
+            }
+            let shown = crate::suggested::shell_folder_path(folder);
+            Some(if found.uid() == run_as() {
+                format!(
+                    "the folder is yours, and a group shares the cache: give yourself and the group its write with `chmod ug+rwx {shown}`"
+                )
+            } else {
+                format!(
+                    "a group shares the cache, but only the folder's owner may write to it: they give the group its write with `chmod g+rwx {shown}`"
+                )
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (self, folder);
+            None
+        }
     }
 
     /// the owner of `folder`, which refused a write, when it is another user than this run's, and
@@ -1708,10 +1738,11 @@ pub(crate) fn read_only(err: &io::Error) -> bool {
 }
 
 /// the error for a write to the cache that `err` refused, with [`READ_ONLY`] for a cache that is
-/// read-only for this account.
+/// read-only for this account, unless `err` says what to fix itself, as for one folder of a cache
+/// a group shares.
 pub(crate) fn unwritten(err: &io::Error) -> crate::error::Error {
     let error = crate::error::Error::io("could not write to the cache", err);
-    if read_only(err) {
+    if read_only(err) && crate::error::explained_help(err).is_none() {
         return error.help(READ_ONLY);
     }
     error
@@ -2950,6 +2981,41 @@ pub(crate) mod tests {
                 shown("tmp")
             )))
         );
+    }
+
+    /// in a cache its group shares, a write a folder there refuses that lets the group no write
+    /// says how to give the group its write, for the folder's owner to run, never to leave the
+    /// group's cache; a folder whose owner is this user, who may not write it either, gets both.
+    #[cfg(unix)]
+    #[test]
+    fn a_write_a_folder_closed_to_the_group_refuses_says_how_to_open_it() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let (_dir, cache) = cache();
+        let root = cache.root.clone();
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o2770)).unwrap();
+        if fs::metadata(&root).unwrap().mode() & 0o7777 != 0o2770 {
+            return crate::test_skips::skip("permissions", "this disk keeps no setgid folder");
+        }
+        let shared = Cache::open(root.clone()).unwrap();
+        let folder = root.join("partial").join("f");
+        fs::create_dir_all(&folder).unwrap();
+        let denied = || io::Error::from_raw_os_error(rustix::io::Errno::ACCESS.raw_os_error());
+        for (mode, help) in [
+            (
+                0o2550,
+                Some(format!(
+                    "the folder is yours, and a group shares the cache: give yourself and the group its write with `chmod ug+rwx {}`",
+                    folder.display()
+                )),
+            ),
+            (0o2770, None),
+        ] {
+            fs::set_permissions(&folder, fs::Permissions::from_mode(mode)).unwrap();
+            let error = unwritten(&shared.explained(&folder, denied()));
+            let help = help.unwrap_or_else(|| READ_ONLY.to_owned());
+            assert_eq!(error.help.as_deref(), Some(help.as_str()), "{mode:o}");
+        }
+        fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     #[test]

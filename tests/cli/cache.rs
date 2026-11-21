@@ -335,6 +335,71 @@ fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
     Ok(())
 }
 
+/// in a cache a group shares, a folder of unfinished downloads only its owner may write keeps the
+/// group's other members from downloading: a run warns of it as of a folder of objects, and the
+/// download it refuses names the folder, its owner and the `chmod` that gives the group its write,
+/// never that the member should leave the group's cache. a debug build told it runs as another
+/// user stands for the member, and a folder its owner may not write either for one they may not.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_partial_folder_the_group_cannot_write_is_told_with_its_fix() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    if !crate::folders::shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = Server::start("/iris.csv", vec![file(IRIS, "\"v1\"")])?;
+    sandbox.make_cache(&sandbox.cache())?;
+    let digit = &crate::support::sha256_hex(server.url.as_bytes())[..1];
+    let shard = sandbox.cache().join("partial").join(digit);
+    fs::create_dir(&shard)?;
+    fs::set_permissions(&shard, fs::Permissions::from_mode(0o2550))?;
+
+    let output = sandbox
+        .command(&["--json", "get", &server.url])
+        .env("FETCHLOOM_TEST_EUID", "3999999999")
+        .output();
+    fs::set_permissions(&shard, fs::Permissions::from_mode(0o2770))?;
+
+    let output = output?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    let told = document["warnings"]
+        .as_array()
+        .and_then(|warnings| {
+            warnings
+                .iter()
+                .find(|warning| warning["kind"] == "cache.unshared")
+        })
+        .ok_or_else(|| format!("no cache.unshared warning: {document}"))?;
+    let shown = shard.display().to_string();
+    assert!(
+        told["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&shown)),
+        "{told}"
+    );
+    let error = &document["errors"][0];
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with(&format!(
+            "could not write to the cache: permission was denied in {shown}, which belongs to "
+        )),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "a group shares the cache, but only the folder's owner may write to it: they give the group its write with `chmod g+rwx {shown}`"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
 /// a lab's cache is a setgid folder its group may write. what a run makes there with the usual
 /// `umask 022` lets the group's other members add to each folder, as `umask 002` would, and with
 /// `umask 077` read each file too; nothing becomes writable by every user, an object stays

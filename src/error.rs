@@ -501,7 +501,7 @@ impl std::error::Error for Explained {
 }
 
 /// the help an [`Explained`] error carries.
-fn explained_help(err: &io::Error) -> Option<&str> {
+pub(crate) fn explained_help(err: &io::Error) -> Option<&str> {
     err.get_ref()?.downcast_ref::<Explained>()?.help.as_deref()
 }
 
