@@ -1230,6 +1230,27 @@ fn telling(interactive: bool) -> Output {
     output
 }
 
+/// a resized terminal once got every later line wrapped for the width the run began at, which the
+/// terminal then broke inside words: each line wraps at the width the terminal has as it is told.
+#[test]
+fn a_line_wraps_at_the_width_the_terminal_has_as_it_is_told() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static WIDTH: AtomicUsize = AtomicUsize::new(200);
+    let output = telling(false).fitted(Some(|| Some(WIDTH.load(Ordering::Relaxed))));
+    let text = "s9.bin - 2.0 MiB in 5.2 s - 393.2 KiB/s";
+    output.step("Downloaded", text);
+    WIDTH.store(30, Ordering::Relaxed);
+    output.step("Downloaded", text);
+    assert_eq!(
+        output.said(),
+        [
+            format!(" Downloaded {text}"),
+            " Downloaded s9.bin - 2.0 MiB\n            in 5.2 s -\n            393.2 KiB/s"
+                .to_owned()
+        ]
+    );
+}
+
 /// plain batch lines wait for answers too, so none writes over a question in accessible output.
 #[test]
 fn lines_told_during_a_question_wait_for_the_answer() {

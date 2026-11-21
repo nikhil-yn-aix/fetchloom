@@ -102,8 +102,10 @@ pub(crate) struct Output {
     /// the verb and what of each [`Output::lasting`] made, in order, for tests.
     #[cfg(test)]
     lasted: Mutex<Vec<String>>,
-    /// the width of the terminal stderr goes to, which a line wraps at between words, or none.
-    columns: Option<usize>,
+    /// reads the width of the terminal stderr goes to as each line is told, which a line wraps at
+    /// between words, so a terminal resized during a run gets lines as wide as it is now; none for
+    /// a pipe, a file or a coding agent.
+    columns: Option<Width>,
     /// the words withheld from the commands rows on stdout name, so every row of the run gives
     /// one name one placeholder, said once.
     withheld: Mutex<crate::suggested::Withheld>,
@@ -660,11 +662,16 @@ impl Output {
         }
     }
 
-    /// wraps each line told on stderr between words at `columns`, the width of the terminal it
-    /// goes to, so the terminal never wraps one inside a word.
-    pub(crate) fn fitted(mut self, columns: Option<usize>) -> Self {
+    /// wraps each line told on stderr between words at the width `columns` reads as it is told,
+    /// that of the terminal it goes to, so the terminal never wraps one inside a word.
+    pub(crate) fn fitted(mut self, columns: Option<Width>) -> Self {
         self.columns = columns;
         self
+    }
+
+    /// the width a line told now wraps at, as [`Output::fitted`] reads it.
+    fn columns(&self) -> Option<usize> {
+        self.columns.and_then(|read| read())
     }
 
     pub(crate) fn without_hints(mut self, off: bool) -> Self {
@@ -1088,7 +1095,7 @@ impl Output {
         Ticker::start(verb, what, known, (moment, planned), move |verb, text| {
             let line = verb_line(verb, text, Tone::Work, color);
             let line = shown(&line, unicode);
-            let line = match columns {
+            let line = match columns.and_then(|read| read()) {
                 Some(columns) => fit::fit(&line, columns),
                 None => line.into_owned(),
             };
@@ -1139,7 +1146,7 @@ impl Output {
             let choices = if default { "[Y/n]" } else { "[y/N]" };
             // wrapped between words at the terminal's width, as the story's lines are
             let asked = format!("{question} {choices}");
-            let asked = match self.columns {
+            let asked = match self.columns() {
                 Some(columns) => fit::fit(&asked, columns),
                 None => asked,
             };
@@ -1539,7 +1546,7 @@ impl Output {
     /// from the start of the line.
     fn prepared(&self, text: &str) -> String {
         let text = shown(text, self.style.unicode);
-        match self.columns {
+        match self.columns() {
             Some(columns) => self.at_start(&fit::fit(&text, columns)),
             None => self.at_start(&text),
         }
@@ -1715,14 +1722,22 @@ pub(crate) fn release_terminal() {
     raw::release();
 }
 
-/// the width of the terminal stderr goes to, which a line told there wraps at between words, or
-/// none for a pipe, a file or a coding agent, which reads each line whole.
-pub(crate) fn story_columns() -> Option<usize> {
+/// reads the width a line told on stderr wraps at as it is told.
+pub(crate) type Width = fn() -> Option<usize>;
+
+/// how a line told on stderr finds the width it wraps at between words: that of the terminal
+/// stderr goes to, read as each line is told, or none for a pipe, a file or a coding agent, which
+/// reads each line whole.
+pub(crate) fn story_columns() -> Option<Width> {
     let terminal =
         std::io::stderr().is_terminal() && !style::by_agent(&|name| std::env::var_os(name));
-    terminal
-        .then(|| console::Term::stderr().size_checked())
-        .flatten()
+    terminal.then_some(stderr_columns as Width)
+}
+
+/// the width of the terminal stderr goes to now, none when it gives none.
+fn stderr_columns() -> Option<usize> {
+    console::Term::stderr()
+        .size_checked()
         .map(|(_, columns)| usize::from(columns))
 }
 
