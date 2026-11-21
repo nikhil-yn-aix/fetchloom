@@ -751,7 +751,8 @@ fn a_listing_that_rounds_sizes_sizes_the_folder_about() -> Result {
 }
 
 /// a rounded size plans the run as it plans the dry run, and binds none of the bytes that come:
-/// psl's apache rounds each file to ` 1K`, and the add pins each at the bytes its server sends.
+/// psl's apache rounds each file to ` 1K`, and the add pins each at the bytes its server sends. a
+/// get tells the same plan.
 #[test]
 fn a_rounded_size_plans_the_run_as_its_dry_run() -> Result {
     let sandbox = Sandbox::new()?;
@@ -777,6 +778,13 @@ fn a_rounded_size_plans_the_run_as_its_dry_run() -> Result {
             pin("iris.csv", IRIS, &format!("{folder}iris.csv")),
             pin("sub/tips.csv", TIPS, &format!("{folder}sub/tips.csv")),
         ]
+    );
+    let got = Sandbox::new()?.run(&["get", &folder])?;
+    let stderr = text(&got.stderr)?;
+    assert_eq!(got.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("Downloading 2 files · about 2.0 KiB\n"),
+        "{stderr}"
     );
     Ok(())
 }

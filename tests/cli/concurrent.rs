@@ -62,6 +62,64 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
     Ok(())
 }
 
+/// two projects pinning one file sync into one cache, as two jobs do. the second waits for the
+/// first's download, so its log says it waited and never that it downloads, which the file's
+/// size, known from data.lock, would otherwise have it say before it learns it waits.
+#[test]
+fn a_sync_that_waited_for_anothers_download_says_it_downloaded_nothing() -> Result {
+    let sandbox = Sandbox::new()?;
+    let mut slow = reply(
+        "200 OK",
+        &[
+            ("Content-Length", &IRIS.len().to_string()),
+            ("ETag", "\"v1\""),
+        ],
+        b"",
+    );
+    let (release, held) = std::sync::mpsc::channel();
+    slow.push(Part::Wait(held));
+    slow.push(Part::Bytes(IRIS.to_vec()));
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), slow])?;
+    crate::project::added(&sandbox, &server)?;
+    let (first, second) = (
+        crate::project::clone(&sandbox, "first")?,
+        crate::project::clone(&sandbox, "second")?,
+    );
+    let cold = sandbox.folder("cold")?;
+    let sync = |project: &std::path::Path| {
+        let mut command = sandbox.command_in(project, &["sync"]);
+        command
+            .env("FETCHLOOM_CACHE", &cold)
+            .env("FETCHLOOM_TEST_TICKER", "on");
+        command
+    };
+    let downloading = Running::start(&mut sync(&first))?;
+    server.wait_for_requests(2)?;
+    let waiting = Running::start(&mut sync(&second))?;
+    let told = waiting.wait_for("Waiting iris/iris.csv · another fetchloom is downloading it");
+    drop(release);
+    told?;
+    let (waited, downloaded) = (waiting.finish()?, downloading.finish()?);
+    let (story, first_story) = (text(&waited.stderr)?, text(&downloaded.stderr)?);
+    assert_eq!(downloaded.status.code(), Some(0), "{first_story}");
+    assert!(
+        first_story.contains("Downloading iris/iris.csv · 32 B\n"),
+        "{first_story}"
+    );
+    assert_eq!(waited.status.code(), Some(0), "{story}");
+    assert!(!story.contains("Download"), "{story}");
+    assert_eq!(
+        server.requests().len(),
+        2,
+        "the file downloads once: {story}"
+    );
+    assert_eq!(
+        fs::read(second.join("data").join("iris").join("iris.csv"))?,
+        IRIS
+    );
+    Ok(())
+}
+
 /// eight syncs at once share one cache, as cluster jobs do, each project needing every file or,
 /// `overlapping`, its own and a neighbour's; cold, each URL downloads once, and `warm`, none.
 #[expect(

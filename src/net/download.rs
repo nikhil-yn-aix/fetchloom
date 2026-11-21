@@ -223,6 +223,8 @@ impl Fetch {
 pub(crate) enum Event {
     /// another fetchloom on this machine is downloading the same URL, and this one waits for it.
     Waiting,
+    /// the download goes ahead, holding its claim, as no other run brought the bytes meanwhile.
+    Begun,
     /// the cache's disk cannot lock files, so the download keeps its bytes in a file of its own
     /// that no later run can find, and a stop deletes them.
     Lockless,
@@ -705,6 +707,7 @@ impl Reach {
                 self.moved.fetch_add(*bytes, Ordering::Relaxed);
             }
             Event::Waiting
+            | Event::Begun
             | Event::Lockless
             | Event::Spoiled
             | Event::Restart(_)
@@ -925,6 +928,7 @@ impl Net {
         {
             return recalled(record, Origin::Cache, on);
         }
+        on(Event::Begun)?;
         if partial.lockless() {
             on(Event::Lockless)?;
         }

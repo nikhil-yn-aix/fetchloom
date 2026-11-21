@@ -1975,10 +1975,10 @@ async fn learn_names(
             .map(|job| (fetch::host_of(job), job.fetch.expect.size)),
     );
     let called = fetch::called(lacking.iter().map(|job| job.label.as_str()), planned.files);
-    fetch::tell_planned(&context.output, &called, &planned);
+    let plan = fetch::planned_line(&context.output, &called, &planned);
     let started = std::time::Instant::now();
     // the add changes nothing before its downloads are done
-    let fetched = fetch::all(context, net, cache, jobs)
+    let fetched = fetch::all(context, net, cache, jobs, plan)
         .await
         .map_err(Error::unchanged)?;
     let mut downloaded = Vec::new();

@@ -769,7 +769,7 @@ async fn from_web(
         })
         .collect();
     let started = Instant::now();
-    let results = super::apart(context, net, cache, jobs).await?;
+    let results = super::apart(context, net, cache, jobs, None).await?;
     let elapsed = context
         .output
         .took(Fetched::transfer(results.iter().flatten(), started));

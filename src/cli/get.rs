@@ -489,12 +489,12 @@ async fn one_link(
         asked.expected,
     )?;
     hint_shards(context, &wanted);
-    approve(context, &cache, &wanted.jobs)?;
+    let plan = approve(context, &cache, &wanted.jobs)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
     // nothing is placed before every file is in, so a download cancelled at its question
     // changed nothing
-    let fetched = fetch::all(context, net, &cache, jobs)
+    let fetched = fetch::all(context, net, &cache, jobs, plan)
         .await
         .map_err(Error::unchanged)?;
     let done = finish(
@@ -579,10 +579,10 @@ async fn many(
             jobs.append(&mut item.jobs);
         }
     }
-    approve(context, &cache, &jobs)?;
+    let plan = approve(context, &cache, &jobs)?;
     let mut fetched: Vec<Vec<Result<Fetched, Error>>> = links.iter().map(|_| Vec::new()).collect();
     if !jobs.is_empty() {
-        let fetched_all = fetch::apart(context, net, &cache, jobs)
+        let fetched_all = fetch::apart(context, net, &cache, jobs, plan)
             .await
             .map_err(Error::unchanged)?;
         for (owner, result) in owners.into_iter().zip(fetched_all) {
@@ -1185,10 +1185,11 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
 }
 
 /// asks before the run's downloads when they are large, so a cancel changes nothing. one that may
-/// find its bytes unchanged asks only once its server sends them, so a rerun asks nothing.
-fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> {
+/// find its bytes unchanged asks only once its server sends them, so a rerun asks nothing. gives
+/// the line the downloads tell once one goes ahead.
+fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<Option<String>, Error> {
     if context.offline.enabled() {
-        return Ok(());
+        return Ok(None);
     }
     let missing: Vec<&Job> = jobs
         .iter()
@@ -1216,7 +1217,6 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
             .map(|job| (fetch::host_of(job), fetch::size_of(job))),
     );
     let called = fetch::called(missing.iter().map(|job| job.label.as_str()), planned.files);
-    fetch::tell_planned(&context.output, &called, &planned);
     super::confirm_doing(
         &context.output,
         context.yes,
@@ -1226,8 +1226,8 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<(), Error> 
         Some((cache.root(), room)),
         &doing,
     )
-    .map(|_| ())
-    .map_err(Error::unchanged)
+    .map_err(Error::unchanged)?;
+    Ok(fetch::planned_line(&context.output, &called, &planned))
 }
 
 /// asks once, as a sync does, when the `adding` bytes `doing` brings would take the cache past the

@@ -1722,9 +1722,9 @@ impl<'a> Loop<'a> {
         )
         .map_err(|error| self.as_left(error))?;
         self.roomy.fetch_or(roomy, Ordering::Relaxed);
-        fetch::tell_planned(&self.context.output, &called, &planned);
+        let plan = fetch::planned_line(&self.context.output, &called, &planned);
         let started = Instant::now();
-        let fetched = fetch::all_telling(self.context, &self.net, &self.cache, jobs, came)
+        let fetched = fetch::all_telling(self.context, &self.net, &self.cache, jobs, plan, came)
             .await
             .map_err(|error| self.as_left(error))?;
         if ahead.is_empty() {
@@ -1876,8 +1876,13 @@ impl<'a> Loop<'a> {
     }
 
     /// asks before placing downloads `untold`, the files relocking did not ask about and tell
-    /// ahead, when their size or the `room` all its downloads take needs it; then tells them.
-    fn ask_then_tell(&self, untold: &[&fetch::Description], room: u64) -> Result<(), Error> {
+    /// ahead, when their size or the `room` all its downloads take needs it; then gives the line
+    /// that tells them, for the downloads to tell once one goes ahead.
+    fn ask_then_tell(
+        &self,
+        untold: &[&fetch::Description],
+        room: u64,
+    ) -> Result<Option<String>, Error> {
         let size = untold
             .iter()
             .filter_map(|description| description.size)
@@ -1902,8 +1907,7 @@ impl<'a> Loop<'a> {
             untold.iter().map(|description| description.label.as_str()),
             planned.files,
         );
-        fetch::tell_planned(&self.context.output, &called, &planned);
-        Ok(())
+        Ok(fetch::planned_line(&self.context.output, &called, &planned))
     }
 
     /// what downloading for placing takes on the cache's disk; an archive of unknown files counts
@@ -2064,13 +2068,13 @@ impl<'a> Loop<'a> {
             .filter_map(|(description, _)| description.size)
             .fold(0, u64::saturating_add);
         let untold = untold(&descriptions, files, available, told.as_ref());
-        self.ask_then_tell(&untold, size)?;
+        let plan = self.ask_then_tell(&untold, size)?;
         let started = Instant::now();
         let fetched = fetch::prepared(
             self.context,
             &self.net,
             &self.cache,
-            descriptions,
+            (descriptions, plan),
             urls,
             |index, url| {
                 let (dataset, file) = &files[index];

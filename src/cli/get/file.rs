@@ -860,12 +860,12 @@ async fn download(
         std::slice::from_ref(&remote.path),
         (false, to.is_some()),
     )?;
-    approve(context, cache, std::slice::from_ref(&job))?;
+    let plan = approve(context, cache, std::slice::from_ref(&job))?;
     let started = Instant::now();
     // nothing is written before the download is in, so a download cancelled at its question
     // changed nothing
     let [fetched] = <[Fetched; 1]>::try_from(
-        fetch::all(context, net, cache, vec![job])
+        fetch::all(context, net, cache, vec![job], plan)
             .await
             .map_err(Error::unchanged)?,
     )

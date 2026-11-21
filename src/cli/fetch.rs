@@ -303,6 +303,9 @@ struct Overall {
     waiting: AtomicUsize,
     /// the batch is one download, which its lines call by its own name.
     alone: bool,
+    /// the line saying what the batch downloads, told once its first download goes ahead, so a
+    /// batch another fetchloom brought while this one waited says it downloaded nothing.
+    plan: std::sync::Mutex<Option<String>>,
 }
 
 impl Overall {
@@ -363,6 +366,28 @@ impl Overall {
             stop: context.stop.clone(),
             waiting: AtomicUsize::new(count),
             alone: count == 1,
+            plan: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// this batch, with `plan`, the line [`planned_line`] gives, told once a download goes ahead.
+    fn planned(mut self, plan: Option<String>) -> Overall {
+        *self
+            .plan
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = plan;
+        self
+    }
+
+    /// tells the batch's plan, once.
+    fn tell_plan(&self, output: &Output) {
+        let plan = self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take();
+        if let Some(plan) = plan {
+            output.step("Downloading", &plan);
         }
     }
 
@@ -1242,6 +1267,7 @@ impl<'a> Watch<'a> {
                 self.bar().message("Waiting", what.clone());
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
+            Event::Begun => self.overall.tell_plan(self.output),
             Event::Lockless => self.held.lockless.store(true, Ordering::Relaxed),
             Event::Spoiled => self.spoiled.store(true, Ordering::Relaxed),
             Event::Restart(why) => {
@@ -1460,14 +1486,16 @@ pub(super) fn size_of(job: &Job) -> estimate::Size {
     estimate::Size::of(job.fetch.expect.size, job.fetch.listed)
 }
 
-/// says, before downloads start, what `total` brings and about how long it takes, as `Downloading
-/// 3 files · 1.2 GiB · about 3 min`. a total with no size known has nothing to say yet.
-pub(super) fn tell_planned(output: &Output, what: &str, total: &estimate::Total) {
-    tell_total(output, "Downloading", what, total, output.shows_bars());
+/// what `total` brings and about how long it takes, as `3 files · 1.2 GiB · about 3 min`, which
+/// [`all`] tells after `Downloading` once a download goes ahead. a total with no size known has
+/// nothing to say yet.
+pub(super) fn planned_line(output: &Output, what: &str, total: &estimate::Total) -> Option<String> {
+    is_told(total).then(|| format!("{what} · {}", total.facts(output.shows_bars())))
 }
 
-/// after the downloads [`tell_planned`] told as `what` and `total`, a line when `fetched` holds
-/// none from the network: the cache had every file, or its source said it had not changed.
+/// after the downloads whose plan [`planned_line`] gave as `what` and `total`, a line when
+/// `fetched` holds none from the network: the cache had every file, or its source said it had not
+/// changed.
 pub(super) fn tell_found(
     output: &Output,
     what: &str,
@@ -1483,8 +1511,8 @@ pub(super) fn tell_found(
     }
 }
 
-/// [`tell_planned`] for a run that would download, as a dry run or `status` tells it: once
-/// there are several files, or a time to add to the one file's own line.
+/// the plan [`planned_line`] gives, for a run that would download, as a dry run or `status` tells
+/// it: once there are several files, or a time to add to the one file's own line.
 pub(super) fn tell_would(output: &Output, what: &str, total: &estimate::Total) {
     if total.files > 1 || total.time.is_some() {
         tell_total(output, "Would download", what, total, false);
@@ -1562,14 +1590,17 @@ pub(super) fn called<'a>(mut labels: impl Iterator<Item = &'a str>, files: u64) 
 
 /// downloads every job within the network's limits, returning what each fetched in order. on linux
 /// finished downloads are flushed and named a group at a time, the last once every job ended.
+/// `plan`, the line [`planned_line`] gives, is told once the first download goes ahead, so a run
+/// that only waited while another fetchloom brought its files never says it downloads them.
 pub(super) async fn all(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     jobs: Vec<Job>,
+    plan: Option<String>,
 ) -> Result<Vec<Fetched>, Error> {
     // the batch waits on the heap, so the futures of the commands that download stay small
-    Box::pin(all_telling(context, net, cache, jobs, &|_| {})).await
+    Box::pin(all_telling(context, net, cache, jobs, plan, &|_| {})).await
 }
 
 /// [`all`], telling `came` each job's place among `jobs` as it ends well, its file then in the
@@ -1580,12 +1611,13 @@ pub(super) async fn all_telling(
     net: &Arc<Net>,
     cache: &Cache,
     jobs: Vec<Job>,
+    plan: Option<String>,
     came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
     let came: &(dyn Fn(usize) + Sync) = if batched { &|_| {} } else { came };
-    let work = each(context, net, cache, jobs, false, came);
+    let work = each(context, net, cache, (jobs, plan), false, came);
     let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
@@ -1596,13 +1628,13 @@ pub(super) async fn prepared(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    mut descriptions: Vec<Description>,
+    (mut descriptions, plan): (Vec<Description>, Option<String>),
     urls: Vec<Url>,
     make: impl Fn(usize, Url) -> Job,
 ) -> Result<Vec<Fetched>, Error> {
     let count = descriptions.len();
     let batched = defer(cache, count, context.settings.machine.open_files);
-    let overall = Arc::new(Overall::described(context, &descriptions));
+    let overall = Arc::new(Overall::described(context, &descriptions).planned(plan));
     let queue = Queue::grouped(urls, |index, _| {
         std::mem::take(&mut descriptions[index].host)
     });
@@ -1649,9 +1681,10 @@ pub(super) async fn apart(
     net: &Arc<Net>,
     cache: &Cache,
     jobs: Vec<Job>,
+    plan: Option<String>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
-    let work = each(context, net, cache, jobs, true, &|_| {});
+    let work = each(context, net, cache, (jobs, plan), true, &|_| {});
     let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     let results = results?;
@@ -1759,12 +1792,12 @@ async fn each(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    jobs: Vec<Job>,
+    (jobs, plan): (Vec<Job>, Option<String>),
     apart: bool,
     came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
-    let overall = Arc::new(Overall::new(context, &jobs));
+    let overall = Arc::new(Overall::new(context, &jobs).planned(plan));
     let queue = Queue::new(jobs);
     run_each(context, net, cache, count, overall, queue, apart, came).await
 }
@@ -2421,6 +2454,7 @@ mod tests {
             stop: Arc::default(),
             waiting: AtomicUsize::new(0),
             alone: false,
+            plan: std::sync::Mutex::default(),
         }
     }
 
@@ -2646,7 +2680,7 @@ mod tests {
             &context,
             &net,
             &cache,
-            descriptions,
+            (descriptions, None),
             urls,
             |index, url| {
                 made.set(made.get() + 1);
