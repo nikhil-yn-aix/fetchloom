@@ -253,6 +253,9 @@ pub(crate) struct Limits {
     /// the threads an xz stream of several blocks may decode on; with one, every xz stream
     /// decodes on one.
     pub(crate) xz_threads: u32,
+    /// the most memory such a stream's threads may take together: the archive's share of the
+    /// run's memory budget, without the floor `memory` keeps to refuse a stream that asks for more.
+    pub(crate) xz_threading: u64,
 }
 
 impl Default for Limits {
@@ -263,6 +266,7 @@ impl Default for Limits {
             ratio: 1_000,
             memory: tar::XZ_MEMORY,
             xz_threads: 1,
+            xz_threading: tar::XZ_MEMORY,
         }
     }
 }

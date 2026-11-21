@@ -530,7 +530,14 @@ fn archives_unpack_within_their_settings_and_a_share_of_the_memory() {
             .unwrap()
             .archive_limits()
     };
-    assert_eq!(limits(&[]), defaults);
+    // a machine that says nothing of its memory gives the budget's floor, 256 MiB
+    assert_eq!(
+        limits(&[]),
+        crate::archive::Limits {
+            xz_threading: 64 << 20,
+            ..defaults
+        }
+    );
     let raised = limits(&[
         ("FETCHLOOM_ARCHIVE_FILES", "50000000"),
         ("FETCHLOOM_ARCHIVE_SIZE", "64T"),
@@ -545,13 +552,14 @@ fn archives_unpack_within_their_settings_and_a_share_of_the_memory() {
             ratio: 5_000,
             memory: 4 << 30,
             xz_threads: 1,
+            xz_threading: 4 << 30,
         }
     );
-    // a small budget never takes decoders below what fetchloom always allowed
-    assert_eq!(
-        limits(&[("FETCHLOOM_MEMORY", "64M")]).memory,
-        defaults.memory
-    );
+    // a small budget never takes decoders below what fetchloom always allowed, while an xz
+    // stream's threads keep to its quarter
+    let small = limits(&[("FETCHLOOM_MEMORY", "64M")]);
+    assert_eq!(small.memory, defaults.memory);
+    assert_eq!(small.xz_threading, 16 << 20);
 }
 
 /// a time reads as `fetchloom settings` prints it, in seconds, minutes or hours, or as a bare

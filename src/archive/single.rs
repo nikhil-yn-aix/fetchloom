@@ -125,7 +125,7 @@ fn decompress(
         };
         let counted = tar::counted(input, guard.meter())?;
         let threads = tar::xz_threads(input, format, limits)
-            .map(|count| tar::Threads::of(count, input, &guard));
+            .map(|plan| tar::Threads::of(plan, input, &guard));
         let mut decoded = tar::decompressed(format, counted, limits.memory, threads)
             .map_err(|err| tar::unreadable_stream(Unpacking::File, None, &err, limits.memory))?;
         let mut buffer = vec![0; BUFFER];

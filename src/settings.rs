@@ -658,7 +658,8 @@ impl Settings {
     }
 
     /// the limits every archive unpacks within: as set, each of at most four archives unpacking at
-    /// once getting a quarter of the memory budget to decompress in, never less than the default.
+    /// once getting a quarter of the memory budget to decompress in, never less than the default
+    /// for one decoder, and that quarter alone for an xz stream's threads.
     pub(crate) fn archive_limits(&self) -> crate::archive::Limits {
         let defaults = crate::archive::Limits::default();
         crate::archive::Limits {
@@ -667,6 +668,7 @@ impl Settings {
             ratio: self.archive_ratio.value,
             memory: (self.steady_memory / 4).max(defaults.memory),
             xz_threads: defaults.xz_threads,
+            xz_threading: self.steady_memory / 4,
         }
     }
 

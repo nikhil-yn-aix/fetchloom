@@ -35,8 +35,8 @@ const XZ_INDEX_MOST: u64 = 16 << 20;
 
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
 /// to end, as pigz, bgzip and pbzip2 write them. with `xz_threads`, an xz stream that
-/// [`xz_threads`] found alone in its file decodes on that many threads, and goes on with one
-/// decoder from where they were should liblzma fail to start one.
+/// [`xz_threads`] found alone in its file decodes on that many threads in their memory, and goes
+/// on with one decoder from where they were should liblzma fail to start one.
 pub(super) fn decompressed<'r>(
     format: Format,
     compressed: impl BufRead + 'r,
@@ -56,7 +56,7 @@ pub(super) fn decompressed<'r>(
                     );
                     let stream = MtStreamBuilder::new()
                         .threads(threads.count)
-                        .memlimit_threading(limit)
+                        .memlimit_threading(threads.memory.min(limit))
                         .memlimit_stop(limit)
                         .decoder()?;
                     Box::new(HandOver {
@@ -82,21 +82,27 @@ pub(super) fn decompressed<'r>(
     })
 }
 
-/// an xz stream's threads, as [`xz_threads`] counts them, with the same stream read again from its
-/// start and the run's stop, for one decoder to go on from where they were should liblzma fail to
-/// start one.
+/// an xz stream's threads and the most memory they take, as [`xz_threads`] plans them, with the
+/// same stream read again from its start and the run's stop, for one decoder to go on from where
+/// they were should liblzma fail to start one.
 pub(super) struct Threads<'r> {
     pub(super) count: u32,
+    pub(super) memory: u64,
     pub(super) again: Box<dyn FnMut() -> io::Result<Box<dyn BufRead + 'r>> + 'r>,
     pub(super) stopped: Box<dyn Fn() -> bool + 'r>,
 }
 
 impl<'r> Threads<'r> {
-    /// `count` threads for the stream of `input`, which `guard` counts and stops.
-    pub(super) fn of(count: u32, input: &'r Input, guard: &Guard<'r>) -> Threads<'r> {
+    /// `count` threads in `memory` for the stream of `input`, which `guard` counts and stops.
+    pub(super) fn of(
+        (count, memory): (u32, u64),
+        input: &'r Input,
+        guard: &Guard<'r>,
+    ) -> Threads<'r> {
         let meter = guard.meter();
         Threads {
             count,
+            memory,
             // bytes read again count only up to the archive's size, as a seek's do
             again: Box::new(move || {
                 let inner = input.reopen(meter)?;
@@ -224,19 +230,29 @@ pub(super) fn stopped(err: &(dyn std::error::Error + 'static)) -> bool {
         .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Stopped>)
 }
 
-/// the threads the xz stream in `input` decodes on: none, so one decoder takes it, unless `limits`
-/// grants more than one and the input is one whole file that is exactly one xz stream whose index
-/// lists more than one block. each thread holds about three of its largest blocks, so
-/// `limits.memory` caps how many run, as the blocks do.
-pub(super) fn xz_threads(input: &Input, format: Format, limits: &Limits) -> Option<u32> {
+/// the threads the xz stream in `input` decodes on and the most memory they take, as [`xz_plan`]
+/// plans them from the blocks the stream's index lists: none, so one decoder takes it, unless
+/// `limits` grants more than one thread and the input is one whole file that is exactly one xz
+/// stream whose index lists more than one block.
+pub(super) fn xz_threads(input: &Input, format: Format, limits: &Limits) -> Option<(u32, u64)> {
     if format != Format::TarXz || limits.xz_threads < 2 {
         return None;
     }
     let mut file = input.whole_file()?.ok()?;
     let (blocks, largest) = xz_blocks(&mut file).ok()??;
-    let fit = limits.memory / largest.saturating_mul(3).max(1);
+    xz_plan(limits, blocks, largest)
+}
+
+/// the threads an xz stream of `blocks` blocks, the largest `largest` bytes decoded, decodes on
+/// within `limits`, and the most memory liblzma may take for them, the archive's share of the
+/// run's budget: as many as the run grants, the blocks hold and that share holds about three of
+/// the largest block for, each thread holding one block's input, its output and its dictionary.
+/// none below two, so one decoder takes it.
+pub(super) fn xz_plan(limits: &Limits, blocks: u64, largest: u64) -> Option<(u32, u64)> {
+    let memory = limits.xz_threading;
+    let fit = memory / largest.saturating_mul(3).max(1);
     let threads = u64::from(limits.xz_threads).min(fit).min(blocks);
-    (threads >= 2).then(|| u32::try_from(threads).unwrap_or(u32::MAX))
+    (threads >= 2).then(|| (u32::try_from(threads).unwrap_or(u32::MAX), memory))
 }
 
 /// the blocks of the xz stream that `file` holds whole, with the largest one's decoded size, as
@@ -369,7 +385,7 @@ pub(super) fn unpack(
     };
     let memory = guard.limits().memory;
     let threads =
-        xz_threads(input, format, guard.limits()).map(|count| Threads::of(count, input, guard));
+        xz_threads(input, format, guard.limits()).map(|plan| Threads::of(plan, input, guard));
     let decoded = decompressed(format, counted, memory, threads)
         .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
     let headers = Headers::default();
@@ -1071,13 +1087,13 @@ mod tests {
         assert!(blocks >= 4, "{blocks}");
         assert_eq!(largest, 64 << 10);
         let granted = |xz_threads, memory| Limits {
-            memory,
             xz_threads,
+            xz_threading: memory,
             ..Limits::default()
         };
         let threads = |name: &str, bytes: &[u8], limits: &Limits| {
             let input = Input::file(&scratch.file(name, bytes)).unwrap();
-            xz_threads(&input, Format::TarXz, limits)
+            xz_threads(&input, Format::TarXz, limits).map(|(threads, _)| threads)
         };
         let plenty = granted(4, XZ_MEMORY);
         assert_eq!(threads("plenty", &blocked, &plenty), Some(4));
@@ -1156,6 +1172,7 @@ mod tests {
     fn four_threads(bytes: &[u8]) -> Threads<'_> {
         Threads {
             count: 4,
+            memory: XZ_MEMORY,
             again: Box::new(move || Ok(Box::new(bytes) as Box<dyn std::io::BufRead + '_>)),
             stopped: Box::new(|| false),
         }
@@ -1319,6 +1336,45 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    /// a run's memory budget, a container's limit included, sets the threads an xz stream of
+    /// several blocks decodes on and the memory liblzma may take for them: the archive's quarter
+    /// of the budget holds three of the largest block a thread. so nine blocks of 24 MiB, as `xz
+    /// -T` writes them at its default level, decode on one decoder in a container of 160 MiB or
+    /// with 64 MiB named, and on the four threads the run grants where the budget is 4 GiB.
+    #[test]
+    fn xz_threads_and_their_memory_follow_the_runs_budget() {
+        const MIB: u64 = 1 << 20;
+        let limits = |memory: u64, named: Option<&str>| {
+            let var = |name: &str| {
+                (name == "FETCHLOOM_MEMORY")
+                    .then(|| named.map(std::ffi::OsString::from))
+                    .flatten()
+            };
+            let machine = crate::machine::Machine {
+                processors: 24,
+                memory: Some(memory),
+                memory_in_cgroup: true,
+                ..crate::machine::Machine::default()
+            };
+            let settings =
+                crate::settings::Settings::read(&var, crate::settings::File::default(), machine);
+            let mut limits = settings.unwrap().archive_limits();
+            // the share of the threads unpack_all grants each archive
+            limits.xz_threads = 4;
+            limits
+        };
+        let plan = |limits: &Limits, blocks| super::xz_plan(limits, blocks, 24 * MIB);
+        let large = 64 << 30;
+        let contained = limits(160 * MIB, None);
+        assert_eq!(plan(&contained, 9), None, "a container of 160 MiB");
+        assert_eq!(plan(&limits(large, Some("64M")), 9), None, "64 MiB named");
+        let roomy = limits(large, None);
+        assert_eq!(plan(&roomy, 9), Some((4, 1 << 30)), "a budget of 4 GiB");
+        assert_eq!(plan(&roomy, 3), Some((3, 1 << 30)), "a thread a block");
+        let two = limits(large, Some("576M"));
+        assert_eq!(plan(&two, 9), Some((2, 144 * MIB)), "room for two");
     }
 
     /// an xz stream of several blocks whose first block asks for too much memory is refused on
