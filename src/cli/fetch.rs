@@ -350,6 +350,9 @@ impl Overall {
                 .bar("Downloading", units::count(count as u64, "file", "files"));
             let (total, unknown) = sized(sizes());
             bar.start((unknown == 0).then_some(total), 0);
+            if unknown == 0 {
+                foresee(&bar, &hosts, limits(context));
+            }
             bar
         });
         let sizes = sized(sizes());
@@ -409,6 +412,16 @@ impl Overall {
         });
     }
 
+    /// about how long the batch takes, from the speeds this machine remembers of its hosts.
+    fn time(&self) -> Option<String> {
+        let hosts = self
+            .hosts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let hosts: Vec<estimate::Host> = hosts.values().cloned().collect();
+        estimate::time(&hosts, self.limits).map(estimate::Time::words)
+    }
+
     fn advance(&self, bytes: u64) {
         if let Some(bar) = &self.bar {
             bar.advance(bytes);
@@ -427,8 +440,9 @@ impl Overall {
         }
     }
 
-    /// adds the size a download from `host` just told.
-    fn sized(&self, host: &str, bytes: u64) {
+    /// adds the size a download from `host` just told, and once every size is known, says about
+    /// how long the batch takes, which a lone download's bar shows as its own.
+    fn sized(&self, host: &str, bytes: u64) -> Option<String> {
         let known = {
             let mut length = self
                 .length
@@ -448,6 +462,10 @@ impl Overall {
         if let Some(ticker) = self.ticker.get() {
             ticker.sized(bytes, time.as_deref());
         }
+        if let (Some(bar), Some(time)) = (&self.bar, &time) {
+            bar.foreseen(time.clone());
+        }
+        time
     }
 
     /// counts `bytes` among `host`'s downloads, and once every size is `known`, how long the
@@ -474,6 +492,15 @@ impl Drop for Overall {
         for _ in 0..*self.waiting.get_mut() {
             self.stop.ended(false);
         }
+    }
+}
+
+/// gives `bar` about how long the downloads from `hosts` take under `limits`, where this machine
+/// remembers how fast those hosts are.
+fn foresee(bar: &Bar, hosts: &BTreeMap<String, estimate::Host>, limits: estimate::Limits) {
+    let hosts: Vec<estimate::Host> = hosts.values().cloned().collect();
+    if let Some(time) = estimate::time(&hosts, limits) {
+        bar.foreseen(time.words());
     }
 }
 
@@ -786,10 +813,18 @@ impl<'a> Watch<'a> {
         *self.named.lock().unwrap_or_else(PoisonError::into_inner) = Some(label);
     }
 
-    /// the download's bar, made when it is first needed.
+    /// the download's bar, made when it is first needed. in a batch, its time left is the batch
+    /// bar's; alone, it says about how long it takes until it can tell its own.
     fn bar(&self) -> &Bar {
-        self.bar
-            .get_or_init(|| self.output.bar("Downloading", self.job.label.clone()))
+        self.bar.get_or_init(|| {
+            let bar = self.output.bar("Downloading", self.job.label.clone());
+            if self.overall.bar.is_some() {
+                bar.untimed();
+            } else if let Some(time) = self.overall.time() {
+                bar.foreseen(time);
+            }
+            bar
+        })
     }
 
     /// the run's answer to `asked`, asking `question` when no download asked it before.
@@ -1167,8 +1202,10 @@ impl<'a> Watch<'a> {
         if unknown {
             if let Some(total) = total
                 && !self.sized.swap(true, Ordering::Relaxed)
+                && let Some(time) = self.overall.sized(&host_of(self.job), total)
+                && self.overall.bar.is_none()
             {
-                self.overall.sized(&host_of(self.job), total);
+                self.bar().foreseen(time);
             }
             self.unbounded
                 .store(total.is_none() && !asked, Ordering::Relaxed);
@@ -3320,6 +3357,72 @@ mod tests {
             })
             .unwrap();
         assert!(overall.ticker.get().is_some());
+    }
+
+    /// a batch ending in 15 s once had a file of it needing 29 s: its files' bars leave the time
+    /// left to the batch's bar, which, as a lone download's bar, says about how long it takes from
+    /// the speed this machine remembers until it can tell its own.
+    #[test]
+    fn one_bar_tells_a_batchs_time_left() {
+        let remembered = tempfile::tempdir().unwrap();
+        std::fs::write(
+            remembered.path().join(crate::machine::SPEEDS),
+            r#"{"hosts":{"example.org":{"rate":1048576.0,"overhead":0.1,"heard":1}}}"#,
+        )
+        .unwrap();
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        context.speeds = crate::net::speeds::Speeds::at(Some(remembered.path().to_path_buf()));
+        let job = |label: &str, size| {
+            let mut fetch = Fetch::new(Url::parse("https://example.org/a.bin").unwrap());
+            fetch.expect.size = size;
+            Job {
+                fetch,
+                label: label.to_owned(),
+                dataset: None,
+                again: None,
+            }
+        };
+        let jobs = [job("a/a.bin", Some(1 << 20)), job("a/b.bin", Some(1 << 20))];
+        let batch = Overall::new(&context, &jobs);
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        let file = Watch::new(&jobs[0], &context.output, &batch, &approval, false, &held);
+        assert_eq!(file.bar().timing(), (false, None));
+        assert_eq!(
+            batch.bar.as_ref().map(Bar::timing),
+            Some((true, Some("under 10 s".to_owned())))
+        );
+        let known = [job("a/d.bin", Some(1 << 20))];
+        let sized = Overall::new(&context, &known);
+        let watch = Watch::new(&known[0], &context.output, &sized, &approval, false, &held);
+        assert_eq!(
+            watch.bar().timing(),
+            (true, Some("under 10 s".to_owned())),
+            "a size data.lock knows"
+        );
+        let lone = [job("a/c.bin", None)];
+        let alone = Overall::new(&context, &lone);
+        let watch = Watch::new(&lone[0], &context.output, &alone, &approval, false, &held);
+        watch
+            .on(&Event::Started {
+                total: Some(1 << 20),
+                resumed: 0,
+                resumable: Resumable::Maybe,
+            })
+            .unwrap();
+        assert_eq!(watch.bar().timing(), (true, Some("under 10 s".to_owned())));
     }
 
     /// plain lines never say a refused download began, however long a person took to say no.

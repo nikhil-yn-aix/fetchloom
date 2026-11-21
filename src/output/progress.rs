@@ -96,6 +96,11 @@ struct Moved {
     /// when, and at how many bytes moved, the rate is measured from, the older first, each
     /// moving on every [`WINDOW`].
     marks: Mutex<[(Instant, u64); 2]>,
+    /// whether the bar leaves its time left to the bar of its batch, so a screen shows one.
+    untimed: AtomicBool,
+    /// about how long the transfer takes, as fetchloom foresaw it from the speeds it remembers,
+    /// which the bar shows until it can tell its own time left.
+    foreseen: Mutex<Option<String>>,
 }
 
 /// a download's next try, as its bar tells it.
@@ -121,6 +126,8 @@ impl Moved {
             rerated: AtomicBool::new(false),
             behind: AtomicBool::new(false),
             marks: Mutex::new([(Instant::now(), 0); 2]),
+            untimed: AtomicBool::new(false),
+            foreseen: Mutex::new(None),
         }
     }
 
@@ -216,6 +223,23 @@ impl Moved {
         (rate, left)
     }
 
+    /// what a bar saying `verb` knows of its time left, `left` its own: none in a batch, whose bar
+    /// tells it, and the time foreseen only while it downloads, never while it waits or checks.
+    fn timed(&self, verb: &str, left: Duration) -> Timed {
+        let foreseen = (verb == "Downloading")
+            .then(|| {
+                self.foreseen
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .clone()
+            })
+            .flatten();
+        Timed {
+            left: (!self.untimed.load(Ordering::Relaxed)).then_some(left),
+            foreseen,
+        }
+    }
+
     /// how long since the bar last moved.
     fn quiet(&self) -> Duration {
         self.born
@@ -303,6 +327,22 @@ impl Bar {
         self.moved.behind.store(behind, Ordering::Relaxed);
     }
 
+    /// leaves the time left to the bar of the batch this download is one of, whose time covers
+    /// every download in it, so a screen never shows a batch ending before one of its files.
+    pub(crate) fn untimed(&self) {
+        self.moved.untimed.store(true, Ordering::Relaxed);
+    }
+
+    /// says about how long the transfer takes, as `about 2 min`, until the bar can tell its own
+    /// time left.
+    pub(crate) fn foreseen(&self, time: String) {
+        *self
+            .moved
+            .foreseen
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(time);
+    }
+
     /// a transfer of `total` bytes that goes on from `resumed`, which it does not rate.
     pub(crate) fn start(&self, total: Option<u64>, resumed: u64) {
         if let Some(bar) = &self.drawn {
@@ -363,6 +403,20 @@ impl Bar {
     #[cfg(test)]
     pub(crate) fn told(&self) -> Option<String> {
         self.drawn.as_ref().map(ProgressBar::message)
+    }
+
+    /// whether the bar tells a time left of its own, and about how long it was foreseen to take,
+    /// for tests.
+    #[cfg(test)]
+    pub(crate) fn timing(&self) -> (bool, Option<String>) {
+        (
+            !self.moved.untimed.load(Ordering::Relaxed),
+            self.moved
+                .foreseen
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .clone(),
+        )
     }
 
     /// what the bar fills to as it draws it, none while it has no length, for tests.
@@ -543,7 +597,8 @@ fn style(
                     .unwrap_or_else(|| {
                         // this run's bytes over its own time, as the time left is
                         let (rate, left) = moved.pace(state.pos(), state.len(), Instant::now());
-                        measure((done, total), rate, state.elapsed(), left, quiet, stopping)
+                        let timed = moved.timed(verb, left);
+                        measure((done, total), rate, state.elapsed(), timed, quiet, stopping)
                     });
                 // a transfer's counters keep the room they grow to, so its name's cut stays put
                 if bar.is_some() {
@@ -784,6 +839,13 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
+/// what a bar knows of its time left: its own, unless the bar of its batch tells it, and about
+/// how long fetchloom foresaw the transfer taking, shown until the bar can tell its own.
+struct Timed {
+    left: Option<Duration>,
+    foreseen: Option<String>,
+}
+
 /// the counters of a bar that got `done` of `total`: the rate once it settles and the time left
 /// once it holds, `no data` once `quiet`, which local work leaves none, passes [`STALL`], the disk
 /// once every byte is in, and `stopping` alone. a wait with nothing counted says how long it has
@@ -792,7 +854,7 @@ fn measure(
     (done, total): (u64, Option<u64>),
     rate: f64,
     elapsed: Duration,
-    left: Duration,
+    timed: Timed,
     quiet: Option<Duration>,
     stopping: bool,
 ) -> Counters {
@@ -817,17 +879,23 @@ fn measure(
     let settled = done > 0 && rate > 0.0 && elapsed >= SETTLE;
     // a download that just went quiet still has a rate, but no time left it can keep to
     let still = quiet.is_some_and(|quiet| quiet >= STILL);
-    let foreseen = settled
-        && !still
-        && total.is_some()
-        && (elapsed >= STEADY || left <= elapsed.saturating_mul(REACH));
+    let left = timed.left.filter(|left| {
+        settled
+            && !still
+            && total.is_some()
+            && (elapsed >= STEADY || *left <= elapsed.saturating_mul(REACH))
+    });
     let rate = settled.then(|| units::speed(rate));
-    let then = if foreseen {
-        Some(format!("{} left", units::seconds(whole_up(left))))
-    } else if done == 0 && elapsed >= MOMENT && !still {
-        Some(units::seconds(elapsed))
-    } else {
-        None
+    // before its length is known, a bar has yet to start the transfer it foresaw
+    let foreseen = timed
+        .foreseen
+        .filter(|_| timed.left.is_some() && total.is_some() && !still)
+        .map(|foreseen| format!("{foreseen} left"));
+    let then = match left {
+        Some(left) => Some(format!("{} left", units::seconds(whole_up(left)))),
+        None if foreseen.is_some() => foreseen,
+        None if done == 0 && elapsed >= MOMENT && !still => Some(units::seconds(elapsed)),
+        None => None,
     };
     Counters::new(count, rate, then)
 }
@@ -1350,7 +1418,11 @@ mod tests {
         quiet: Option<Duration>,
         stopping: bool,
     ) -> String {
-        measure((done, total), rate, elapsed, left, quiet, stopping).said()
+        let timed = Timed {
+            left: Some(left),
+            foreseen: None,
+        };
+        measure((done, total), rate, elapsed, timed, quiet, stopping).said()
     }
 
     /// a wait for a person's answer counts neither as data that stopped coming nor in the bar's
@@ -2079,6 +2151,73 @@ mod tests {
             "1.0/4.0 KiB · 512 B/s · 6 s left",
             "a gap of a moment is ordinary"
         );
+    }
+
+    /// a batch ending in 15 s once had a file of it needing 29 s on the line under it: a file's bar
+    /// in a batch tells no time left, the batch's bar does. until a bar can tell its own, it says
+    /// about how long fetchloom foresaw the transfer taking.
+    #[test]
+    fn one_time_left_shows_for_a_batch_and_a_foreseen_one_until_then() {
+        let second = Duration::from_secs(1);
+        let mib = 1024 * 1024;
+        let rate = 1.9 * 1_048_576.0;
+        let at = |elapsed, left: Option<Duration>| {
+            let timed = Timed {
+                left,
+                foreseen: Some("about 20 s".to_owned()),
+            };
+            measure(
+                (8 * mib, Some(34 * mib)),
+                rate,
+                elapsed,
+                timed,
+                Some(Duration::ZERO),
+                false,
+            )
+            .said()
+        };
+        assert_eq!(
+            at(4 * second, Some(15 * second)),
+            "8.0/34.0 MiB · 1.9 MiB/s · 15 s left"
+        );
+        assert_eq!(
+            at(2 * second, Some(15 * second)),
+            "8.0/34.0 MiB · about 20 s left",
+            "a rate yet to settle has the time foreseen"
+        );
+        assert_eq!(
+            at(4 * second, None),
+            "8.0/34.0 MiB · 1.9 MiB/s",
+            "a file in a batch"
+        );
+        assert_eq!(at(2 * second, None), "8.0/34.0 MiB");
+        let lengthless = Timed {
+            left: Some(Duration::ZERO),
+            foreseen: Some("about 20 s".to_owned()),
+        };
+        let busy = Some(Duration::ZERO);
+        assert_eq!(
+            measure((0, None), 0.0, second, lengthless, busy, false).said(),
+            "",
+            "a bar yet to learn its length"
+        );
+    }
+
+    /// a bar that waits for another fetchloom or checks the bytes an earlier run kept is no
+    /// transfer, so it never shows the time its download was foreseen to take.
+    #[test]
+    fn a_foreseen_time_shows_only_while_a_bar_downloads() {
+        let moved = Moved::new(Arc::default());
+        *moved.foreseen.lock().unwrap() = Some("about 20 s".to_owned());
+        let second = Duration::from_secs(1);
+        let downloading = moved.timed("Downloading", second);
+        assert_eq!(downloading.foreseen.as_deref(), Some("about 20 s"));
+        assert_eq!(downloading.left, Some(second));
+        for verb in ["Waiting", "Checking"] {
+            assert_eq!(moved.timed(verb, second).foreseen, None, "{verb}");
+        }
+        moved.untimed.store(true, Ordering::Relaxed);
+        assert_eq!(moved.timed("Downloading", second).left, None);
     }
 
     /// a link sending its bytes in bursts once had its time left climb between them, 17 s to 20 s
