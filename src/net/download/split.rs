@@ -1,5 +1,6 @@
 //! one large file over several streams at once: a stream out of work takes half of the largest
-//! range left, and a stream is added only while each one made the whole download faster.
+//! range left, and a stream is added only while each one made the whole download faster, the last
+//! verdict checked once over a long, late window.
 
 use std::future::{Future, poll_fn};
 use std::io;
@@ -39,6 +40,11 @@ pub(crate) const SLOW: u64 = 1_000_000;
 const GAIN: f64 = 1.15;
 /// failed streams after which a download asks for no more ranges.
 const FAILURES: u32 = 3;
+/// windows after a split settles before its streams are measured again, and windows that measure
+/// takes: on a lossy link a stream's first seconds can read twice the rate it sustains, and the
+/// window that settled the split may be such a burst.
+const LATE: u32 = 5;
+const LONG: u32 = 10;
 
 /// the split settings a run starts with. tests set `FETCHLOOM_TEST_SPLIT` for small, quick
 /// splits, so a test of a slow download needs neither 64 MiB nor seconds.
@@ -280,6 +286,14 @@ enum Probe {
         since: Instant,
         delivered: u64,
     },
+    /// the last stream added made the download no faster than `stopped`, the window before it read:
+    /// the streams are measured again once, over [`LONG`] windows from [`LATE`] windows after
+    /// `settled`, and one stream more is wanted when they sustain less than `stopped`.
+    Recheck {
+        stopped: f64,
+        settled: Instant,
+        from: Option<(Instant, u64)>,
+    },
     /// the last stream added made the download no faster.
     Settled,
 }
@@ -330,10 +344,36 @@ impl Probe {
                 let after = rate(since, from);
                 if after < before * GAIN {
                     tracing::debug!("another stream made the download no faster");
-                    *self = Probe::Settled;
+                    *self = Probe::Recheck {
+                        stopped: before,
+                        settled: now,
+                        from: None,
+                    };
                     return None;
                 }
                 Some(after)
+            }
+            Probe::Recheck {
+                stopped,
+                settled,
+                from: None,
+            } if now.duration_since(settled) >= window * LATE => {
+                *self = Probe::Recheck {
+                    stopped,
+                    settled,
+                    from: Some((now, delivered)),
+                };
+                None
+            }
+            Probe::Recheck {
+                stopped,
+                from: Some((since, from)),
+                ..
+            } if now.duration_since(since) >= window * LONG => {
+                *self = Probe::Settled;
+                let sustained = rate(since, from);
+                tracing::debug!(stopped, sustained, "a settled split measured again");
+                (sustained < stopped).then_some(sustained)
             }
             _ => None,
         }
@@ -711,7 +751,8 @@ impl Net {
     }
 
     /// adds a stream, with the slots and work it takes, while each added one made the download at
-    /// least [`GAIN`] times faster and the host has a free slot no other file waits for.
+    /// least [`GAIN`] times faster, and once more when the settle's late measure finds the window
+    /// that settled it was a burst, as long as the host has a free slot no other file waits for.
     fn consider(
         &self,
         shared: &Streams<'_>,
@@ -730,15 +771,19 @@ impl Net {
                 board.share(id).is_none(),
             )
         };
+        // a settle measured again adds one stream at most, and stays settled
+        let rechecked = matches!(*probe, Probe::Recheck { .. });
         let before = probe.step(now, delivered, started, gone, self.split.window)?;
         let added = self.add_stream(shared);
-        *probe = match &added {
-            Some((id, _)) => Probe::Wait { id: *id, before },
-            None => Probe::Measure {
-                since: now,
-                delivered,
-            },
-        };
+        if !rechecked {
+            *probe = match &added {
+                Some((id, _)) => Probe::Wait { id: *id, before },
+                None => Probe::Measure {
+                    since: now,
+                    delivered,
+                },
+            };
+        }
         added
     }
 

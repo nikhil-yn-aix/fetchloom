@@ -587,8 +587,12 @@ fn a_stream_that_makes_the_download_no_faster_is_the_last() {
     assert_eq!(probe.step(at(120), MIB, true, false, window), None);
     assert_eq!(probe.step(at(200), 2 * MIB, true, false, window), None);
     assert_eq!(probe.step(at(220), 2 * MIB, true, false, window), None);
+    assert!(matches!(probe, Probe::Recheck { from: None, .. }));
+    // measured again from five windows on, over ten: 1.1 MiB a window, over the rate before, stands
+    assert_eq!(probe.step(at(720), 7 * MIB, true, false, window), None);
+    assert_eq!(probe.step(at(1720), 18 * MIB, true, false, window), None);
     assert!(matches!(probe, Probe::Settled));
-    assert_eq!(probe.step(at(900), 9 * MIB, true, false, window), None);
+    assert_eq!(probe.step(at(9000), 90 * MIB, true, false, window), None);
 }
 
 #[test]
@@ -609,6 +613,61 @@ fn a_stream_that_makes_the_download_faster_lets_another_in() {
     let mut probe = Probe::Wait { id: 1, before: 1.0 };
     assert_eq!(probe.step(at(10), 5, false, true, window), None);
     assert!(matches!(probe, Probe::Measure { delivered: 5, .. }));
+}
+
+/// two streams' first window read 256 KB/s, a burst on a lossy link; three then sustain 190 KB/s
+/// late and long, under it, so one stream more is wanted, once.
+#[test]
+fn a_burst_that_settled_a_split_lets_one_more_stream_in() {
+    let window = Duration::from_millis(100);
+    let start = Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    let mut probe = Probe::Wait {
+        id: 2,
+        before: 256_000.0,
+    };
+    assert_eq!(probe.step(at(0), 0, true, false, window), None);
+    // three streams read 250 KB/s, under 1.15 times the burst: settled, to be measured again
+    assert_eq!(probe.step(at(100), 25_000, true, false, window), None);
+    assert!(matches!(probe, Probe::Recheck { from: None, .. }));
+    // nothing is measured in the first five windows after the settle
+    assert_eq!(probe.step(at(500), 100_000, true, false, window), None);
+    assert!(matches!(probe, Probe::Recheck { from: None, .. }));
+    assert_eq!(probe.step(at(600), 120_000, true, false, window), None);
+    assert_eq!(probe.step(at(1500), 290_000, true, false, window), None);
+    // ten windows on: 190,000 bytes a second, under the 256,000 that settled it
+    let sustained = probe.step(at(1600), 310_000, true, false, window).unwrap();
+    assert!((sustained - 190_000.0).abs() < 1.0, "{sustained}");
+    assert!(matches!(probe, Probe::Settled), "measured again once");
+    assert_eq!(probe.step(at(9000), 9_000_000, true, false, window), None);
+}
+
+/// a settle on a steady window stands: three streams sustain 140 KB/s late and long, over the
+/// 130 KB/s that settled it, or exactly 130.
+#[test]
+fn a_steady_window_that_settled_a_split_stands() {
+    let window = Duration::from_millis(100);
+    let start = Instant::now();
+    let at = |millis| start + Duration::from_millis(millis);
+    let mut probe = Probe::Wait {
+        id: 2,
+        before: 130_000.0,
+    };
+    assert_eq!(probe.step(at(0), 0, true, false, window), None);
+    assert_eq!(probe.step(at(100), 14_000, true, false, window), None);
+    assert!(matches!(probe, Probe::Recheck { .. }));
+    assert_eq!(probe.step(at(600), 70_000, true, false, window), None);
+    assert_eq!(probe.step(at(1600), 210_000, true, false, window), None);
+    assert!(matches!(probe, Probe::Settled));
+    // sustaining exactly the rate that settled it is no burst either
+    let mut probe = Probe::Recheck {
+        stopped: 130_000.0,
+        settled: at(0),
+        from: None,
+    };
+    assert_eq!(probe.step(at(500), 0, true, false, window), None);
+    assert_eq!(probe.step(at(1500), 130_000, true, false, window), None);
+    assert!(matches!(probe, Probe::Settled));
 }
 
 #[test]

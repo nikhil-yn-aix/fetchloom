@@ -444,3 +444,22 @@ below 16 MiB the survey takes the parent's path, the same reads in the same orde
 | `help` | glibc | 100 | 3.1 ms | 0.999 [0.991, 1.001] | 1.006 [1.001, 1.013] | 0.991 [0.983, 0.996] | 0.992 | 1.001 |
 
 "against the a/a arm" is each round's candidate over the same round's copy of the base, with a bootstrap interval of the median. nothing is slower than its a/a arm: merge and placing moved with theirs, which a copy of the base cannot do by its code, and against it they are 1.002 and 1.003, intervals across 1. none of part four's changes is on those paths: under strace the 40,000-dataset sync looks at `urls/` once, as every run that opens the cache does, and reads no record, its state missing before the run and 9.6 MB after; merge touches neither.
+
+## a settled split measured again, 2026-11-22
+
+a split download adds one stream at a time while each makes it faster, judged over the 2 s after the new stream's first bytes against the 2 s before. on a poor link the first window is a burst: in all 8 runs that stopped at 3 streams, the window two streams read right after the second joined was 1.7 to 2.3 times the rate they kept, so the next stream's window read no faster and the split settled one short, 351 to 549 s where 4 streams took 307 to 316 s. `Probe` in src/net/download/split.rs now measures a settled split once more, 10 s after it settled and over 20 s. where the streams deliver less then than the window that settled it, the split adds one stream as it adds any, never past 4 to one host, the run's jobs or a piece under 8 MiB, and then stays settled: one recheck and at most one more stream a download.
+
+the a/b ran one 64 MiB `get` on dpoor, the lab's poor link, off against on in paired rounds, beside builds, since the link sets the pace. its first 12 rounds, on the experiment build d15c254f, gave 0.769 [0.637, 0.980], wider than 0.25, so the rule's one rerun at 24 rounds decided alone. the cases it must not slow ran as one fresh batch.
+
+| case | on/off | notes |
+|---|---|---|
+| dpoor, 64 MiB `get`, 24 rounds | 0.760 [0.634, 0.811] | the target; median 425 -> 321 s, faster in 21 of 24, every run passed |
+| dhome, 64 MiB `get` | 1.000 [1.000, 1.023] | must not slow |
+| dhome paced, h2+q at 0.75 MB/s a connection | 0.998 [0.996, 1.002] | must not slow |
+| dfast, 1 GiB `get` | 1.000 [1.000, 1.001] | must not slow |
+| dpoor0, 64 MiB `get` | 0.999 [0.999, 1.001] | must not slow |
+| dwifi, 64 MiB `get`, 20 rounds | 1.000 [0.995, 1.008] | must not slow |
+
+in every on-run of the first 12 the split was measured again once, and the late window read under the one that settled it (139 to 238 KB/s settled, 88 to 226 sustained), so one stream joined each time. off settled at 2 to 4 streams, on at 3 or 4; requests open at the server at once stayed within 4, the per-host limit. peak memory rose from a median of 35.3 to 37.1 MiB, one more stream's buffers. bench's poor profile (300 ms rtt, 3% loss each way, 10 Mbit/s) ran 10 rounds beside it, 0.681 [0.560, 1.037], reported but not deciding.
+
+kept: the deciding rerun clears the target's upper bound of 0.97, every case it must not slow passes, and the trade, up to 4 connections to one host on a lossy link where a split stopped at fewer and about 2 MiB more memory, is accepted.
