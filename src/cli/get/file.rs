@@ -405,7 +405,11 @@ async fn put(
                     net,
                     cache,
                     remote,
-                    (known.held, args.web_page),
+                    (
+                        known.held,
+                        args.web_page,
+                        expected.as_ref().and_then(Expected::sha256),
+                    ),
                     destination.to(),
                 )
                 .await?;
@@ -841,19 +845,21 @@ async fn claimed(
 }
 
 /// downloads the one file into the cache, or finds it there, and says so. `to` is the name it
-/// decompresses to with `--decompress`, whose file the cache may hold in its place.
+/// decompresses to with `--decompress`, whose file the cache may hold in its place, and `sha256`
+/// the hash `--sha256` gives.
 async fn download(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
     remote: &Remote,
-    (held, page): (Option<Sha256>, bool),
+    (held, page, sha256): (Option<Sha256>, bool, Option<Sha256>),
     to: Option<&str>,
 ) -> Result<Fetched, Error> {
     let mut job = fetch::listed_job(remote, &remote.path, false);
     job.named_by_caller = true;
     job.fetch.held = held;
     job.fetch.page = page;
+    job.fetch.stated = sha256;
     job.fetch.decompressed = to.map(str::to_owned);
     vet(
         cache,

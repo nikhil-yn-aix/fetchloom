@@ -497,6 +497,64 @@ fn a_file_whose_pieces_miss_its_pin_starts_over_and_says_so() -> Result {
     Ok(())
 }
 
+/// pieces from two answers that miss the hash `--sha256` gives start over once, from the first
+/// byte, as a pinned file's do, and the file the whole answer brings is kept.
+#[test]
+fn pieces_that_miss_the_stated_sha256_start_over_once() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let cut = 150_000;
+    let length = body.len().to_string();
+    let mut spoiled = body.clone();
+    spoiled[cut + 10] ^= 0xff;
+    let rest = (body.len() - cut).to_string();
+    let range = format!("bytes {cut}-{}/{length}", body.len() - 1);
+    let tagged = [("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+    let part = [
+        ("Content-Length", rest.as_str()),
+        ("Content-Range", range.as_str()),
+        ("ETag", "\"v1\""),
+    ];
+    let sha256 = crate::support::sha256_hex(&body);
+    for (place, placed) in [
+        (["-o", "big.bin"], "big.bin"),
+        (["-d", "out"], "out/big.bin"),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start(
+            "/big.bin",
+            vec![
+                reply("200 OK", &tagged, &body[..cut]),
+                reply("206 Partial Content", &part, &spoiled[cut..]),
+                reply("200 OK", &tagged, &body),
+            ],
+        )?;
+        let mut command = vec!["get", server.url.as_str(), "--sha256", sha256.as_str()];
+        command.extend_from_slice(&place);
+        let output = sandbox.run(&command)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{place:?}: {stderr}");
+        let restarts: Vec<&str> = stderr
+            .lines()
+            .filter(|line| line.contains("Restarting"))
+            .collect();
+        assert_eq!(
+            restarts,
+            [
+                " Restarting big.bin · the 390.6 KiB downloaded so far cannot be continued, since the pieces it came in did not match its hash"
+            ],
+            "{place:?}: {stderr}"
+        );
+        let asked = server.requests();
+        assert_eq!(asked.len(), 3, "{place:?}: {asked:?}");
+        assert!(
+            asked[1].contains(&format!("range: bytes={cut}-")) && !asked[2].contains("range:"),
+            "{place:?}: {asked:?}"
+        );
+        assert_eq!(fs::read(sandbox.work().join(placed))?, body, "{place:?}");
+    }
+    Ok(())
+}
+
 /// a try that finds the bytes an earlier try kept are no longer as it left them on this disk starts
 /// over, and says that is why, not that the file changed on the server.
 #[test]

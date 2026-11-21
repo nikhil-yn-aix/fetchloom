@@ -770,6 +770,7 @@ fn prepare(
             job.fetch.page = args.web_page;
             job.fetch.decompressed =
                 archive::decompressed_as(decompress, name).and_then(Result::ok);
+            job.fetch.stated = expected.as_ref().and_then(Expected::sha256);
             // a line's MD5 is checked as the bytes arrive, as a source's is
             if let Some(Expected {
                 checksum: Checksum::Md5(md5),

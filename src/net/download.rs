@@ -100,6 +100,10 @@ pub(crate) struct Fetch {
     pub(crate) divert: Option<Divert>,
     pub(crate) expired: Option<Expired>,
     pub(crate) expect: Expect,
+    /// the SHA-256 the caller checks the bytes against once they are in, as `get --sha256` or a
+    /// list line gives it: bytes joined from several answers that miss it start over once, as a
+    /// pinned file's do, while the bytes of one answer are the caller's to refuse.
+    pub(crate) stated: Option<Sha256>,
     /// what a folder listing says of the file's size, which binds nothing.
     pub(crate) listed: Listed,
     /// ask the server whether the file changed since the last download, instead of trusting the
@@ -180,6 +184,7 @@ impl Fetch {
             divert: None,
             expired: None,
             expect: Expect::default(),
+            stated: None,
             listed: Listed::No,
             revalidate: false,
             record: false,
@@ -1130,25 +1135,30 @@ impl Net {
                     validators,
                     told,
                     resumed,
-                }) => match verify(&fetch.url, &fetch.binding(), &stored) {
-                    Ok(()) => {
-                        let moved = reach.moved.load(Ordering::Relaxed);
-                        let mut fetched =
-                            self.remember(fetch, cache, &stored, validators, told, moved);
-                        (fetched.began, fetched.arrived) = (Some(began), Some(arrived));
-                        return Ok(fetched);
-                    }
+                }) => {
+                    let checked = verify(&fetch.url, &fetch.binding(), &stored);
+                    let missed = checked.is_err()
+                        || fetch.stated.is_some_and(|stated| stated != stored.digest);
                     // bytes from two connections may not belong together, so a resumed or split
-                    // download that does not match starts over once, as one stream
-                    Err(err) if resumed && !restarted => {
-                        tracing::debug!(%err, "a download in pieces did not match, starting over");
+                    // download that misses its hash starts over once, as one stream
+                    if resumed && !restarted && missed {
+                        tracing::debug!(
+                            ?checked,
+                            sha256 = stored.digest.short(),
+                            "a download in pieces did not match, starting over"
+                        );
                         on(Event::Restart(Restart::Mismatched))?;
                         restarted = true;
                         state.split = false;
                         partial.discard();
+                        continue;
                     }
-                    Err(err) => return Err(err),
-                },
+                    checked?;
+                    let moved = reach.moved.load(Ordering::Relaxed);
+                    let mut fetched = self.remember(fetch, cache, &stored, validators, told, moved);
+                    (fetched.began, fetched.arrived) = (Some(began), Some(arrived));
+                    return Ok(fetched);
+                }
                 Ok(Answer::StartOver) => {
                     tracing::debug!("the earlier download cannot be continued, starting over");
                     partial.discard();
@@ -2342,6 +2352,7 @@ fn as_it_is_now(fetch: &Fetch, current: Url) -> Fetch {
         divert: fetch.divert,
         expired: fetch.expired,
         expect: fetch.expect,
+        stated: fetch.stated,
         listed: fetch.listed,
         revalidate: false,
         record: fetch.record,
