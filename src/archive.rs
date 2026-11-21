@@ -523,7 +523,7 @@ fn refused_member(path: &str, reason: &str) -> Error {
 }
 
 /// the error for what `unpacking` says unpacks, not read to its end within `memory`; a disk's own
-/// failure stays `local.io`.
+/// failure stays `local.io`, as does memory the system would not give a decoder.
 fn damaged(
     unpacking: Unpacking,
     at: Option<&str>,
@@ -531,12 +531,25 @@ fn damaged(
     memory: u64,
 ) -> Error {
     let noun = unpacking.noun();
+    if tar::stopped(err) {
+        return Error::new(Kind::Interrupted, "stopped while unpacking the archive");
+    }
     if let Some(error) = crate::error::io_cause(err) {
         let doing = match at {
             Some(path) => format!("could not read the cached {noun} at \"{path}\""),
             None => format!("could not read the cached {noun}"),
         };
         return Error::io(doing, error);
+    }
+    if tar::lacks_memory(err) {
+        return Error::new(
+            Kind::LocalIo,
+            format!(
+                "the system did not give fetchloom the memory to {} the {noun}'s xz stream",
+                unpacking.verb()
+            ),
+        )
+        .help("close programs that take much memory, or raise the container's memory limit, then run the same command again");
     }
     if tar::needs_too_much_memory(err) {
         return past(

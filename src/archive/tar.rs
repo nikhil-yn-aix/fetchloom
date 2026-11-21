@@ -35,30 +35,42 @@ const XZ_INDEX_MOST: u64 = 16 << 20;
 
 /// the stream a tar sits in, decompressed. gzip, xz and bzip2 streams may be several joined end
 /// to end, as pigz, bgzip and pbzip2 write them. with `xz_threads`, an xz stream that
-/// [`xz_threads`] found alone in its file decodes on that many threads.
+/// [`xz_threads`] found alone in its file decodes on that many threads, and goes on with one
+/// decoder from where they were should liblzma fail to start one.
 pub(super) fn decompressed<'r>(
     format: Format,
     compressed: impl BufRead + 'r,
     memory: u64,
-    xz_threads: Option<u32>,
+    xz_threads: Option<Threads<'r>>,
 ) -> io::Result<Box<dyn Read + 'r>> {
     Ok(match format {
         Format::TarGz => Box::new(Streams::<GzDecoder<_>>::new(compressed)),
         Format::TarXz => {
             let limit = memory.max(XZ_MEMORY);
-            let stream = match xz_threads {
+            match xz_threads {
                 // one stream alone, so the decoder needs no CONCATENATED, which it cannot take
                 Some(threads) => {
-                    tracing::debug!(threads, "the xz stream decodes on several threads");
-                    MtStreamBuilder::new()
-                        .threads(threads)
+                    tracing::debug!(
+                        threads = threads.count,
+                        "the xz stream decodes on several threads"
+                    );
+                    let stream = MtStreamBuilder::new()
+                        .threads(threads.count)
                         .memlimit_threading(limit)
                         .memlimit_stop(limit)
-                        .decoder()?
+                        .decoder()?;
+                    Box::new(HandOver {
+                        phase: Phase::Threaded(Box::new(XzDecoder::new_stream(compressed, stream))),
+                        threads,
+                        given: 0,
+                        limit,
+                    })
                 }
-                None => Stream::new_auto_decoder(limit, CONCATENATED)?,
-            };
-            Box::new(XzDecoder::new_stream(compressed, stream))
+                None => Box::new(XzDecoder::new_stream(
+                    compressed,
+                    Stream::new_auto_decoder(limit, CONCATENATED)?,
+                )),
+            }
         }
         Format::TarZst => {
             let mut decoder = zstd::stream::read::Decoder::with_buffer(compressed)?;
@@ -68,6 +80,148 @@ pub(super) fn decompressed<'r>(
         Format::TarBz2 => Box::new(Streams::<BzDecoder<_>>::new(compressed)),
         Format::Tar | Format::Zip | Format::SevenZ => Box::new(compressed),
     })
+}
+
+/// an xz stream's threads, as [`xz_threads`] counts them, with the same stream read again from its
+/// start and the run's stop, for one decoder to go on from where they were should liblzma fail to
+/// start one.
+pub(super) struct Threads<'r> {
+    pub(super) count: u32,
+    pub(super) again: Box<dyn FnMut() -> io::Result<Box<dyn BufRead + 'r>> + 'r>,
+    pub(super) stopped: Box<dyn Fn() -> bool + 'r>,
+}
+
+impl<'r> Threads<'r> {
+    /// `count` threads for the stream of `input`, which `guard` counts and stops.
+    pub(super) fn of(count: u32, input: &'r Input, guard: &Guard<'r>) -> Threads<'r> {
+        let meter = guard.meter();
+        Threads {
+            count,
+            // bytes read again count only up to the archive's size, as a seek's do
+            again: Box::new(move || {
+                let inner = input.reopen(meter)?;
+                Ok(Box::new(Counted { inner, meter }) as Box<dyn BufRead + 'r>)
+            }),
+            stopped: Box::new(guard.stopping()),
+        }
+    }
+}
+
+/// liblzma's threaded decoder, which hands over to one decoder when liblzma fails to start a
+/// thread, as when the system allows no more, or to take memory for one: it says either as memory
+/// it cannot allocate. the threaded decoder goes first, with its threads and their buffers; then
+/// one decoder reads the stream again from its start and passes over the bytes the threads gave,
+/// so the reader takes each byte once. the hand-over retries what is interrupted, and a read that
+/// fails leaves it where it was.
+struct HandOver<'r> {
+    phase: Phase<'r>,
+    /// how one decoder reads the stream again, and the run's stop while it does.
+    threads: Threads<'r>,
+    /// the bytes given so far.
+    given: u64,
+    /// the memory the one decoder may take.
+    limit: u64,
+}
+
+/// how far a [`HandOver`] has gone.
+enum Phase<'r> {
+    /// liblzma's threads decode.
+    Threaded(Box<dyn Read + 'r>),
+    /// they failed and went, and one decoder is still to read the stream again.
+    Failed,
+    /// one decoder, with the bytes the threads gave that it has still to pass over.
+    One(Box<dyn Read + 'r>, u64),
+}
+
+impl Read for HandOver<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            let decoder = match &mut self.phase {
+                Phase::Failed => {
+                    let compressed =
+                        uninterrupted(&*self.threads.stopped, &mut *self.threads.again)?;
+                    let stream = Stream::new_auto_decoder(self.limit, CONCATENATED)?;
+                    let one = Box::new(XzDecoder::new_stream(compressed, stream));
+                    self.phase = Phase::One(one, self.given);
+                    continue;
+                }
+                Phase::One(decoder, left) if *left > 0 => {
+                    pass_over(decoder, left, &*self.threads.stopped)?;
+                    continue;
+                }
+                Phase::Threaded(decoder) | Phase::One(decoder, _) => decoder,
+            };
+            match decoder.read(buffer) {
+                Ok(read) => {
+                    self.given += read as u64;
+                    return Ok(read);
+                }
+                Err(err) if matches!(self.phase, Phase::Threaded(_)) && lacks_memory(&err) => {
+                    tracing::debug!(%err, given = self.given, "liblzma's threads failed, so one decoder goes on from where they were");
+                    self.phase = Phase::Failed;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+/// has `decoder` pass over `left` of its bytes, counting them down, so a read that fails leaves
+/// it where it was.
+fn pass_over(decoder: &mut dyn Read, left: &mut u64, stopped: &dyn Fn() -> bool) -> io::Result<()> {
+    let mut scratch = vec![0; 64 << 10];
+    while *left > 0 {
+        let most = usize::try_from(*left).map_or(scratch.len(), |left| left.min(scratch.len()));
+        match uninterrupted(stopped, || decoder.read(&mut scratch[..most]))? {
+            0 => return Err(io::ErrorKind::UnexpectedEof.into()),
+            read => *left -= read as u64,
+        }
+    }
+    Ok(())
+}
+
+/// `attempt`, tried again while it is interrupted, unless the run asked to stop.
+fn uninterrupted<T>(
+    stopped: &dyn Fn() -> bool,
+    mut attempt: impl FnMut() -> io::Result<T>,
+) -> io::Result<T> {
+    loop {
+        if stopped() {
+            return Err(io::Error::other(Stopped));
+        }
+        match attempt() {
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            done => return done,
+        }
+    }
+}
+
+/// whether `err` is liblzma's word that it could not allocate memory, which its threaded decoder
+/// also says when it cannot start a thread.
+pub(super) fn lacks_memory(err: &(dyn std::error::Error + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .and_then(|inner| inner.downcast_ref::<liblzma::stream::Error>())
+        .is_some_and(|inner| *inner == liblzma::stream::Error::Mem)
+}
+
+/// the run asked to stop while one decoder went over what liblzma's threads gave.
+#[derive(Debug)]
+pub(super) struct Stopped;
+
+impl std::fmt::Display for Stopped {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("stopped while unpacking the archive")
+    }
+}
+
+impl std::error::Error for Stopped {}
+
+/// whether `err`, a decoder's error, is [`Stopped`].
+pub(super) fn stopped(err: &(dyn std::error::Error + 'static)) -> bool {
+    err.downcast_ref::<io::Error>()
+        .and_then(io::Error::get_ref)
+        .is_some_and(<dyn std::error::Error + Send + Sync>::is::<Stopped>)
 }
 
 /// the threads the xz stream in `input` decodes on: none, so one decoder takes it, unless `limits`
@@ -214,7 +368,8 @@ pub(super) fn unpack(
         meter: guard.meter(),
     };
     let memory = guard.limits().memory;
-    let threads = xz_threads(input, format, guard.limits());
+    let threads =
+        xz_threads(input, format, guard.limits()).map(|count| Threads::of(count, input, guard));
     let decoded = decompressed(format, counted, memory, threads)
         .map_err(|err| unreadable_stream(Unpacking::Archive, None, &err, memory))?;
     let headers = Headers::default();
@@ -525,13 +680,16 @@ fn zeros_to_end(compressed: &mut impl BufRead, name: &str) -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
+    use std::io::BufRead;
+
     use ::tar::{Builder, EntryType, Header};
 
     use super::super::samples::{
         Scratch, compress, pax, raw_entry, tar_of, xz_asking_for, xz_in_blocks, zstd_asking_for,
     };
-    use super::super::{Format, Input, Limits};
-    use super::{XZ_MEMORY, decompressed, xz_blocks, xz_threads};
+    use super::super::{Format, Input, Limits, Unpacking};
+    use super::{HandOver, Phase, Read, Threads, XZ_MEMORY, decompressed, xz_blocks, xz_threads};
     use crate::digest;
     use crate::error::Kind;
 
@@ -962,10 +1120,15 @@ mod tests {
     fn a_tar_in_xz_blocks_unpacks_alike_on_threads() {
         let (tar, blocked) = tar_in_blocks();
         let mut decoded = Vec::new();
-        decompressed(Format::TarXz, blocked.as_slice(), XZ_MEMORY, Some(4))
-            .unwrap()
-            .read_to_end(&mut decoded)
-            .unwrap();
+        decompressed(
+            Format::TarXz,
+            blocked.as_slice(),
+            XZ_MEMORY,
+            Some(four_threads(&blocked)),
+        )
+        .unwrap()
+        .read_to_end(&mut decoded)
+        .unwrap();
         assert_eq!(decoded, tar);
         let half = tar.len() / 2;
         let joined = [
@@ -989,6 +1152,175 @@ mod tests {
         }
     }
 
+    /// four threads for the stream `bytes`, which reads again as it is, never stopped.
+    fn four_threads(bytes: &[u8]) -> Threads<'_> {
+        Threads {
+            count: 4,
+            again: Box::new(move || Ok(Box::new(bytes) as Box<dyn std::io::BufRead + '_>)),
+            stopped: Box::new(|| false),
+        }
+    }
+
+    /// a threaded decoder that gives its bytes, then fails as liblzma's does when it cannot
+    /// start a thread, and marks when it goes.
+    struct Refused<'b>(&'b [u8], &'b Cell<bool>);
+
+    impl Read for Refused<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            if self.0.is_empty() {
+                return Err(liblzma::stream::Error::Mem.into());
+            }
+            let read = self.0.len().min(buffer.len()).min(1000);
+            buffer[..read].copy_from_slice(&self.0[..read]);
+            self.0 = &self.0[read..];
+            Ok(read)
+        }
+    }
+
+    impl Drop for Refused<'_> {
+        fn drop(&mut self) {
+            self.1.set(true);
+        }
+    }
+
+    /// a hand-over from `refused` to one decoder that reads the stream again through `threads`.
+    fn handing<'r>(refused: Refused<'r>, threads: Threads<'r>) -> HandOver<'r> {
+        HandOver {
+            phase: Phase::Threaded(Box::new(refused)),
+            threads,
+            given: 0,
+            limit: XZ_MEMORY,
+        }
+    }
+
+    /// a stream read again that is interrupted the second time it is asked for bytes, if it
+    /// `interrupts`.
+    struct Interrupting<'b> {
+        bytes: &'b [u8],
+        asks: u32,
+        interrupts: bool,
+    }
+
+    impl Read for Interrupting<'_> {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.fill_buf()?.read(buffer)?;
+            self.consume(read);
+            Ok(read)
+        }
+    }
+
+    impl BufRead for Interrupting<'_> {
+        fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+            self.asks += 1;
+            if self.interrupts && self.asks == 2 {
+                return Err(std::io::ErrorKind::Interrupted.into());
+            }
+            Ok(self.bytes)
+        }
+
+        fn consume(&mut self, taken: usize) {
+            self.bytes = &self.bytes[taken..];
+        }
+    }
+
+    /// a threaded decoder that fails for a thread or memory, after it gave part of the stream,
+    /// hands over to one decoder, which reads the stream again and gives the rest, each byte once,
+    /// wherever it failed. a stop asked while that decoder catches up is the run's stop, and a
+    /// decoder short of memory reads as the system's want, never as damage.
+    #[test]
+    fn a_refused_threaded_decoder_hands_over_where_it_was() {
+        let (tar, blocked) = tar_in_blocks();
+        let gone = Cell::new(false);
+        // a stop asked from the second look, once one decoder passes over bytes
+        let refused_after = |given: usize, stopping: bool| {
+            let looks = Cell::new(0);
+            let stopped = move || {
+                looks.set(looks.get() + 1);
+                stopping && looks.get() > 1
+            };
+            handing(
+                Refused(&tar[..given], &gone),
+                Threads {
+                    stopped: Box::new(stopped),
+                    ..four_threads(&blocked)
+                },
+            )
+        };
+        for given in [0, 1, 1000, 65_537, tar.len() - 1, tar.len()] {
+            let mut read = Vec::new();
+            refused_after(given, false).read_to_end(&mut read).unwrap();
+            assert!(read == tar, "refused after {given} bytes");
+        }
+        let mut read = Vec::new();
+        let stopped = refused_after(65_537, true)
+            .read_to_end(&mut read)
+            .unwrap_err();
+        assert_eq!(read.len(), 65_537);
+        let error = super::super::damaged(Unpacking::Archive, None, &stopped, XZ_MEMORY);
+        assert_eq!(error.kind, Kind::Interrupted);
+        let short: std::io::Error = liblzma::stream::Error::Mem.into();
+        let error = super::super::damaged(Unpacking::Archive, None, &short, XZ_MEMORY);
+        assert_eq!(error.kind, Kind::LocalIo);
+        assert!(!error.message.contains("damaged"), "{}", error.message);
+    }
+
+    /// the threaded decoder that failed goes, with its threads and their buffers, before one
+    /// decoder reads the stream again, and the hand-over tries again what is interrupted, the
+    /// stream's reopening or a read of it while that decoder passes over what the threads gave,
+    /// so a reader that takes an interruption as an error still takes each byte once.
+    #[test]
+    fn a_failed_threaded_decoder_goes_first_and_interruptions_are_tried_again() {
+        let (tar, blocked) = tar_in_blocks();
+        let mut failures = Vec::new();
+        for (case, reopening_interrupted, reading_interrupted) in [
+            ("uninterrupted", false, false),
+            ("reopening interrupted", true, false),
+            ("passing over interrupted", false, true),
+        ] {
+            let gone = Cell::new(false);
+            let gone_first = Cell::new(true);
+            let reopenings = Cell::new(0);
+            let again = || {
+                gone_first.set(gone_first.get() && gone.get());
+                reopenings.set(reopenings.get() + 1);
+                if reopening_interrupted && reopenings.get() == 1 {
+                    return Err(std::io::Error::from(std::io::ErrorKind::Interrupted));
+                }
+                let stream = Interrupting {
+                    bytes: &blocked,
+                    asks: 0,
+                    interrupts: reading_interrupted,
+                };
+                Ok(Box::new(stream) as Box<dyn BufRead + '_>)
+            };
+            let threads = Threads {
+                again: Box::new(again),
+                ..four_threads(&blocked)
+            };
+            let mut handover = handing(Refused(&tar[..200_000], &gone), threads);
+            let mut read = Vec::new();
+            let mut buffer = [0; 8192];
+            let outcome = loop {
+                match handover.read(&mut buffer) {
+                    Ok(0) => break Ok(()),
+                    Ok(given) => read.extend_from_slice(&buffer[..given]),
+                    Err(err) => break Err(err),
+                }
+            };
+            match outcome {
+                Err(err) => failures.push(format!("{case}: {err}")),
+                Ok(()) if read != tar => failures.push(format!("{case}: not the tar's bytes")),
+                Ok(()) => {}
+            }
+            if !gone_first.get() {
+                failures.push(format!(
+                    "{case}: the threaded decoder was there at the reopening"
+                ));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
     /// an xz stream of several blocks whose first block asks for too much memory is refused on
     /// threads as it is on one decoder, leaving nothing in the cache.
     #[test]
@@ -1010,6 +1342,59 @@ mod tests {
             err.message,
             "the archive's xz stream needs more than 256.0 MiB of memory to unpack"
         );
+    }
+
+    /// a tar in xz blocks unpacks to the same files when the system refuses every new thread, as
+    /// a refused worker leaves its work to the caller elsewhere: liblzma's threaded decoder fails
+    /// a block whose thread will not start.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn xz_blocks_unpack_when_no_thread_starts() {
+        use rustix::process::{Resource, Rlimit, getrlimit, setrlimit};
+        const CHILD: &str = "FETCHLOOM_TEST_NO_NEW_THREADS";
+        if std::env::var_os(CHILD).is_none() {
+            let result = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "archive::tar::tests::xz_blocks_unpack_when_no_thread_starts",
+                    "--test-threads=1",
+                ])
+                .env(CHILD, "1")
+                .output()
+                .unwrap();
+            assert!(
+                result.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&result.stdout),
+                String::from_utf8_lossy(&result.stderr)
+            );
+            return;
+        }
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root ignores the limit on threads");
+        }
+        let (_, blocked) = tar_in_blocks();
+        let alone = Scratch::new().unpack(Format::TarXz, &blocked).unwrap();
+        let threaded = Limits {
+            xz_threads: 4,
+            ..Limits::default()
+        };
+        let scratch = Scratch::new();
+        let maximum = getrlimit(Resource::Nproc).maximum;
+        setrlimit(
+            Resource::Nproc,
+            Rlimit {
+                current: Some(0),
+                maximum,
+            },
+        )
+        .unwrap();
+        assert!(std::thread::Builder::new().spawn(|| {}).is_err());
+        let unpacked = scratch
+            .unpack_with(Format::TarXz, &blocked, &threaded, &|_| false)
+            .unwrap();
+        assert_eq!(unpacked.members, alone.members);
+        assert_eq!(unpacked.tree, alone.tree);
     }
 
     #[test]

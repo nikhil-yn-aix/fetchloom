@@ -158,6 +158,14 @@ impl Input {
         meter.cap_at(joined.size());
         Ok(BufReader::with_capacity(BUFFER, joined))
     }
+
+    /// [`Input::open`] again, for a decoder that reads the archive anew from its start, failing as
+    /// a read of it would.
+    pub(super) fn reopen(&self, meter: &Meter) -> io::Result<BufReader<Joined>> {
+        let joined = Joined::open(self).map_err(|(_, err)| err)?;
+        meter.cap_at(joined.size());
+        Ok(BufReader::with_capacity(BUFFER, joined))
+    }
 }
 
 /// an archive's bytes as one stream, with only the part holding the next byte open.

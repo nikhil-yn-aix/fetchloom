@@ -50,7 +50,7 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 | cache verification | logical CPU count, reduced by the cap |
 | large fallback copies outside linux | uncapped copies overlap reads and writes with three reusable 1 MiB buffers; a cap avoids a reader thread per placement worker |
 
-local placement, the survey's walk, cache verification and archive workers use one fallible scoped-thread helper. refused work stays owned until the caller joins it; started workers finish normally and results preserve input order. archive readers store inline when no writer starts, and close their queue before joining fallback consumers. job panics still propagate.
+local placement, the survey's walk, cache verification and archive workers use one fallible scoped-thread helper. refused work stays owned until the caller joins it; started workers finish normally and results preserve input order. archive readers store inline when no writer starts, and close their queue before joining fallback consumers. liblzma's threaded xz decoder starts its own threads, outside the helper; a thread it cannot start hands the stream to one decoder, which goes on from where the threads were. job panics still propagate.
 
 before constructing the async runtime, the CLI starts and joins one fallible probe thread. an immediate refusal returns `local.io` (exit 50), including in JSON, without invoking the runtime builder. release builds abort on panics and retain the bug-report hook. the probe does not reserve capacity: a later refusal during tokio worker creation can still panic.
 

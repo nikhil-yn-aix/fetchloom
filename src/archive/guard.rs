@@ -150,6 +150,13 @@ impl<'a> Guard<'a> {
         self.limits
     }
 
+    /// whether the run asked to stop, as [`Guard::check_stopped`] asks, for a reader that works
+    /// while the guard is busy elsewhere.
+    pub(super) fn stopping(&self) -> impl Fn() -> bool + 'a {
+        let (watch, meter) = (self.watch, self.meter);
+        move || watch(meter.compressed.get())
+    }
+
     /// counts one entry of any kind, refusing the archive past the member limit.
     pub(super) fn entry(&mut self) -> Result<(), Error> {
         self.check_stopped()?;
