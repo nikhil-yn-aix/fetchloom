@@ -347,9 +347,12 @@ def links(binaries, out, *, seed, rounds, cpus, timeout, lock=None):
 
 
 def summary(rows):
-    """per case and arm: pairs, medians, and the time, cpu and memory ratios with their intervals."""
-    lines = ["| case | arm | pairs | wall, baseline → arm | time ratio [95%] | cpu ratio [95%] | peak MiB, baseline → arm | memory ratio [95%] |",
-             "|---|---|---:|---|---|---|---|---|"]
+    """per case and arm: pairs, failed runs, medians, and the time, cpu and memory ratios with their
+    intervals; a comparison with a failed or unmatched run shows no performance at all, since its
+    times may not be of the same work."""
+    lines = ["| case | arm | pairs | failed, baseline/arm | wall, baseline → arm | time ratio [95%] | cpu ratio [95%] | "
+             "peak MiB, baseline → arm | memory ratio [95%] |",
+             "|---|---|---:|---:|---|---|---|---|---|"]
     measured = [row for row in rows if not row["warmup"] and row["status"] == "passed"]
     for result in ab.compare(rows, threshold=.02, min_pairs=5):
         key = tuple(result["case"].split("/"))
@@ -367,7 +370,11 @@ def summary(rows):
             return f"{data['median_ratio']:.3f} [{bounds[0]:.3f}, {bounds[1]:.3f}]" if bounds else "-"
 
         arm = result["variant"]
-        lines.append(f"| {case} | {arm.removeprefix('fetchloom+')} | {result['rounds']} | "
+        failed = f"{result['failed']['base']}/{result['failed']['variant']}"
+        if any(result["failed"].values()) or any(result["unmatched"].values()):
+            lines.append(f"| {case} | {arm.removeprefix('fetchloom+')} | {result['rounds']} | {failed} | failed | - | - | - | - |")
+            continue
+        lines.append(f"| {case} | {arm.removeprefix('fetchloom+')} | {result['rounds']} | {failed} | "
                      f"{median('fetchloom', 'wall_seconds') * 1000:.1f} → {median(arm, 'wall_seconds') * 1000:.1f} ms | "
                      f"{ratio('wall')} | {ratio('cpu')} | {median('fetchloom', 'maxrss_bytes') / 2**20:.1f} → "
                      f"{median(arm, 'maxrss_bytes') / 2**20:.1f} | {ratio('memory')} |")
@@ -475,6 +482,13 @@ def main(argv=None):
     (out / "summary.md").write_text(text + "\n")
     print(text)
     print(f"\nruns and logs: {out}", file=sys.stderr)
+    failed = [row for row in rows if row["status"] != "passed"]
+    for row in failed[:5]:
+        why = "; ".join(row.get("checks") or []) or row.get("error") or f"exit {row.get('exit_code')}"
+        print(f"recheck: {row['scenario']} {row['tool']} round {row['round']} failed: {why}", file=sys.stderr)
+    if failed:
+        print(f"recheck: {len(failed)} of {len(rows)} runs failed, so their cases show no ratio", file=sys.stderr)
+        return 1
     return 0
 
 

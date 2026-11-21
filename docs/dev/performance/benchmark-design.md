@@ -98,7 +98,7 @@ Part A's `bench/recheck.py` times what a release must not slow down: a status, a
 
 The arms are the starting build (fetchloom at d168842, main when this release's work began), the candidate, and the starting build's bytes again as the A/A arm; either build would be a valid noise control. Each arm runs a fresh copy of its binary and makes its own projects and caches from the same generated files, so no arm reads another's formats. The copies and each arm's folders go by the ids `arm0`, `arm1` and `arm2`. Every file a run downloads or places is checked by its SHA-256 after the clock stops and before its folder is cleared, so exit 0 alone is never a pass.
 
-The summary gives each case's time, CPU and peak memory ratio, arm over the starting build, with its 95% interval, read beside the A/A arm's: a shift both show is the machine.
+The summary gives each case's failed runs and its time, CPU and peak memory ratio, arm over the starting build, with its 95% interval, read beside the A/A arm's: a shift both show is the machine. A comparison with a failed run shows no performance at all, and any failed run, a wrong file among them, makes the recheck exit nonzero.
 
 ## Real services
 

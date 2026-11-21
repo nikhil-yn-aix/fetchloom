@@ -126,7 +126,7 @@ taskset -c 0-11 python3 bench/recheck.py --baseline /path/to/fetchloom-of-the-la
   --candidate target/release/fetchloom --root /path/to/a/folder --cpus 12-23
 ```
 
-`--cpus` pins the measured commands; pinning the script elsewhere keeps its preparation and file server off those CPUs. `--cases` and `--rounds` narrow a run, and `--lock` holds a lock file while each case runs, for a machine whose measurers take turns. the summary gives each case's time, CPU and peak memory ratio, arm over baseline, with its 95% bootstrap interval from `ab.py`, and names a link case's link, such as `s1 poor`; `runs.jsonl`, `meta.json` with each binary's SHA-256, and the command logs stay in a dated folder under `--root`/results. read the candidate's interval beside the a/a arm's: a shift both show is the machine.
+`--cpus` pins the measured commands; pinning the script elsewhere keeps its preparation and file server off those CPUs. `--cases` and `--rounds` narrow a run, and `--lock` holds a lock file while each case runs, for a machine whose measurers take turns. the summary gives each case's failed runs and its time, CPU and peak memory ratio, arm over baseline, with its 95% bootstrap interval from `ab.py`, and names a link case's link, such as `s1 poor`. a comparison with a failed or unmatched run shows `failed` and no performance at all, and any failed run, a wrong or missing file among them, makes the recheck exit 1 after naming the first few; `runs.jsonl`, `meta.json` with each binary's SHA-256, and the command logs stay in a dated folder under `--root`/results. read the candidate's interval beside the a/a arm's: a shift both show is the machine.
 
 ## measurement island
 

@@ -95,8 +95,13 @@ class MeasureTests(unittest.TestCase):
         self.assertEqual(*orders)
         self.assertGreater(len({tuple(order) for order in orders[0]}), 1)
         text = recheck.summary(rows)
-        self.assertIn("| status | candidate | 6 | 1000.0 → 1100.0 ms | 1.100 [1.100, 1.100] | 1.000 [1.000, 1.000] | 1.0 → 2.0 | 2.000", text)
-        self.assertIn("| status | aa | 6 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000] | 1.000 [1.000, 1.000] | 1.0 → 1.0 | 1.000", text)
+        self.assertIn("| status | candidate | 6 | 0/0 | 1000.0 → 1100.0 ms | 1.100 [1.100, 1.100] | 1.000 [1.000, 1.000] | 1.0 → 2.0 | 2.000", text)
+        self.assertIn("| status | aa | 6 | 0/0 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000] | 1.000 [1.000, 1.000] | 1.0 → 1.0 | 1.000", text)
+        # a failed run leaves its comparison without any performance, and says how many failed
+        broken = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+candidate", 3) else row for row in rows]
+        text = recheck.summary(broken)
+        self.assertIn("| status | candidate | 5 | 0/1 | failed | - | - | - | - |", text)
+        self.assertIn("| status | aa | 6 | 0/0 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000]", text)
 
     def test_a_link_case_names_its_link_in_the_summary(self):
         rows = [dict(kind="lab", tool=arm, scenario="s1", filesystem="ext4", profile=profile, round=n, warmup=False,
@@ -105,8 +110,8 @@ class MeasureTests(unittest.TestCase):
                 for profile in ("home", "poor") for n in range(1, 6)
                 for arm, wall in (("fetchloom", 1.0), ("fetchloom+candidate", .9), ("fetchloom+aa", 1.0))]
         text = recheck.summary(rows)
-        self.assertIn("| s1 home | candidate | 5 | 1000.0 → 900.0 ms | 0.900 [0.900, 0.900]", text)
-        self.assertIn("| s1 poor | candidate | 5 | 2000.0 → 1800.0 ms | 0.900 [0.900, 0.900]", text)
+        self.assertIn("| s1 home | candidate | 5 | 0/0 | 1000.0 → 900.0 ms | 0.900 [0.900, 0.900]", text)
+        self.assertIn("| s1 poor | candidate | 5 | 0/0 | 2000.0 → 1800.0 ms | 0.900 [0.900, 0.900]", text)
 
     def test_what_a_run_downloads_or_places_is_checked_after_the_clock_and_before_it_is_cleared(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -367,6 +372,17 @@ class CommandTests(unittest.TestCase):
                          [("| help", "aa"), ("| help", "candidate"), ("| version", "aa"), ("| version", "candidate")])
         self.assertEqual(said.splitlines()[:3], [f"preparing {arm}" for arm in recheck.ARMS])
         self.assertEqual(said.splitlines()[3:5], ["version: 2 rounds", "help: 2 rounds"])
+
+    def test_a_failed_run_fails_the_recheck_and_its_case_shows_no_ratio(self):
+        baseline = build(self.root / "old")
+        candidate = build(self.root / "new", BUILD + "if words == ['--version']:\n    sys.exit(4)\n")
+        code, said, shown = self.recheck(baseline, candidate, "--cases", "version,help", "--rounds", "2")
+        self.assertEqual(code, 1, said)
+        # the measured rounds' failures, warmup aside
+        self.assertIn("| version | candidate | 0 | 0/2 | failed | - | - | - | - |", shown)
+        self.assertNotIn("failed", [line for line in shown.splitlines() if line.startswith("| help | candidate")][0])
+        self.assertIn("recheck: version fetchloom+candidate round 0 failed: exit 4", said)
+        self.assertIn("recheck: 3 of 18 runs failed, so their cases show no ratio", said)
 
     def test_a_build_that_cannot_prepare_ends_the_recheck(self):
         failing = build(self.root / "old", "raise SystemExit(1)\n")
