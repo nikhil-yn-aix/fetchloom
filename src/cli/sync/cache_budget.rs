@@ -189,7 +189,8 @@ pub(in crate::cli) fn ask(output: &Output, yes: bool, over: &Over<'_>) -> Result
         Some(true) => Ok(()),
         Some(false) => Err(
             Error::new(Kind::Unconfirmed, format!("did not start {}", over.doing))
-                .cancelled(cancel),
+                .cancelled(cancel)
+                .help(freeing_help(over.by_variable, over.projectless)),
         ),
         None => Err(room
             .into_iter()

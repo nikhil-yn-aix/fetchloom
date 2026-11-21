@@ -1343,6 +1343,46 @@ fn settings_set_says_a_variable_wins_and_refuses_no_config() -> Result {
     Ok(())
 }
 
+/// a no to the budget question changes nothing and ends with what frees room, as a run no one can
+/// answer is told: here a clone's first sync into a cache of its own.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_no_to_the_budget_question_says_what_frees_room() -> Result {
+    let sandbox = Sandbox::new()?;
+    for (path, body) in [
+        ("/iris.csv", &b"sepal,petal\n5.1,1.4\n"[..]),
+        ("/wine.csv", &[b'w'; 64]),
+    ] {
+        let server = Server::start(path, vec![file(body, "\"v1\"")])?;
+        sandbox.allow(&server.url);
+        let added = sandbox.run(&["add", &server.url])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    }
+    let clone = sandbox.folder("clone")?;
+    for name in ["data.toml", "data.lock"] {
+        std::fs::copy(sandbox.work().join(name), clone.join(name))?;
+    }
+    let mut sync = sandbox.command_in(&clone, &["sync"]);
+    sync.env("FETCHLOOM_CACHE", sandbox.folder("clone-cache")?)
+        .env("FETCHLOOM_CACHE_BUDGET", "64B");
+    let Some((code, screen)) =
+        crate::support::typed(&clone, &sync, "cols 300", "go on anyway?", "n\r")?
+    else {
+        return Ok(());
+    };
+    assert_ne!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains("this project's largest datasets are wine (64 B) and iris (20 B). go on anyway? [y/N] n\n"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains(", so nothing changed\n  hint: `fetchloom drop <name>` frees a dataset's files here and keeps it pinned, or `fetchloom remove <name>` and then `fetchloom cache gc --now` free them and take it out of the project, or raise FETCHLOOM_CACHE_BUDGET"),
+        "{screen}"
+    );
+    assert!(!clone.join("data").exists(), "{screen}");
+    Ok(())
+}
+
 /// a yes to one question answers that question alone: a download of no stated size that a person
 /// let past `ask_above` still asks once it takes all of the `cache_budget`.
 #[cfg(target_os = "linux")]
