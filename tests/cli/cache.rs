@@ -337,9 +337,10 @@ fn a_folder_the_group_cannot_write_in_a_shared_cache_is_told() -> Result {
 
 /// a lab's cache is a setgid folder its group may write. what a run makes there with the usual
 /// `umask 022` lets the group's other members add to each folder, as `umask 002` would, and with
-/// `umask 077` read each file too; nothing becomes writable by every user, and an object stays
-/// read-only for everyone. a run as root in the group, as a lab's container may be, gives the
-/// group the same, though only what it makes is root's.
+/// `umask 077` read each file too; nothing becomes writable by every user, an object stays
+/// read-only for everyone, and the records a member keeps as their own stay theirs alone. a run
+/// as root in the group, as a lab's container may be, gives the group the same, though only what
+/// it makes is root's.
 #[cfg(unix)]
 #[test]
 fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
@@ -380,10 +381,24 @@ fn the_group_may_add_to_what_a_run_makes_in_its_cache() -> Result {
         }
 
         let group = fs::metadata(&cache)?.gid();
+        let urls = cache.join("urls");
+        // the folder of a member's own records, and what it holds, are theirs alone
+        let own = |path: &std::path::Path| {
+            path.strip_prefix(&urls)
+                .ok()
+                .and_then(|rest| rest.components().next())
+                .is_some_and(|first| first.as_os_str().to_string_lossy().starts_with("user-"))
+        };
         let mut wrong = Vec::new();
         for (path, found) in below(&cache)? {
             let mode = found.mode() & 0o7777;
             let shown = format!("{mode:o} {}", path.display());
+            if own(&path) {
+                if path.parent() == Some(urls.as_path()) && mode & 0o077 != 0 {
+                    wrong.push(format!("others may enter {shown}"));
+                }
+                continue;
+            }
             if mode & 0o002 != 0 {
                 wrong.push(format!("every user may write {shown}"));
             }
@@ -823,7 +838,7 @@ fn a_links_record_in_another_users_cache_pins_nothing() -> Result {
     assert_eq!(another.status.code(), Some(20), "{stderr}");
     assert!(
         stderr.contains(&format!(
-            "error: offline, and {} is not in the cache\n",
+            "error: offline, and {} is in this cache only by a download that may not be yours\n",
             server.url
         )),
         "{stderr}"

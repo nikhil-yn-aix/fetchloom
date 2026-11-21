@@ -447,7 +447,7 @@ async fn one_link(
         return Ok(wrote(context, args, &link, file, &done));
     }
     let remembered = offline
-        .and_then(|key| cache.url_record(key))
+        .and_then(|key| cache.vouched_url_record(key, None))
         .and_then(|kept| {
             remembered::listing(
                 &parsed,
@@ -663,7 +663,7 @@ async fn resolve_all(
         // offline, what the link kept last time stands in for a listing only its source can give
         if let Some(listing) = remembered::key(args, &parsed)
             .filter(|_| context.offline.enabled())
-            .and_then(|key| cache.url_record(&key))
+            .and_then(|key| cache.vouched_url_record(&key, None))
             .and_then(|kept| remembered::listing(&parsed, &kept, None))
         {
             let files = selected(args, &parsed, &listing);

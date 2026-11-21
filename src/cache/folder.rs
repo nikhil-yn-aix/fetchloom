@@ -50,6 +50,48 @@ impl Folder {
         Folder::reach(root, below, false, sharing)
     }
 
+    /// the folder `below` the cache's `root` that `user` alone may enter, as their own records in
+    /// a cache others write are kept, its parent already there. with `make`, a missing one is
+    /// made for its owner alone. one that is another user's, or that others may enter, is none of
+    /// `user`'s, since others may have written what it holds: `NotFound`, as a missing one is.
+    #[cfg(unix)]
+    pub(super) fn private(root: &Path, below: &Path, user: u32, make: bool) -> io::Result<Folder> {
+        use std::os::unix::fs::MetadataExt;
+
+        use rustix::fs::{Mode, OFlags};
+        let (Some(parent), Some(name)) = (below.parent(), below.file_name()) else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "a private folder of the cache needs a folder to sit in",
+            ));
+        };
+        let parent = walk(root, parent, None)?;
+        if make {
+            match rustix::fs::mkdirat(&parent, name, Mode::from_bits_truncate(0o700)) {
+                Ok(()) | Err(rustix::io::Errno::EXIST) => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+        let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+        let handle = File::from(rustix::fs::openat(&parent, name, flags, Mode::empty())?);
+        let found = handle.metadata()?;
+        if found.uid() != user || found.mode() & 0o077 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} is another user's or lets others in, so what it holds may be anyone's",
+                    root.join(below).display()
+                ),
+            ));
+        }
+        Ok(Folder {
+            handle,
+            root: root.to_path_buf(),
+            below: below.to_path_buf(),
+            sharing: Sharing::default(),
+        })
+    }
+
     fn reach(root: &Path, below: &Path, make: bool, sharing: Sharing) -> io::Result<Folder> {
         #[cfg(unix)]
         let handle = walk(root, below, make.then_some(sharing))?;

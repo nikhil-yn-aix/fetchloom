@@ -2380,8 +2380,9 @@ fn rewrite_records(
 /// a damaged record is no record, so the notes, moved where data.lock pins nothing, download and
 /// are pinned by their own bytes. a record naming other bytes the cache holds stands for its blob
 /// unread in a cache only this user writes, as a url record does there, so a relock pins those
-/// bytes; in one others may write, those bytes do not have the blob's id, so the file downloads
-/// and is pinned by its own. the rest come from the cache.
+/// bytes; in one others may write, where another member's add left the records, which a debug
+/// build told it runs as another user stands for, those bytes do not have the blob's id, so the
+/// file downloads and is pinned by its own. the rest come from the cache.
 #[test]
 fn a_foreign_record_stands_only_in_a_cache_this_user_alone_writes() -> Result {
     let big = large();
@@ -2403,16 +2404,17 @@ fn a_foreign_record_stands_only_in_a_cache_this_user_alone_writes() -> Result {
             ("data/other.bin", Held::File(&other)),
         ];
         let routes = Routes::start(github("main", FIRST, &held)?)?;
-        ok(&run(
-            &sandbox,
-            &routes,
-            &[
-                "add",
-                "https://github.com/lab/survey/tree/main/data",
-                "--as",
-                "survey",
-            ],
-        )?)?;
+        let mut adding = sandbox.command(&[
+            "add",
+            "https://github.com/lab/survey/tree/main/data",
+            "--as",
+            "survey",
+        ]);
+        adding.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+        if shared {
+            adding.env("FETCHLOOM_TEST_EUID", "3999999999");
+        }
+        ok(&adding.output()?)?;
         let cache = sandbox.cache();
         let (big_hex, other_hex) = (sha256_hex(&big), sha256_hex(&other));
         rewrite_records(

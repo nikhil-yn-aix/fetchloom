@@ -73,9 +73,10 @@ impl Index {
     }
 
     /// reads the entries past those read before: a first read grouped, a later one as recent.
-    fn read_on(&mut self, root: &Path, shard: usize) -> io::Result<()> {
+    /// `folder` opens the shard's folder.
+    fn read_on(&mut self, folder: &dyn Fn() -> io::Result<Folder>, shard: usize) -> io::Result<()> {
         if self.file.is_none() {
-            match urls(root, None).and_then(|urls| urls.read_file(&names(shard).1)) {
+            match folder().and_then(|urls| urls.read_file(&names(shard).1)) {
                 Ok(file) => self.file = Some(file),
                 Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
                 Err(err) => return Err(err),
@@ -136,6 +137,11 @@ pub(crate) struct Shards {
     indexes: Vec<Mutex<Index>>,
     /// what the group the cache is shared with gets of the files written in `urls/`.
     sharing: Sharing,
+    /// the folder below the cache's root the shards' files are in.
+    below: PathBuf,
+    /// for the shards of one user's own, that user, whose folder no one else may enter.
+    #[cfg(unix)]
+    user: Option<u32>,
 }
 
 impl Default for Shards {
@@ -151,12 +157,46 @@ impl std::fmt::Debug for Shards {
 }
 
 impl Shards {
-    /// shards whose files give the group the cache is shared with what `sharing` says.
+    /// shards in `urls/` whose files give the group the cache is shared with what `sharing` says.
     pub(crate) fn shared(sharing: Sharing) -> Shards {
         Shards {
             indexes: (0..SHARDS).map(|_| Mutex::default()).collect(),
             sharing,
+            below: PathBuf::from("urls"),
+            #[cfg(unix)]
+            user: None,
         }
+    }
+
+    /// the shards of the records the user `user` wrote in a cache others may write, in a folder
+    /// of `urls/` only that user may enter, so no one else could have put a record there.
+    #[cfg(unix)]
+    pub(crate) fn own(user: u32) -> Shards {
+        Shards {
+            below: Path::new("urls").join(format!("user-{user}")),
+            user: Some(user),
+            ..Shards::default()
+        }
+    }
+
+    /// the shards' folder below the cache's `root`, reached without following a link, and with
+    /// `make` made where it is missing. a folder of one user's own that is not theirs alone is
+    /// `NotFound`, as [`Folder::private`] says.
+    fn folder(&self, root: &Path, make: bool) -> io::Result<Folder> {
+        #[cfg(unix)]
+        if let Some(user) = self.user {
+            return Folder::private(root, &self.below, user, make);
+        }
+        if make {
+            Folder::open(root, &self.below, self.sharing)
+        } else {
+            Folder::existing(root, &self.below, Sharing::default())
+        }
+    }
+
+    /// where the shards' files are below the cache's `root`, for messages.
+    pub(crate) fn path(&self, root: &Path) -> PathBuf {
+        root.join(&self.below)
     }
 
     /// the record kept for `url` in the cache at `root`.
@@ -169,11 +209,11 @@ impl Shards {
             let start = if let Some(start) = index.latest(key) {
                 start
             } else {
-                index.read_on(root, shard).ok()?;
+                index.read_on(&|| self.folder(root, false), shard).ok()?;
                 index.latest(key)?
             };
             if index.log.is_none() {
-                let urls = urls(root, None).ok()?;
+                let urls = self.folder(root, false).ok()?;
                 index.log = Some(Arc::new(urls.read_file(&names(shard).0).ok()?));
             }
             (Arc::clone(index.log.as_ref()?), start)
@@ -208,7 +248,7 @@ impl Shards {
         // windows locks keep other handles off what they cover and refuse one opened to append.
         // none of these files is opened through a link, nor through a link put where `urls/` was,
         // since a line holds text a server chose
-        let urls = urls(root, Some(self.sharing))?;
+        let urls = self.folder(root, true)?;
         let held = urls.open_or_make(&format!("{shard:x}.lock"))?;
         match lock(&held) {
             Err(err) if !crate::volume::gives_no_locks(&err) => return Err(err),
@@ -242,7 +282,9 @@ impl Shards {
 
     /// writes shard `shard` again with only the latest good record of each key `keep` takes,
     /// through `scratch`, unless it holds no other line already; a shard left with none goes. gc
-    /// calls it holding the cache alone, so no run writes meanwhile.
+    /// calls it holding the cache alone, so no run writes meanwhile. one user's own shards take
+    /// their new files in their own folder: one made in `scratch`, which others may enter, could
+    /// be held open there by someone and written once it had its name.
     pub(crate) fn rewrite(
         &self,
         root: &Path,
@@ -251,13 +293,13 @@ impl Shards {
         keep: &dyn Fn(&UrlRecord) -> bool,
     ) -> io::Result<()> {
         let (records, entries) = names(shard);
-        let Some(kept) = kept(root, shard, keep)? else {
+        let Some(kept) = self.kept(root, shard, keep)? else {
             return Ok(());
         };
         *self.indexes[shard]
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Index::default();
-        let urls = urls(root, None)?;
+        let urls = self.folder(root, false)?;
         if kept.lines.is_empty() {
             for name in [records, entries] {
                 match urls.remove(&name) {
@@ -267,28 +309,102 @@ impl Shards {
             }
             Ok(())
         } else {
-            let below = scratch.strip_prefix(root).map_err(|_| {
-                io::Error::new(io::ErrorKind::InvalidInput, "scratch outside the cache")
-            })?;
-            let scratch = Folder::existing(root, below, self.sharing)?;
+            #[cfg(unix)]
+            let own = self.user.is_some();
+            #[cfg(not(unix))]
+            let own = false;
+            let tmp;
+            let scratch = if own {
+                &urls
+            } else {
+                let below = scratch.strip_prefix(root).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "scratch outside the cache")
+                })?;
+                tmp = Folder::existing(root, below, self.sharing)?;
+                &tmp
+            };
             // the lines first: an index never names lines its file does not hold
-            urls.replace(&records, &kept.lines, &scratch)?;
-            urls.replace(&entries, &kept.index, &scratch)
+            urls.replace(&records, &kept.lines, scratch)?;
+            urls.replace(&entries, &kept.index, scratch)
         }
     }
 
     /// the files of shard `shard` a [`Shards::rewrite`] would remove, as a pretend gc lists them:
     /// both, when it would keep no record there.
     pub(crate) fn emptied(
+        &self,
         root: &Path,
         shard: usize,
         keep: &dyn Fn(&UrlRecord) -> bool,
     ) -> io::Result<Vec<PathBuf>> {
-        let (records, entries) = paths(root, shard);
-        Ok(match kept(root, shard, keep)? {
-            Some(kept) if kept.lines.is_empty() => vec![records, entries],
+        let (records, entries) = names(shard);
+        let folder = self.path(root);
+        Ok(match self.kept(root, shard, keep)? {
+            Some(kept) if kept.lines.is_empty() => vec![folder.join(records), folder.join(entries)],
             _ => Vec::new(),
         })
+    }
+
+    /// shard `shard` with only the latest good record of each key `keep` takes; none when that is
+    /// what it holds already, or the shards' folder is not there. lines without their index, or an
+    /// index without its lines, name no record.
+    fn kept(
+        &self,
+        root: &Path,
+        shard: usize,
+        keep: &dyn Fn(&UrlRecord) -> bool,
+    ) -> io::Result<Option<Kept>> {
+        let (records, entries) = names(shard);
+        let urls = match self.folder(root, false) {
+            Ok(urls) => urls,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err),
+        };
+        let read = |name: &str, most| urls.read(name, most);
+        let (lines, index) = match (read(&records, LOG_MOST), read(&entries, INDEX_MOST)) {
+            (Ok(lines), Ok(index)) => (lines, index),
+            (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
+                return Err(err);
+            }
+            (Err(_), Err(_)) => return Ok(None),
+            _ => {
+                return Ok(Some(Kept {
+                    lines: Vec::new(),
+                    index: Vec::new(),
+                }));
+            }
+        };
+        let mut latest: HashMap<u64, u32> = HashMap::new();
+        let mut order = Vec::new();
+        for entry in index.as_chunks::<ENTRY>().0 {
+            let (key, start) = parse(entry);
+            if latest.insert(key, start).is_none() {
+                order.push(key);
+            }
+        }
+        let mut kept = Kept {
+            lines: Vec::new(),
+            index: Vec::new(),
+        };
+        for key in order {
+            let Some(line) = lines
+                .get(latest[&key] as usize..)
+                .and_then(|rest| Some(&rest[..rest.iter().position(|&byte| byte == b'\n')?]))
+            else {
+                continue;
+            };
+            let held = checked(line)
+                .and_then(|json| serde_json::from_slice::<UrlRecord>(json).ok())
+                .is_some_and(|record| keep(&record));
+            if held {
+                kept.index.extend_from_slice(&key.to_le_bytes());
+                let start = u32::try_from(kept.lines.len()).map_err(io::Error::other)?;
+                kept.index.extend_from_slice(&start.to_le_bytes());
+                kept.lines.extend_from_slice(line);
+                kept.lines.push(b'\n');
+            }
+        }
+        Ok((kept.lines != lines || kept.index != index).then_some(kept))
     }
 }
 
@@ -296,58 +412,6 @@ impl Shards {
 struct Kept {
     lines: Vec<u8>,
     index: Vec<u8>,
-}
-
-/// shard `shard` with only the latest good record of each key `keep` takes; none when that is
-/// what it holds already. lines without their index, or an index without its lines, name no
-/// record.
-fn kept(root: &Path, shard: usize, keep: &dyn Fn(&UrlRecord) -> bool) -> io::Result<Option<Kept>> {
-    let (records, entries) = names(shard);
-    let read = |name: &str, most| urls(root, None).and_then(|urls| urls.read(name, most));
-    let (lines, index) = match (read(&records, LOG_MOST), read(&entries, INDEX_MOST)) {
-        (Ok(lines), Ok(index)) => (lines, index),
-        (Err(err), _) | (_, Err(err)) if err.kind() != io::ErrorKind::NotFound => {
-            return Err(err);
-        }
-        (Err(_), Err(_)) => return Ok(None),
-        _ => {
-            return Ok(Some(Kept {
-                lines: Vec::new(),
-                index: Vec::new(),
-            }));
-        }
-    };
-    let mut latest: HashMap<u64, u32> = HashMap::new();
-    let mut order = Vec::new();
-    for entry in index.as_chunks::<ENTRY>().0 {
-        let (key, start) = parse(entry);
-        if latest.insert(key, start).is_none() {
-            order.push(key);
-        }
-    }
-    let mut kept = Kept {
-        lines: Vec::new(),
-        index: Vec::new(),
-    };
-    for key in order {
-        let Some(line) = lines
-            .get(latest[&key] as usize..)
-            .and_then(|rest| Some(&rest[..rest.iter().position(|&byte| byte == b'\n')?]))
-        else {
-            continue;
-        };
-        let held = checked(line)
-            .and_then(|json| serde_json::from_slice::<UrlRecord>(json).ok())
-            .is_some_and(|record| keep(&record));
-        if held {
-            kept.index.extend_from_slice(&key.to_le_bytes());
-            let start = u32::try_from(kept.lines.len()).map_err(io::Error::other)?;
-            kept.index.extend_from_slice(&start.to_le_bytes());
-            kept.lines.extend_from_slice(line);
-            kept.lines.push(b'\n');
-        }
-    }
-    Ok((kept.lines != lines || kept.index != index).then_some(kept))
 }
 
 /// the shard of `url` and its key: the first 8 bytes of the url's SHA-256, whose first 4 bits
@@ -387,26 +451,23 @@ fn lock_path(root: &Path, shard: usize) -> PathBuf {
     root.join("urls").join(format!("{shard:x}.lock"))
 }
 
-/// a shard's file of lines and its index.
+/// a shard's file of lines and its index in `urls/`.
+#[cfg(test)]
 fn paths(root: &Path, shard: usize) -> (PathBuf, PathBuf) {
     let folder = root.join("urls");
     let (records, entries) = names(shard);
     (folder.join(records), folder.join(entries))
 }
 
-/// the names of a shard's file of lines and its index in `urls/`.
+/// the names of a shard's file of lines and its index in its folder.
 fn names(shard: usize) -> (String, String) {
     (format!("{shard:x}.log"), format!("{shard:x}.idx"))
 }
 
-/// the `urls/` folder below the cache's `root`, reached without following a link. with `make` it
-/// is made where missing, and what is made in it gets what that sharing gives the group the cache
-/// is shared with.
-fn urls(root: &Path, make: Option<Sharing>) -> io::Result<Folder> {
-    match make {
-        Some(sharing) => Folder::open(root, Path::new("urls"), sharing),
-        None => Folder::existing(root, Path::new("urls"), Sharing::default()),
-    }
+/// the `urls/` folder below the cache's `root`, reached without following a link.
+#[cfg(all(test, unix))]
+fn urls(root: &Path) -> io::Result<Folder> {
+    Folder::existing(root, Path::new("urls"), Sharing::default())
 }
 
 /// the line starting at `start` in `file`, without its newline; none for one cut short.
@@ -583,9 +644,7 @@ mod tests {
         fastrand::seed(7);
 
         let scratch = Folder::existing(root, Path::new(""), Sharing::default()).unwrap();
-        let replaced = urls(root, None)
-            .unwrap()
-            .replace("0.log", b"a line\n", &scratch);
+        let replaced = urls(root).unwrap().replace("0.log", b"a line\n", &scratch);
 
         replaced.unwrap();
         assert_eq!(fs::read(&outside).unwrap(), b"keep these bytes");
@@ -798,11 +857,11 @@ mod tests {
             "a clean shard stays as it is"
         );
         assert_eq!(
-            Shards::emptied(root, 0, &|_| true).unwrap(),
+            shards.emptied(root, 0, &|_| true).unwrap(),
             Vec::<PathBuf>::new()
         );
         assert_eq!(
-            Shards::emptied(root, 0, &|_| false).unwrap(),
+            shards.emptied(root, 0, &|_| false).unwrap(),
             [records.clone(), entries.clone()],
             "a pretend gc lists what a real one removes"
         );

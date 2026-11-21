@@ -2078,7 +2078,22 @@ fn a_synced_folder_gets_a_reflink_or_a_copy() -> Result {
 
 #[test]
 fn two_runs_of_one_link_download_it_once() -> Result {
+    two_runs_download_once(&Sandbox::new()?)
+}
+
+/// in a cache a group shares, the second run takes what the first kept as their user's own.
+#[cfg(unix)]
+#[test]
+fn two_runs_of_one_link_in_a_shared_cache_download_it_once() -> Result {
     let sandbox = Sandbox::new()?;
+    if !crate::folders::shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    two_runs_download_once(&sandbox)
+}
+
+/// two gets of one link in `sandbox`, the second started while the first downloads.
+fn two_runs_download_once(sandbox: &Sandbox) -> Result {
     let mut slow = reply(
         "200 OK",
         &[

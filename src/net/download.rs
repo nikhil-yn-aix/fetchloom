@@ -765,9 +765,17 @@ impl Net {
         };
         if self.offline.enabled() {
             let Some(record) = known else {
+                let recorded = cache.url_record(fetch.url.as_str()).is_some();
+                if recorded
+                    && fetch.expect.sha256.is_none()
+                    && cache
+                        .vouched_url_record(fetch.url.as_str(), fetch.was.as_ref())
+                        .is_none()
+                {
+                    return Err(failure::offline_unvouched(&fetch.url, self.offline));
+                }
                 // a link fetched before has a record, so its bytes are the ones missing
-                let pinned =
-                    fetch.expect.sha256.is_some() || cache.url_record(fetch.url.as_str()).is_some();
+                let pinned = fetch.expect.sha256.is_some() || recorded;
                 return Err(failure::offline(&fetch.url, self.offline, pinned));
             };
             return recalled(record, Origin::Cache, on);

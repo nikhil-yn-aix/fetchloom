@@ -38,7 +38,7 @@ pub(super) fn keep(cache: &Cache, key: &str, path: &str, sha256: Sha256, size: u
         validators: Validators::default(),
         page: false,
     };
-    if cache.url_record(key).as_ref() == Some(&record) {
+    if cache.vouched_url_record(key, None).as_ref() == Some(&record) {
         return;
     }
     // the record only spares an offline run its source, so failing to write one costs no more

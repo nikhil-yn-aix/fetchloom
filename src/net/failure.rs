@@ -1090,6 +1090,22 @@ pub(crate) fn offline(url: &Url, mode: Offline, pinned: bool) -> Error {
     .help(mode.missing_help("it"))
 }
 
+/// offline, a link whose bytes a cache others write holds only by a download that may be
+/// someone else's, who could have said any bytes came from it.
+pub(crate) fn offline_unvouched(url: &Url, mode: Offline) -> Error {
+    Error::new(
+        Kind::OfflineMissing,
+        format!(
+            "offline, and {} is in this cache only by a download that may not be yours",
+            Shown(url)
+        ),
+    )
+    .detail(
+        "a cache others write holds for you only the links you downloaded, since anyone who writes it could say any bytes came from a link",
+    )
+    .help(format!("{} to download it yourself", mode.retry()))
+}
+
 pub(super) fn refused(url: &Url, reason: &address::Refused) -> Error {
     let error = Error::new(
         Kind::NetworkRefused,

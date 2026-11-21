@@ -2128,7 +2128,11 @@ fn an_add_in_a_shared_cache_downloads_an_object_another_member_recorded() -> Res
     )]);
     let member = sandbox.folder("member")?;
     let link = format!("{}/speech/{key}", routes.url);
-    let got = sandbox.command_in(&member, &["get", &link]).output()?;
+    // a debug build told it runs as another user stands for the member, since tests run as one
+    let got = sandbox
+        .command_in(&member, &["get", &link])
+        .env("FETCHLOOM_TEST_EUID", "3999999999")
+        .output()?;
     assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
     routes.change(speech_bucket(&shards));
 

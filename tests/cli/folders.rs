@@ -1014,13 +1014,17 @@ fn group_writable(folder: &std::path::Path) -> Result {
 
 /// another member of the cache's group records `link` as serving [`FORGED`] under the `ETag`
 /// `"i1"` the server gives iris.csv: a run of their own while the server sent those bytes, as
-/// any member may write a record of their choosing. then the server sends iris.csv again, and
+/// any member may write a record of their choosing. a debug build told it runs as another user
+/// stands for the member, since tests run as one. then the server sends iris.csv again, and
 /// answers a request asking with `"i1"` that it is unchanged.
 #[cfg(unix)]
 fn forge(sandbox: &Sandbox, server: &Routes, link: &str) -> Result {
     server.change(vec![("/data/iris.csv".to_owned(), file(FORGED, "\"i1\""))]);
     let member = sandbox.folder("member")?;
-    let got = sandbox.command_in(&member, &["get", link]).output()?;
+    let got = sandbox
+        .command_in(&member, &["get", link])
+        .env("FETCHLOOM_TEST_EUID", "3999999999")
+        .output()?;
     assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
     assert_eq!(fs::read(member.join("iris/iris.csv"))?, FORGED);
     server.change(vec![("/data/iris.csv".to_owned(), file(IRIS, "\"i1\""))]);
@@ -1112,16 +1116,62 @@ fn a_get_in_a_shared_cache_downloads_what_another_member_recorded() -> Result {
     let kept = sandbox
         .command_in(&offline, &["--offline", "get", &link, "-o", "iris.csv"])
         .output()?;
-    assert_ne!(kept.status.code(), Some(0), "{}", text(&kept.stderr)?);
+    let said = text(&kept.stderr)?;
+    assert_eq!(kept.status.code(), Some(20), "{said}");
+    assert!(!offline.join("iris.csv").exists(), "{said}");
     assert!(
-        !offline.join("iris.csv").exists(),
-        "{}",
-        text(&kept.stderr)?
+        said.contains("is in this cache only by a download that may not be yours"),
+        "{said}"
     );
     let mine = sandbox.folder("mine")?;
     let got = sandbox.command_in(&mine, &["get", &link]).output()?;
     assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
     assert_eq!(fs::read_to_string(mine.join("iris/iris.csv"))?, text(IRIS)?);
+    Ok(())
+}
+
+/// in a cache a group shares, what a get downloaded is kept as its user's own, which no one else
+/// could have written: their rerun asks the server whether the file changed and downloads nothing
+/// when it did not, and offline their get writes the file from the cache.
+#[cfg(unix)]
+#[test]
+fn a_get_in_a_shared_cache_reuses_what_its_user_downloaded() -> Result {
+    let sandbox = Sandbox::new()?;
+    if !shared_cache(&sandbox)? {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let server = served(python)?;
+    let link = format!("{}/data/iris.csv", server.url);
+    let first = sandbox.folder("first")?;
+    let got = sandbox.command_in(&first, &["get", &link]).output()?;
+    assert_eq!(got.status.code(), Some(0), "{}", text(&got.stderr)?);
+    server.unchanged("/data/iris.csv", "\"i1\"");
+    let before = server.requests().len();
+    let again = sandbox.folder("again")?;
+    let rerun = sandbox
+        .command_in(&again, &["--json", "get", &link])
+        .output()?;
+    assert_eq!(rerun.status.code(), Some(0), "{}", text(&rerun.stdout)?);
+    assert_eq!(
+        json(&rerun)?["work"]["bytes_down"],
+        0,
+        "{}",
+        text(&rerun.stdout)?
+    );
+    let asked = &server.requests()[before..];
+    assert!(
+        asked
+            .iter()
+            .any(|head| head.starts_with("get /data/iris.csv ")
+                && head.contains("if-none-match: \"i1\"")),
+        "{asked:?}"
+    );
+    let offline = sandbox.folder("offline")?;
+    let kept = sandbox
+        .command_in(&offline, &["--offline", "get", &link, "-o", "iris.csv"])
+        .output()?;
+    assert_eq!(kept.status.code(), Some(0), "{}", text(&kept.stderr)?);
+    assert_eq!(fs::read(offline.join("iris.csv"))?, IRIS);
     Ok(())
 }
 

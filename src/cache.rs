@@ -366,6 +366,18 @@ fn others_write(_root: &Path) -> bool {
     false
 }
 
+/// the shards a run keeps its user's own url records in, in a cache others may write; none in one
+/// only this user writes, whose every record is theirs.
+#[cfg(unix)]
+fn own_records(others_write: bool) -> Option<Arc<urls::Shards>> {
+    others_write.then(|| Arc::new(urls::Shards::own(run_as())))
+}
+
+#[cfg(not(unix))]
+fn own_records(_others_write: bool) -> Option<Arc<urls::Shards>> {
+    None
+}
+
 /// what keeps the cache at `root`, which its group shares, from staying one the group may add to:
 /// the folders in it that let only their owners write to them, as one another program or an
 /// account outside the group made may, since a run gives the group its write on each folder it
@@ -766,6 +778,9 @@ pub(crate) struct Cache {
     held: Option<Arc<File>>,
     /// the url records as this run read them, shared by every clone.
     urls: Arc<urls::Shards>,
+    /// in a cache others may write, the records this run's user wrote, kept apart where no one
+    /// else may write, which stand for their bytes as any record does in a cache of one user's.
+    own: Option<Arc<urls::Shards>>,
     /// the room the cache's disk had free for the archives this run unpacks at once.
     room: Arc<Room>,
     /// what the group the cache is shared with gets of what this run makes in it.
@@ -948,9 +963,11 @@ impl Cache {
         for folder in FOLDERS {
             make_folder(&root, &root.join(folder), sharing)?;
         }
+        let others_write = others_write(&root);
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
-            others_write: others_write(&root),
+            others_write,
+            own: own_records(others_write),
             lost_tag: found == Tag::Lost,
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
@@ -989,9 +1006,11 @@ impl Cache {
             }
         }
         let sharing = Sharing::of(&root);
+        let others_write = others_write(&root);
         Ok(Cache {
             volume: Arc::new(Volume::new(root.join("tmp"))),
-            others_write: others_write(&root),
+            others_write,
+            own: own_records(others_write),
             lost_tag: found == Tag::Lost,
             root,
             checked: Arc::new(std::array::from_fn(|_| AtomicBool::new(false))),
@@ -1288,21 +1307,45 @@ impl Cache {
         }
     }
 
+    /// the latest record of what `url` served: this user's own, in a cache others may write, else
+    /// whoever's the cache holds.
     pub(crate) fn url_record(&self, url: &str) -> Option<UrlRecord> {
-        self.urls.find(&self.root, url)
+        self.own_url_record(url)
+            .or_else(|| self.urls.find(&self.root, url))
+    }
+
+    /// the record of what `url` served that this user wrote in a cache others may write.
+    fn own_url_record(&self, url: &str) -> Option<UrlRecord> {
+        self.own.as_ref()?.find(&self.root, url)
     }
 
     /// the record of what `url` served, when it may stand for those bytes without their download:
     /// any in a cache only this user writes; in one others may write, as a group shares a lab's,
-    /// only one naming `was`, the bytes data.lock already pins for the link, since anyone there
-    /// may add a record naming bytes of their choosing.
+    /// one this user wrote, or else one naming `was`, the bytes data.lock already pins for the
+    /// link, since anyone there may add a record naming bytes of their choosing.
     pub(crate) fn vouched_url_record(&self, url: &str, was: Option<&Sha256>) -> Option<UrlRecord> {
-        let record = self.url_record(url)?;
-        (!self.others_write || was == Some(&record.sha256)).then_some(record)
+        let shared = || self.urls.find(&self.root, url);
+        if !self.others_write {
+            return shared();
+        }
+        match (self.own_url_record(url), shared()) {
+            (_, Some(record)) if was == Some(&record.sha256) => Some(record),
+            (own, _) => own,
+        }
     }
 
+    /// keeps `record` of what its link served, and in a cache others may write, keeps it apart as
+    /// this user's own too, so it stands for its bytes in their later runs, even where the shared
+    /// records refuse it.
     pub(crate) fn save_url_record(&self, record: &UrlRecord) -> io::Result<()> {
-        self.urls.save(&self.root, record)
+        let shared = self.urls.save(&self.root, record);
+        if let Some(own) = &self.own
+            && let Err(err) = own.save(&self.root, record)
+        {
+            // the record only spares a later run a download, as the shared one does
+            tracing::debug!(%err, "could not keep the record as this user's own");
+        }
+        shared
     }
 
     /// the object holding the bytes `url` served when an earlier download hashed them to this
@@ -2731,8 +2774,9 @@ pub(crate) mod tests {
 
     /// in a cache a group shares, a setgid folder its group may write, every part of the cache
     /// gives that group what each folder and file it makes gives its owner, whatever the umask,
-    /// and never anything to others; an object stays read-only. it runs under `umask 022` in a
-    /// process of its own, so the umask of the process running the tests stays as it was.
+    /// and never anything to others; an object stays read-only, and the records a member keeps as
+    /// their own stay theirs alone. it runs under `umask 022` in a process of its own, so the umask
+    /// of the process running the tests stays as it was.
     #[cfg(unix)]
     #[test]
     fn each_part_of_a_groups_cache_shares_what_it_makes() {
@@ -2816,11 +2860,13 @@ pub(crate) mod tests {
     }
 
     /// what below the cache folder `root` its group, which a root of mode 2770 gives every bit,
-    /// cannot use as the owner can, and what every user may write, sorted.
+    /// cannot use as the owner can, and what every user may write, sorted. the folder of this
+    /// user's own records must be theirs alone instead.
     #[cfg(unix)]
     fn unshared_below(root: &Path) -> Vec<String> {
         use std::os::unix::fs::MetadataExt;
         let group = fs::metadata(root).unwrap().gid();
+        let own = root.join("urls").join(format!("user-{}", run_as()));
         let mut wrong = Vec::new();
         let mut folders = vec![root.to_path_buf()];
         while let Some(folder) = folders.pop() {
@@ -2829,6 +2875,12 @@ pub(crate) mod tests {
                 let found = fs::symlink_metadata(&path).unwrap();
                 let mode = found.mode() & 0o7777;
                 let shown = format!("{mode:o} {}", path.display());
+                if path == own {
+                    if mode & 0o077 != 0 {
+                        wrong.push(format!("others may enter {shown}"));
+                    }
+                    continue;
+                }
                 if mode & 0o002 != 0 {
                     wrong.push(format!("every user may write {shown}"));
                 }
@@ -3409,6 +3461,99 @@ pub(crate) mod tests {
                 fs::set_permissions(folder, fs::Permissions::from_mode(0o700)).unwrap();
             }
         }
+    }
+
+    /// in a cache others may write, a record this user wrote is kept apart, in a folder of `urls/`
+    /// no one else may enter, and stands for its bytes in their later runs as in a cache of their
+    /// own, until gc forgets it with its object; one only in the shared records, as another
+    /// member's is, or once that folder lets others in, stands only for the pin it names.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_this_user_wrote_stands_in_a_cache_others_may_write() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_dir, cache) = cache();
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o770)).unwrap();
+        let shared = Cache::open(cache.root.clone()).unwrap();
+        let recorded = store(&shared, b"recorded").digest;
+        let other = digest::sha256(b"pinned before");
+        let record = |url: &str| UrlRecord {
+            url: url.to_owned(),
+            sha256: recorded,
+            size: 8,
+            name: None,
+            validators: Validators::default(),
+            page: false,
+        };
+        let (mine, theirs) = ("https://example.org/mine", "https://example.org/theirs");
+        shared.save_url_record(&record(mine)).unwrap();
+        shared.urls.save(&shared.root, &record(theirs)).unwrap();
+        let stands = |cache: &Cache, url: &str| {
+            [None, Some(&recorded), Some(&other)]
+                .map(|was| cache.vouched_url_record(url, was).is_some())
+        };
+        let later = Cache::open(cache.root.clone()).unwrap();
+        for opened in [&shared, &later] {
+            assert_eq!(stands(opened, mine), [true, true, true]);
+            assert_eq!(stands(opened, theirs), [false, true, false]);
+        }
+        let own = cache.root.join("urls").join(format!("user-{}", run_as()));
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o750)).unwrap();
+        let entered = Cache::open(cache.root.clone()).unwrap();
+        assert_eq!(stands(&entered, mine), [false, true, false]);
+        fs::set_permissions(&own, fs::Permissions::from_mode(0o700)).unwrap();
+        later.sweep(
+            &Needed::default(),
+            std::time::SystemTime::now() + GRACE + std::time::Duration::from_secs(60),
+        );
+        let swept = Cache::open(cache.root.clone()).unwrap();
+        assert_eq!(swept.url_record(mine), None, "gc forgot it with its object");
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o700)).unwrap();
+    }
+
+    /// in a cache others may write, a record the shared records refuse, as when another member
+    /// left them read-only, is still kept as this user's own, which their later runs read.
+    #[cfg(unix)]
+    #[test]
+    fn a_record_the_shared_records_refuse_is_still_kept_as_this_users_own() {
+        use std::os::unix::fs::PermissionsExt;
+        if rustix::process::geteuid().is_root() {
+            return crate::test_skips::skip("unprivileged", "root ignores file permissions");
+        }
+        let (_dir, cache) = cache();
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o770)).unwrap();
+        let shared = Cache::open(cache.root.clone()).unwrap();
+        let recorded = store(&shared, b"recorded").digest;
+        let record = |url: &str| UrlRecord {
+            url: url.to_owned(),
+            sha256: recorded,
+            size: 8,
+            name: None,
+            validators: Validators::default(),
+            page: false,
+        };
+        shared
+            .save_url_record(&record("https://example.org/first"))
+            .unwrap();
+        let urls = cache.root.join("urls");
+        let logs: Vec<PathBuf> = fs::read_dir(&urls)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| path.is_file())
+            .collect();
+        let close = |file: u32, folder: u32| {
+            for log in &logs {
+                fs::set_permissions(log, fs::Permissions::from_mode(file)).unwrap();
+            }
+            fs::set_permissions(&urls, fs::Permissions::from_mode(folder)).unwrap();
+        };
+        close(0o440, 0o550);
+        let mine = "https://example.org/mine";
+        let saved = shared.save_url_record(&record(mine));
+        close(0o660, 0o770);
+        assert_eq!(saved.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+        let later = Cache::open(cache.root.clone()).unwrap();
+        assert!(later.vouched_url_record(mine, None).is_some());
+        fs::set_permissions(&cache.root, fs::Permissions::from_mode(0o700)).unwrap();
     }
 
     /// in a cache others may write, MD5 records proved at once answer as records proved one at a

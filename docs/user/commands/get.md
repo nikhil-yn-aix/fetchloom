@@ -84,7 +84,7 @@ a plain link whose server answers that the file is unchanged, with a 304, downlo
 - it takes its name only after its size, any MD5 its source states and any `--sha256` are checked, and only once its bytes are on disk, without replacing a file that appeared meanwhile.
 - missing folders on the path are made first. a path that starts with a folder named `~`, as a quoted `~` reaches fetchloom, means a folder of that name here, not your home folder, and a warning says so.
 - bytes this run downloaded leave the cache once the file holds them, unless a project pins them. bytes the cache held before stay until [`cache gc`](cache.md#gc) frees them, as do those of a run that stopped before the file took them, which a rerun reuses.
-- two runs of one link share its download: the second says `Waiting iris.csv · another fetchloom is downloading it`, then decides as a run started afterwards would.
+- two runs of one link share its download: the second says `Waiting iris.csv · another fetchloom is downloading it`, then decides as a run started afterwards would. in a [cache a group shares](../guides/clusters.md#one-cache-for-a-whole-lab), a get takes only what you downloaded yourself, so a second run of another member downloads the file again.
 
 `-o` takes one link that resolves to one file. several links, `-i` and a dataset with several files left after `--select` are usage errors, exit 2, before any file downloads, as `-o writes one file, and <link> has <n> files`, saying to keep one with `--select` or use `--dir`. a path that names a folder is one too:
 

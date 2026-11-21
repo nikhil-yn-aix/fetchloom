@@ -677,19 +677,22 @@ impl Cache {
                 || kept(&self.unpacked_path(&record.sha256))
         };
         let scratch = self.root.join("tmp");
-        for shard in 0..super::urls::SHARDS {
-            stop.check()?;
-            let swept = if self.volume.is_pretending() {
-                super::urls::Shards::emptied(&self.root, shard, &held).map(|emptied| {
-                    for path in emptied {
-                        removed(&path, self.remove_inside(&path), not_removed);
-                    }
-                })
-            } else {
-                self.urls.rewrite(&self.root, &scratch, shard, &held)
-            };
-            if let Err(err) = swept {
-                not_removed.push(Failure::new(&self.root.join("urls"), &err));
+        let shards = std::iter::once(&self.urls).chain(self.own.as_ref());
+        for records in shards {
+            for shard in 0..super::urls::SHARDS {
+                stop.check()?;
+                let swept = if self.volume.is_pretending() {
+                    records.emptied(&self.root, shard, &held).map(|emptied| {
+                        for path in emptied {
+                            removed(&path, self.remove_inside(&path), not_removed);
+                        }
+                    })
+                } else {
+                    records.rewrite(&self.root, &scratch, shard, &held)
+                };
+                if let Err(err) = swept {
+                    not_removed.push(Failure::new(&records.path(&self.root), &err));
+                }
             }
         }
         Ok(())
