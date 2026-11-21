@@ -712,6 +712,31 @@ class MainPreparationTests(unittest.TestCase):
         self.assertIn("recorded 2 failed runs (including warmups)", shown.getvalue())
 
 
+class ComparatorTests(unittest.TestCase):
+    def test_frozen_comparators_name_a_headline_case_and_another_tool(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "comparators.json"
+            path.write_text(json.dumps({"ext4/home/s1": "aria2c", "ext4/lan/s5": "dvc"}))
+            self.assertEqual(run.comparators_choice(str(path)), {"ext4/home/s1": "aria2c", "ext4/lan/s5": "dvc"})
+            for bad in ([], {"ext4/home/s1": "fetchloom"}, {"ext4/home/s1": "wget"}, {"home/s1": "curl"},
+                        {"ntfs/home/s1": "curl"}, {"ext4/far/s1": "curl"}, {"ext4/home/s2": "curl"}):
+                path.write_text(json.dumps(bad))
+                with self.subTest(bad=bad), self.assertRaisesRegex(argparse.ArgumentTypeError, "frozen comparators map"):
+                    run.comparators_choice(str(path))
+            with self.assertRaisesRegex(argparse.ArgumentTypeError, "cannot read the frozen comparators"):
+                run.comparators_choice(str(Path(folder) / "absent.json"))
+
+    def test_the_frozen_comparators_are_in_the_campaign_record(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "owned.json").write_text("{}")
+            args = SimpleNamespace(fs=[], seed=1729, quick=True, profiles=["home"], comparators={"ext4/home/s1": "curl"})
+            with mock.patch.object(lab, "ROOT", root), mock.patch.object(run, "native_versions", return_value=[]), \
+                 mock.patch.object(run, "python_packages", return_value=[]), mock.patch.object(run, "repo_head", return_value="head"), \
+                 mock.patch.object(run.subprocess, "check_output", return_value="ext4 example rw"):
+                self.assertEqual(run.metadata(args, {})["comparators"], {"ext4/home/s1": "curl"})
+
+
 class MainRefusalTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
@@ -739,6 +764,10 @@ class MainRefusalTests(unittest.TestCase):
         self.assertEqual(self.refused("--scenarios", "s3", "--profiles", "poor"),
                          "run.py: error: no cases match these scenario/profile combinations")
         self.assertEqual(self.refused(mounted=False), "run.py: error: ext4 is not mounted")
+        frozen = self.root / "comparators.json"
+        frozen.write_text(json.dumps({"ext4/home/s2r": "curl"}))
+        self.assertEqual(self.refused("--comparators", str(frozen)),
+                         "run.py: error: curl, the comparator frozen for ext4/home/s2r, is not measured in it")
         (self.root / "results").mkdir(exist_ok=True)
         (self.root / "results/runs.jsonl").write_text("")
         self.assertEqual(self.refused(), "run.py: error: output already contains runs; use a new directory")

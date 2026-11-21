@@ -355,7 +355,7 @@ def metadata(args, adapters):
                 fetchloom_binary=binary_identity(args.fetchloom) if any(
                     name == "fetchloom" or name.startswith("fetchloom+") for name in adapters) else None,
                 seed=args.seed, quick=args.quick, profiles=args.profiles, network_profiles=lab.network_profiles(),
-                budget=tools.BUDGET,
+                budget=tools.BUDGET, comparators=getattr(args, "comparators", {}),
                 commands={}, orders=[], cases=[],
                 native_packages=native_versions(),
                 lock_sha256=hashlib.sha256(Path(__file__).with_name("uv.lock").read_bytes()).hexdigest(),
@@ -510,6 +510,22 @@ def case_rng(seed, fs, case):
     return random.Random(f"{seed}/{fs}/{case['profile']}/{case['id']}")
 
 
+def comparators_choice(value):
+    """a json file of the comparator each headline case froze from its pilot, `render.py
+    --comparators` output, as fs/profile/scenario to the name of a tool other than fetchloom."""
+    try:
+        chosen = json.loads(Path(value).read_text())
+    except (OSError, ValueError) as error:
+        raise argparse.ArgumentTypeError(f"cannot read the frozen comparators: {error}") from None
+    names = {cls.name for cls in tools.CLASSES} - {tools.Fetchloom.name}
+    if not isinstance(chosen, dict) or not all(
+            isinstance(case, str) and isinstance(tool, str) and len(case.split("/")) == 3 and tool in names
+            and case.split("/")[0] in ("ext4", "xfs") and case.split("/")[1] in lab.PROFILES
+            and case.split("/")[2] in fixtures.ALL_SCENARIOS for case, tool in chosen.items()):
+        raise argparse.ArgumentTypeError("frozen comparators map fs/profile/scenario to another tool's name")
+    return chosen
+
+
 def variant_choice(value):
     try:
         return tools.variant(value)
@@ -535,6 +551,8 @@ def arguments():
     parser.add_argument("--timeout", type=seconds_choice, default=1200)
     parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""),
                         help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
+    parser.add_argument("--comparators", type=comparators_choice, default={},
+                        help="the comparator each headline case froze from the pilot, from render.py --comparators")
     return parser
 
 
@@ -556,6 +574,11 @@ def campaign(parser, args):
              if any(tool.supports(case) for tool in adapters.values())]
     if not cases:
         parser.error("no cases match these scenario/profile combinations")
+    for fs in args.fs:
+        for case in cases:
+            tool = args.comparators.get(f"{fs}/{case['profile']}/{case['id']}")
+            if tool is not None and (tool not in adapters or not adapters[tool].supports(case)):
+                parser.error(f"{tool}, the comparator frozen for {fs}/{case['profile']}/{case['id']}, is not measured in it")
     if (args.out / "runs.jsonl").exists():
         parser.error("output already contains runs; use a new directory")
     args.out.mkdir(parents=True, exist_ok=True)

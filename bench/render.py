@@ -184,8 +184,8 @@ EVEN = (.95, 1.05)
 AA = "fetchloom+aa"
 AA_GATE = (.97, 1.03)
 GATED = ("lan", "home")
-# the only cases a claim comes from, each fetchloom against the fastest other tool: six comparisons
-# sharing a 5% error, so 99.2% intervals each
+# the only cases a claim comes from, each fetchloom against one tool frozen from the pilot before
+# the runs: six comparisons sharing a 5% error, so 99.2% intervals each
 HEADLINE = (("ext4", "home", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"), ("ext4", "lan", "s5"),
             ("ext4", "home", "s7"), ("ext4", "home", "s10"))
 FAMILY = 1 - .05 / len(HEADLINE)
@@ -227,11 +227,12 @@ def standing(base, measured, comparison):
     return None
 
 
-def judge(case, runs):
+def judge(case, runs, comparator=None):
     """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
-    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict against
-    the fastest other tool that passed every run, or the reason there is none. a reason that holds
-    for the whole case, such as a noisy machine, withholds every tool's verdict in it."""
+    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict, against
+    the comparator frozen before the runs in a headline case and against the fastest other tool that
+    passed every run elsewhere, or the reason there is none. a reason that holds for the whole case,
+    such as a noisy machine, withholds every tool's verdict in it."""
     key = (case["filesystem"], case["profile"], case["scenario"])
     headline = key in HEADLINE
     level = FAMILY if headline else .95
@@ -266,17 +267,56 @@ def judge(case, runs):
     summaries = case["summaries"]
     rivals = [tool for tool, comparison in comparisons.items()
               if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
-    rival = min(rivals, key=lambda tool: (summaries[tool]["median"], tool)) if rivals else None
+    # a headline case's rival is never chosen from the data that judges it
+    rival = comparator if headline else min(rivals, key=lambda tool: (summaries[tool]["median"], tool)) if rivals else None
+    named = f"{rival}, the frozen comparator," if headline else rival
     if withheld:
         reason = withheld
+    elif headline and comparator is None:
+        reason = "no comparator was frozen for it before its runs"
     elif rival is None:
         reason = "no other tool passed every run"
+    elif rival not in comparisons:
+        reason = f"{named} did not run"
     elif comparisons[rival]["unmet"]:
-        reason = f"{rival} {comparisons[rival]['unmet']}"
+        reason = f"{named} {comparisons[rival]['unmet']}"
     else:
         reason = None
     return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason, withheld=withheld,
-                rival=rival if reason is None else None)
+                rival=rival if reason is None else None, comparator=comparator if headline else None)
+
+
+def frozen(metas):
+    """the comparator each headline case was frozen with before its runs, from the meta.json of the
+    lab campaign that measured it, so one a later chunk recorded never judges it; ValueError when
+    two campaigns froze different ones for a case."""
+    chosen, recorded = {}, {}
+    for meta in metas:
+        cases = meta.get("cases")
+        own = {f"{case['filesystem']}/{case['profile']}/{case['id']}" for case in cases or []}
+        for case, tool in (meta.get("comparators") or {}).items():
+            if recorded.setdefault(case, tool) != tool:
+                raise ValueError(f"lab campaigns froze different comparators for {case}; render them separately")
+            if not cases or case in own:
+                chosen[case] = tool
+    return chosen
+
+
+def pick(rows):
+    """the comparator to freeze for each headline case a pilot measured: the fastest other tool that
+    passed every run within the budget, the a/a arm and fetchloom's variants never among them."""
+    runs = defaultdict(lambda: defaultdict(list))
+    for row in rows:
+        if row.get("kind") == "lab" and not row.get("warmup") and "tool" in row:
+            runs[row["filesystem"], row["profile"], row["scenario"]][row["tool"]].append(row)
+    chosen = {}
+    for key in HEADLINE:
+        measured = {tool: summarize(values) for tool, values in runs.get(key, {}).items()
+                    if not tool.startswith(ab.BASE) and not any(row.get("over_budget") for row in values)}
+        passing = [tool for tool, entry in measured.items() if not entry["failures"] and entry["median"] is not None]
+        if passing:
+            chosen["/".join(key)] = min(passing, key=lambda tool: (measured[tool]["median"], tool))
+    return chosen
 
 
 def bounds(comparison):
@@ -456,13 +496,14 @@ def group(rows, metas):
             raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
         lab[key][row["tool"]].append(row)
     check_chunks([meta for meta in metas if meta.get("kind") == "lab"])
+    comparators = frozen([meta for meta in metas if meta.get("kind") == "lab"])
     shaping = network_profiles(metas)
     cases = []
     for scenario, profile, fs in sorted(lab, key=lambda key: (lead(key[1]), key)):
         _, count, file_size = conditions[scenario, profile, fs]
         case = dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
                     link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]))
-        cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs])))
+        cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs], comparators.get(f"{fs}/{profile}/{scenario}"))))
     # a dropped link's cost is set against the same tool's s1, the same file on the same link
     for case in cases:
         if case["scenario"] == "s10" and conditions.get(("s1", case["profile"], case["filesystem"]), ())[1:] == (
@@ -705,8 +746,9 @@ def verdict_lines(case):
         lines = [f"\nno verdict: {judged['reason']}."]
     else:
         comparison = judged["comparisons"][rival]
+        chosen = "the comparator frozen before these runs" if judged["headline"] else "the fastest other tool that passed every run"
         lines = [f"\nverdict ({kind}): fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against "
-                 f"{seconds(case['summaries'][rival]['median'])} for {rival}, the fastest other tool that passed every run; "
+                 f"{seconds(case['summaries'][rival]['median'])} for {rival}, {chosen}; "
                  f"{rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, interval {bounds(comparison)}: "
                  f"{comparison['word']}."]
     aa = judged["aa"]
@@ -740,7 +782,13 @@ def render(results, repo):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("results", type=Path)
+    parser.add_argument("--comparators", action="store_true",
+                        help="print, as json for run.py --comparators, the comparator each headline case of these pilot results freezes")
     args = parser.parse_args()
+    if args.comparators:
+        rows, _ = load_results(args.results.resolve())
+        print(json.dumps(pick(rows), indent=2, sort_keys=True))
+        return
     render(args.results.resolve(), Path(__file__).resolve().parent.parent)
 
 
