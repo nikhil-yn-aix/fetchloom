@@ -89,6 +89,9 @@ struct Edit<'a> {
     copied: BTreeMap<&'a str, FromGlob>,
     /// the files left out, as `--json` lists them.
     left: Vec<Left>,
+    /// the dataset's select patterns that choose only files `exclude` leaves out, which go so
+    /// data.toml does not ask for files and leave them out at once.
+    unselect: Vec<String>,
 }
 
 /// planning's work, a step for each planned file it takes and each listed path it compares with
@@ -822,9 +825,39 @@ fn edits<'a>(
         whole_archives(locked, edit, &archives);
         if let Some(source) = manifest.datasets.get(*dataset).map(|entry| &entry.source) {
             edit.copied = from_globs(source, locked, &edit.members, cache)?;
+            edit.unselect = covered(&source.select, &edit.exclude);
         }
     }
     Ok(edits)
+}
+
+/// the patterns of `select` that choose only files `exclude` leaves out: one the same as an
+/// excluded pattern, or one inside a folder excluded whole, as `sub-02/func/*` is in `sub-02/**`.
+/// none when that would be every pattern, since a select of none chooses every file.
+fn covered(select: &[Glob], exclude: &BTreeSet<String>) -> Vec<String> {
+    let inside = |selected: &str, excluded: &str| {
+        let (selected, excluded) = (
+            selected.trim_start_matches('/'),
+            excluded.trim_start_matches('/'),
+        );
+        selected == excluded
+            || excluded.strip_suffix("/**").is_some_and(|folder| {
+                !folder.contains(['*', '?', '['])
+                    && selected
+                        .strip_prefix(folder)
+                        .is_some_and(|rest| rest.starts_with('/'))
+            })
+    };
+    let covered: Vec<String> = select
+        .iter()
+        .map(Glob::as_str)
+        .filter(|selected| exclude.iter().any(|excluded| inside(selected, excluded)))
+        .map(str::to_owned)
+        .collect();
+    if covered.len() == select.len() {
+        return Vec::new();
+    }
+    covered
 }
 
 /// the glob key's table each archive in `members` without a table of its own starts from, since a
@@ -1191,6 +1224,12 @@ fn narrowed(
                 patterns: edit.exclude.iter().cloned().collect(),
             });
         }
+        if !edit.unselect.is_empty() {
+            changes.push(Narrowing::Unselected {
+                name: dataset,
+                patterns: &edit.unselect,
+            });
+        }
     }
     manifest::narrowed(text, &changes)
 }
@@ -1248,6 +1287,15 @@ fn tell(output: &crate::output::Output, edits: &BTreeMap<&str, Edit>, dry_run: b
             for left in left {
                 output.detail(&left.path);
             }
+            if archive.is_none() {
+                for pattern in &edit.unselect {
+                    output.item(&if dry_run {
+                        format!("select would no longer ask for {pattern:?}, whose files would all be left out")
+                    } else {
+                        format!("select no longer asks for {pattern:?}, whose files are all left out")
+                    });
+                }
+            }
             if let Some(from) = archive
                 .and_then(|archive| edit.copied.get(archive))
                 .map(|from| &from.key)
@@ -1288,6 +1336,39 @@ mod tests {
     /// `paths` as a person types them from the project's folder.
     fn typed(paths: &[String]) -> Vec<PathBuf> {
         paths.iter().map(PathBuf::from).collect()
+    }
+
+    /// a select pattern goes only when every file it can choose is left out, and never the last.
+    #[test]
+    fn only_select_patterns_an_exclude_leaves_nothing_to_go() {
+        let globs = |patterns: &[&str]| -> Vec<Glob> {
+            patterns
+                .iter()
+                .map(|text| Glob::new(text).unwrap())
+                .collect()
+        };
+        let excluded = |patterns: &[&str]| -> BTreeSet<String> {
+            patterns.iter().map(|text| (*text).to_owned()).collect()
+        };
+        let select = globs(&[
+            "sub-01/**",
+            "sub-02/func/*run-01*",
+            "sub-0*/anat/*",
+            "sub-02x/a",
+            "b.csv",
+        ]);
+        assert_eq!(
+            covered(&select, &excluded(&["sub-02/**", "b.csv"])),
+            ["sub-02/func/*run-01*", "b.csv"]
+        );
+        assert_eq!(
+            covered(&select, &excluded(&["s[u]b-02/**"])),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            covered(&globs(&["sub-02/**"]), &excluded(&["sub-02/**"])),
+            Vec::<String>::new()
+        );
     }
 
     /// a folder of listed files becomes one pattern.
@@ -1499,6 +1580,7 @@ mod tests {
             members: by_archive,
             copied: BTreeMap::new(),
             left: Vec::new(),
+            unselect: Vec::new(),
         }
     }
 

@@ -2000,6 +2000,11 @@ pub(crate) enum Narrowing<'a> {
     },
     /// [`without_members`].
     WithoutMembers { name: &'a str, archive: String },
+    /// [`with_unselected`].
+    Unselected {
+        name: &'a str,
+        patterns: &'a [String],
+    },
 }
 
 /// data.toml's text with each change made in turn, read and written once however many there
@@ -2028,6 +2033,7 @@ pub(crate) fn narrowed(text: &str, changes: &[Narrowing<'_>]) -> Result<String, 
             Narrowing::WithoutMembers { name, archive } => {
                 members_out(&mut document, name, archive);
             }
+            Narrowing::Unselected { name, patterns } => unselect(&mut document, name, patterns),
         }
     }
     Ok(document.to_string())
@@ -2050,9 +2056,38 @@ fn narrowed_one_at_a_time(text: &str, changes: &[Narrowing<'_>]) -> Result<Strin
                 patterns,
             } => with_exclusions(&text, name, *archive, patterns)?,
             Narrowing::WithoutMembers { name, archive } => without_members(&text, name, archive)?,
+            Narrowing::Unselected { name, patterns } => with_unselected(&text, name, patterns)?,
         };
     }
     Ok(text)
+}
+
+/// data.toml's text with `patterns` taken out of the select of `name`, keeping the rest of the
+/// list as written.
+fn with_unselected(text: &str, name: &str, patterns: &[String]) -> Result<String, Error> {
+    let mut document = editable(text)?;
+    unselect(&mut document, name, patterns);
+    Ok(document.to_string())
+}
+
+/// the edit [`with_unselected`] makes, on `document`: a select written as one string, or a
+/// dataset written inline, stays as it is.
+fn unselect(document: &mut DocumentMut, name: &str, patterns: &[String]) {
+    let Some(Value::Array(select)) = document
+        .get_mut("datasets")
+        .and_then(Item::as_table_mut)
+        .and_then(|datasets| datasets.get_mut(name))
+        .and_then(Item::as_table_mut)
+        .and_then(|dataset| dataset.get_mut("select"))
+        .and_then(Item::as_value_mut)
+    else {
+        return;
+    };
+    select.retain(|value| {
+        value
+            .as_str()
+            .is_none_or(|pattern| !patterns.iter().any(|gone| gone == pattern))
+    });
 }
 
 /// data.toml's text without the datasets `names`, read and written once however many there are,

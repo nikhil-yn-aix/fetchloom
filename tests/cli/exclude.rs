@@ -701,6 +701,59 @@ fn a_folder_of_a_downloaded_dataset_leaves_as_one_pattern() -> Result {
     Ok(())
 }
 
+/// a folder left out whole takes out of select each pattern that chose only files inside it, so
+/// data.toml never asks for files it leaves out, and says so; one choosing files elsewhere stays.
+#[cfg(debug_assertions)]
+#[test]
+fn a_folder_left_out_takes_the_select_patterns_inside_it_along() -> Result {
+    use crate::buckets::{s3_listing, s3_page};
+    use crate::support::md5_hex;
+    let sandbox = Sandbox::new()?;
+    let base = "/s3.amazonaws.com/openneuro.org/";
+    let objects: [(&str, &[u8]); 4] = [
+        ("ds000001/README", b"a tiny dataset\n"),
+        ("ds000001/sub-01/anat.tsv", b"anat\n"),
+        ("ds000001/sub-02/anat.tsv", b"other anat\n"),
+        ("ds000001/sub-02/func.tsv", b"other func\n"),
+    ];
+    let mut routes = vec![(s3_listing(base, "ds000001/", None), s3_page(&objects, None))];
+    for (key, body) in objects {
+        routes.push((
+            format!("{base}{key}"),
+            file(body, &format!("\"{}\"", md5_hex(body))),
+        ));
+    }
+    let routes = crate::support::Routes::start(routes)?;
+    let run = |arguments: &[&str]| {
+        sandbox
+            .command(arguments)
+            .env("FETCHLOOM_TEST_HOSTS", &routes.url)
+            .output()
+    };
+    ok(&run(&[
+        "add",
+        "s3://openneuro.org/ds000001/",
+        "--select",
+        "sub-01/**",
+        "--select",
+        "sub-02/func.tsv",
+    ])?)?;
+    let output = run(&["exclude", "data/ds000001/sub-02"])?;
+    ok(&output)?;
+    assert!(
+        text(&output.stderr)?.contains("   Excluded 1 file of ds000001 in data.toml and data.lock\n            select no longer asks for \"sub-02/func.tsv\", whose files are all left out\n"),
+        "{}",
+        text(&output.stderr)?
+    );
+    let manifest = fs::read_to_string(sandbox.work().join("data.toml"))?;
+    assert!(
+        manifest.contains("select = [\"sub-01/**\"]\nexclude = [\"sub-02/**\"]\n"),
+        "{manifest}"
+    );
+    ok(&run(&["sync", "--locked"])?)?;
+    Ok(())
+}
+
 /// a data.lock that is a pipe, as a clone can hold, is refused before exclude plans, never read
 /// and waited on: nothing changes. a stop while exclude plans is held to the same by
 /// `planning_ends_at_the_first_look_after_a_stop`.

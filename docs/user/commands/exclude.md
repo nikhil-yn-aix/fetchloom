@@ -28,6 +28,7 @@ fetchloom exclude [options] <path>...
     - a file the source lists gets its path in the dataset's `exclude`, and leaves `data.lock` too, rewritten as relocking the same listing would, so `sync --locked` takes it and nothing is resolved again.
     - a folder gets one pattern, such as `pets-v1/images/blurry/**` in a members table or `sub/**` in the dataset's `exclude`, when that pattern leaves out exactly the files under it, and one pattern for each file otherwise. files named one by one, as a shell expands `images/*.png`, get one pattern each, so a file that lands in that folder later stays.
     - leaving out every file an archive keeps leaves out the archive itself, in the dataset's `exclude`, and its members table goes, as does a glob key's table that then matches no archive.
+    - a pattern in the dataset's `select` that chooses only files the new patterns leave out goes, so data.toml never asks for a file and leaves it out at once: `sub-02/func/*run-01*` goes once `sub-02/**` is excluded, and so does a pattern the same as an excluded one. a line under `Excluded` names each, as `select no longer asks for "sub-02/func/*run-01*", whose files are all left out`. the last pattern of `select` stays, since a `select` of none chooses every file.
 3. delete the unchanged files it leaves out, as [`remove`](remove.md) does. a file someone changed stays, with a warning.
 
 stderr when the curator excludes a broken image from a dataset that is one zip, `pets.zip`:
