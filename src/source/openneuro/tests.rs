@@ -601,3 +601,627 @@ fn a_study_past_the_most_files_ends_alike_asking_folders_together() {
         "one at a time asked {alone_asked}, together {together_asked}"
     );
 }
+
+/// the link of one query of every file of `id`'s snapshot `tag`, as a listing of a snapshot
+/// data.lock pins whole asks it.
+fn whole(id: &str, tag: &str) -> String {
+    link(&format!(
+        r#"query{{snapshot(datasetId:"{id}",tag:"{tag}"){{tag deprecated{{reason}} description{{Name License DatasetDOI}} files(recursive:true){{id filename size directory annexed urls}}}}}}"#
+    ))
+}
+
+/// what data.lock pins of `listing` once a sync listed it: every file but those a listing keeps
+/// only when selected.
+fn pin_of(listing: &Listing) -> Pin {
+    Pin::of(
+        listing
+            .files
+            .iter()
+            .map(|file| file.path.as_str())
+            .filter(|path| !listing.kept_only_if_selected(path)),
+    )
+}
+
+/// what data.lock pins of ds000001's cut once a sync listed it.
+fn ds000001_pin() -> Pin {
+    pin_of(&listed("openneuro:ds000001@1.0.0", &ds000001()).unwrap())
+}
+
+/// ds000001's cut with its one-query answer, openneuro's own recursive answer for snapshot 1.0.0
+/// cut to the files the cut's folders hold, in the order openneuro sent them, and data.lock
+/// pinning `pin` of that snapshot.
+fn ds000001_whole(pin: Pin) -> Recorded {
+    ds000001()
+        .fixture(&whole("ds000001", "1.0.0"), "openneuro/whole.json")
+        .pinned_whole("openneuro:ds000001@1.0.0", pin)
+}
+
+/// ds000001's one-query answer, its snapshot as `change` leaves it.
+fn whole_answer(change: impl FnOnce(&mut serde_json::Value)) -> Vec<u8> {
+    let mut answer: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("openneuro/whole.json")).unwrap();
+    change(&mut answer["data"]["snapshot"]);
+    serde_json::to_vec(&answer).unwrap()
+}
+
+/// the files of a one-query answer's snapshot.
+fn answered(snapshot: &mut serde_json::Value) -> &mut Vec<serde_json::Value> {
+    snapshot["files"].as_array_mut().unwrap()
+}
+
+/// the header each query carries, as a recorded network notes it after the link.
+const PREFLIGHT_SAID: &str = " apollo-require-preflight: true";
+
+/// a snapshot data.lock pins whole lists, in one query, the files, in the walk's order, and the
+/// title, license, DOI and warnings its walk lists, a query a folder, from the same snapshot:
+/// openneuro answers the folders from a stack, sub-01's func before its anat, which the walk lists
+/// the other way round.
+#[test]
+fn a_pinned_snapshot_lists_in_one_query_what_its_walk_lists() {
+    let walked = ds000001();
+    let walk = listed("openneuro:ds000001@1.0.0", &walked).unwrap();
+    let recorded = ds000001_whole(pin_of(&walk));
+    let whole_listed = listed("openneuro:ds000001@1.0.0", &recorded).unwrap();
+    assert_eq!(format!("{whole_listed:?}"), format!("{walk:?}"));
+    assert_eq!(walked.asked().len(), 4);
+    assert_eq!(
+        recorded.asked(),
+        [whole("ds000001", "1.0.0") + PREFLIGHT_SAID]
+    );
+}
+
+/// the walk lists the snapshot where data.lock pins nothing whole, pins another snapshot, pins
+/// more files than one query takes or than half the most a dataset may list, or select patterns
+/// narrow what is listed.
+#[test]
+fn a_snapshot_the_one_query_gate_leaves_out_is_walked() {
+    let anat = [crate::glob::Glob::new("sub-01/anat/**").unwrap()];
+    let unpinned = ds000001().fixture(&whole("ds000001", "1.0.0"), "openneuro/whole.json");
+    let elsewhere = unpinned
+        .clone()
+        .pinned_whole("openneuro:ds000001@0.9.0", ds000001_pin());
+    let many: Vec<String> = (0..20_001).map(|file| format!("file-{file}")).collect();
+    let past_one_query = Pin::of(many.iter().map(String::as_str));
+    let cases: [(&str, Recorded, &[crate::glob::Glob]); 5] = [
+        ("nothing pinned", unpinned, &[]),
+        ("another snapshot pinned", elsewhere, &[]),
+        ("past one query's most", ds000001_whole(past_one_query), &[]),
+        (
+            "past half the most files",
+            ds000001_whole(ds000001_pin()).most(19),
+            &[],
+        ),
+        (
+            "narrowed by select patterns",
+            ds000001_whole(ds000001_pin()),
+            &anat,
+        ),
+    ];
+    for (case, recorded, select) in cases {
+        let reference = Reference::parse("openneuro:ds000001@1.0.0")
+            .unwrap()
+            .reference;
+        block_on(reference.resolve_in(&recorded, select)).unwrap();
+        let asked = recorded.asked();
+        assert_eq!(
+            asked[0],
+            top("ds000001", "1.0.0") + PREFLIGHT_SAID,
+            "{case}"
+        );
+        assert!(
+            !asked.contains(&(whole("ds000001", "1.0.0") + PREFLIGHT_SAID)),
+            "{case}: {asked:#?}"
+        );
+    }
+}
+
+/// a one-query answer that cannot be used is followed by the walk, whose listing stands as if the
+/// query had not been asked, and the run's other listings of the snapshot walk at once: an error,
+/// a status, another snapshot, an answer of another shape, a folder named or the top folder alone,
+/// an entry the walk would judge, and an answer that holds other files than data.lock pins, cut
+/// short as openneuro answers without a folder whose tree it could not read, or a file listed
+/// twice in another's place.
+#[test]
+fn an_unusable_one_query_answer_is_followed_by_the_walk() {
+    let walk = listed("openneuro:ds000001@1.0.0", &ds000001()).unwrap();
+    let link = whole("ds000001", "1.0.0");
+    let refused =
+        br#"{"errors":[{"message":"Unknown argument \"recursive\" on field \"Snapshot.files\"."}]}"#;
+    let folder = serde_json::json!({"id": SUB, "filename": "sub-01", "size": 0, "directory": true,
+        "annexed": false, "urls": []});
+    let cases: Vec<(&str, Vec<u8>, u16)> = vec![
+        ("an error", refused.to_vec(), 200),
+        ("a status", refused.to_vec(), 400),
+        (
+            "another snapshot",
+            whole_answer(|snapshot| snapshot["tag"] = "1.0.1".into()),
+            200,
+        ),
+        (
+            "a folder named",
+            whole_answer(|snapshot| answered(snapshot).insert(2, folder)),
+            200,
+        ),
+        (
+            "the top folder alone",
+            fixture_bytes("openneuro/top.json"),
+            200,
+        ),
+        (
+            "an empty part of a path",
+            whole_answer(|snapshot| {
+                answered(snapshot)[8]["filename"] = "sub-01//sub-01_T1w.nii.gz".into();
+            }),
+            200,
+        ),
+        (
+            "a size that is no number",
+            whole_answer(|snapshot| answered(snapshot)[8]["size"] = "many".into()),
+            200,
+        ),
+        (
+            "an answer cut short",
+            whole_answer(|snapshot| {
+                answered(snapshot).retain(|file| {
+                    !file["filename"]
+                        .as_str()
+                        .unwrap()
+                        .starts_with("sub-01/anat/")
+                });
+            }),
+            200,
+        ),
+        (
+            "a file listed twice in another's place",
+            whole_answer(|snapshot| {
+                let files = answered(snapshot);
+                files[9]["filename"] = files[8]["filename"].clone();
+            }),
+            200,
+        ),
+    ];
+    for (case, body, status) in cases {
+        let recorded = ds000001()
+            .on(&link, status, body)
+            .pinned_whole("openneuro:ds000001@1.0.0", pin_of(&walk));
+        let listing = listed("openneuro:ds000001@1.0.0", &recorded).unwrap();
+        assert_eq!(format!("{listing:?}"), format!("{walk:?}"), "{case}");
+        let asked = recorded.asked();
+        assert_eq!(
+            asked.len(),
+            5,
+            "{case}: the one query, then the walk's four"
+        );
+        assert_eq!(asked[0], link.clone() + PREFLIGHT_SAID, "{case}");
+        assert_eq!(recorded.pinned("openneuro:ds000001@1.0.0"), None, "{case}");
+    }
+}
+
+/// a one query the walk's small queries need not fail as it failed, past the most an answer may
+/// hold or a server's error through every retry, is followed by the walk, once: the run's next
+/// listing of the snapshot walks at once.
+#[test]
+fn a_one_query_the_server_fails_is_followed_by_the_walk_once() {
+    let walk = listed("openneuro:ds000001@1.0.0", &ds000001()).unwrap();
+    let link = whole("ds000001", "1.0.0");
+    let failures = [
+        (
+            "past the most an answer holds",
+            crate::net::too_large_answer(&Url::parse(&link).unwrap()),
+        ),
+        (
+            "a server's error through every retry",
+            Error::new(
+                Kind::NetworkStatus,
+                "gave up on openneuro.org after 5 tries: openneuro.org answered 504",
+            ),
+        ),
+    ];
+    for (case, failure) in failures {
+        let recorded = ds000001()
+            .fail(&link, failure)
+            .pinned_whole("openneuro:ds000001@1.0.0", pin_of(&walk));
+        for listing in 0..2 {
+            let listing_now = listed("openneuro:ds000001@1.0.0", &recorded).unwrap();
+            assert_eq!(
+                format!("{listing_now:?}"),
+                format!("{walk:?}"),
+                "{case}, listing {listing}"
+            );
+        }
+        let asked = recorded.asked();
+        assert_eq!(
+            asked.len(),
+            9,
+            "{case}: the one query, then the walk's four, twice"
+        );
+        assert_eq!(asked[0], link.clone() + PREFLIGHT_SAID, "{case}");
+        assert!(
+            !asked[1..].contains(&(link.clone() + PREFLIGHT_SAID)),
+            "{case}: {asked:#?}"
+        );
+    }
+}
+
+/// a one query a stop, a refusal, a rate limit, a lost network or a timeout ends, as any of them
+/// would end the walk's first query, fails the listing with it and nothing more is asked; so does
+/// a private dataset, in the words the walk's first query gets.
+#[test]
+fn a_one_query_ended_as_the_walks_first_query_would_be_fails_the_listing() {
+    let link = whole("ds000001", "1.0.0");
+    for kind in [
+        Kind::Interrupted,
+        Kind::NetworkRefused,
+        Kind::NetworkRateLimited,
+        Kind::NetworkUnreachable,
+        Kind::OfflineMissing,
+    ] {
+        let ended = Error::new(kind, "the request ended");
+        let walked = ds000001().fail(&top("ds000001", "1.0.0"), ended.clone());
+        let walk = listed("openneuro:ds000001@1.0.0", &walked).unwrap_err();
+        let recorded = ds000001()
+            .fail(&link, ended)
+            .pinned_whole("openneuro:ds000001@1.0.0", ds000001_pin());
+        let error = listed("openneuro:ds000001@1.0.0", &recorded).unwrap_err();
+        assert_eq!(error.kind, kind);
+        assert_eq!(
+            (error.kind, &error.message, &error.help),
+            (walk.kind, &walk.message, &walk.help),
+            "{kind:?}"
+        );
+        assert_eq!(recorded.asked().len(), 1, "{kind:?}");
+    }
+    let private = br#"{"errors":[{"message":"You do not have access to read this dataset."}]}"#;
+    let walked = ds000001().on(&top("ds000001", "1.0.0"), 200, private.to_vec());
+    let walk = listed("openneuro:ds000001@1.0.0", &walked).unwrap_err();
+    let recorded = ds000001()
+        .on(&link, 200, private.to_vec())
+        .pinned_whole("openneuro:ds000001@1.0.0", ds000001_pin());
+    let error = listed("openneuro:ds000001@1.0.0", &recorded).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        (error.kind, &error.message, &error.help),
+        (walk.kind, &walk.message, &walk.help)
+    );
+    assert_eq!(recorded.asked().len(), 1);
+}
+
+/// a file the walk refuses, in both answers, is refused in the walk's own words after the one
+/// query.
+#[test]
+fn a_file_the_walk_refuses_is_refused_in_its_words_after_the_one_query() {
+    let mut said: serde_json::Value =
+        serde_json::from_slice(&fixture_bytes("openneuro/top.json")).unwrap();
+    said["data"]["snapshot"]["files"][0]["size"] = "many".into();
+    let walked = ds000001().on(
+        &top("ds000001", "1.0.0"),
+        200,
+        serde_json::to_vec(&said).unwrap(),
+    );
+    let walk = listed("openneuro:ds000001@1.0.0", &walked).unwrap_err();
+    let recorded = walked
+        .clone()
+        .on(
+            &whole("ds000001", "1.0.0"),
+            200,
+            whole_answer(|snapshot| answered(snapshot)[0]["size"] = "many".into()),
+        )
+        .pinned_whole("openneuro:ds000001@1.0.0", ds000001_pin());
+    let error = listed("openneuro:ds000001@1.0.0", &recorded).unwrap_err();
+    assert_eq!(
+        walk.message,
+        "openneuro:ds000001@1.0.0 sent an invalid listing: the size of README is not a number"
+    );
+    assert_eq!(
+        (error.kind, &error.message, &error.help),
+        (walk.kind, &walk.message, &walk.help)
+    );
+    assert_eq!(recorded.asked().len(), 1 + walked.asked().len());
+}
+
+/// a snapshot past the most files one dataset may list, pinned under the gate by an older pin, is
+/// walked after the one query, which refuses it as before.
+#[test]
+fn a_one_query_past_the_most_files_is_refused_as_the_walk_refuses() {
+    let walked = ds000001().most(5);
+    let walk = listed("openneuro:ds000001@1.0.0", &walked).unwrap_err();
+    let recorded = walked
+        .clone()
+        .fixture(&whole("ds000001", "1.0.0"), "openneuro/whole.json")
+        .pinned_whole(
+            "openneuro:ds000001@1.0.0",
+            Pin::of(["README", "dataset_description.json"]),
+        );
+    let error = listed("openneuro:ds000001@1.0.0", &recorded).unwrap_err();
+    assert_eq!(
+        (error.kind, &error.message, &error.help),
+        (walk.kind, &walk.message, &walk.help)
+    );
+    let asked = recorded.asked();
+    assert_eq!(asked[0], whole("ds000001", "1.0.0") + PREFLIGHT_SAID);
+    assert_eq!(asked[1..], walked.asked()[..]);
+}
+
+/// a snapshot pinned whole and asked by its dataset's name lists in one query once the newest tag
+/// is the pinned one: two requests, the newest tag and the one query.
+#[test]
+fn the_newest_snapshot_pinned_whole_lists_in_one_query() {
+    let recorded =
+        ds000001_whole(ds000001_pin()).fixture(&latest("ds000001"), "openneuro/latest.json");
+    let listing = listed("openneuro:ds000001", &recorded).unwrap();
+    assert_eq!(listing.resolved.to_string(), "openneuro:ds000001@1.0.0");
+    assert_eq!(listing.files.len(), 10);
+    assert_eq!(
+        recorded.asked(),
+        [
+            latest("ds000001") + PREFLIGHT_SAID,
+            whole("ds000001", "1.0.0") + PREFLIGHT_SAID
+        ]
+    );
+}
+
+/// a snapshot of ds000003 as openneuro keeps it: the top folder's entries, and each folder's by
+/// its tree's id, each a name, an id and whether it is a folder, in the folder's own order.
+#[derive(Default)]
+struct Kept {
+    top: Vec<(String, String, bool)>,
+    trees: HashMap<String, Vec<(String, String, bool)>>,
+}
+
+impl Kept {
+    /// an entry of an answer.
+    fn entry(name: &str, id: &str, folder: bool) -> serde_json::Value {
+        serde_json::json!({"id": id, "filename": name, "size": if folder { 0 } else { 7 },
+            "directory": folder, "annexed": false, "urls": []})
+    }
+
+    /// the snapshot with `files` as its answer's files, its owners' reason to deprecate it, if
+    /// any, as `deprecated`.
+    fn snapshot(files: &[serde_json::Value], deprecated: Option<&str>) -> Vec<u8> {
+        let deprecated = deprecated.map(|reason| serde_json::json!({"reason": reason}));
+        serde_json::to_vec(&serde_json::json!({"data": {"snapshot": {"tag": "1.0.0",
+            "deprecated": deprecated, "description": {"Name": "shapes", "License": "CC0",
+            "DatasetDOI": null}, "files": files}}}))
+        .unwrap()
+    }
+
+    /// the walk's answers: the top folder's, and a folder's for each tree.
+    fn walked(&self, deprecated: Option<&str>) -> Recorded {
+        let entries = |entries: &[(String, String, bool)]| {
+            entries
+                .iter()
+                .map(|(name, id, folder)| Kept::entry(name, id, *folder))
+                .collect::<Vec<_>>()
+        };
+        let mut recorded = Recorded::default().on(
+            &top("ds000003", "1.0.0"),
+            200,
+            Kept::snapshot(&entries(&self.top), deprecated),
+        );
+        for (tree, inside) in &self.trees {
+            let answer = serde_json::json!({"data": {"snapshot": {"files": entries(inside)}}});
+            recorded = recorded.on(
+                &folder("ds000003", "1.0.0", tree),
+                200,
+                serde_json::to_vec(&answer).unwrap(),
+            );
+        }
+        recorded
+    }
+
+    /// openneuro's answer to one query of every file, as its server's `reconstructFromTrees`
+    /// makes it from the same trees: from a stack of folders, the top first, each taken off
+    /// putting on the folders it holds and answering its files, each by its whole path.
+    fn whole(&self, deprecated: Option<&str>) -> Vec<u8> {
+        let mut files = Vec::new();
+        let mut stack = vec![(&self.top, String::new())];
+        while let Some((entries, path)) = stack.pop() {
+            for (name, id, folder) in entries {
+                let at = if path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{path}/{name}")
+                };
+                if !*folder {
+                    files.push(Kept::entry(&at, id, false));
+                } else if let Some(inside) = self.trees.get(id) {
+                    stack.push((inside, at));
+                }
+            }
+        }
+        Kept::snapshot(&files, deprecated)
+    }
+}
+
+/// numbers drawn from a seed, by xorshift.
+struct Draws(u64);
+
+impl Draws {
+    /// a number below `below`.
+    fn below(&mut self, below: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        usize::try_from(self.0 % below as u64).unwrap()
+    }
+}
+
+/// the shapes a [`grown`] snapshot took: a folder holding another folder's tree, an empty folder,
+/// a file four folders down, and a folder whose files and folders interleave.
+#[derive(Default)]
+struct Shapes {
+    shared: usize,
+    empty: usize,
+    deep: usize,
+    interleaved: usize,
+}
+
+/// a snapshot of ds000003 grown from `seed`: in each folder up to five entries, files and folders
+/// in any order, a `.gitattributes` among them now and then, folders up to five deep, some
+/// holding a tree made before, as git names a folder by what it holds, some empty, and
+/// `DataLad`'s folder at the top.
+fn grown(seed: u64, shapes: &mut Shapes) -> Kept {
+    /// the entries of a folder `depth` folders down, its trees kept in `kept`.
+    fn entries(
+        kept: &mut Kept,
+        draws: &mut Draws,
+        made: &mut Vec<String>,
+        depth: usize,
+        shapes: &mut Shapes,
+    ) -> Vec<(String, String, bool)> {
+        let count = draws.below(6);
+        if count == 0 && depth > 0 {
+            shapes.empty += 1;
+        }
+        let mut held = Vec::new();
+        for at in 0..count {
+            if depth < 5 && draws.below(3) == 0 {
+                let id = if !made.is_empty() && draws.below(5) == 0 {
+                    shapes.shared += 1;
+                    made[draws.below(made.len())].clone()
+                } else {
+                    let inside = entries(kept, draws, made, depth + 1, shapes);
+                    let id = format!("{:040x}", kept.trees.len() + 1);
+                    kept.trees.insert(id.clone(), inside);
+                    made.push(id.clone());
+                    id
+                };
+                held.push((format!("d{at}"), id, true));
+            } else {
+                if depth == 4 {
+                    shapes.deep += 1;
+                }
+                let name = if at == 0 && draws.below(4) == 0 {
+                    ".gitattributes".to_owned()
+                } else {
+                    format!("f{at}")
+                };
+                let id = format!("{:040x}", 1_000_000 + draws.below(1_000_000));
+                held.push((name, id, false));
+            }
+        }
+        let folders: Vec<bool> = held.iter().map(|(_, _, folder)| *folder).collect();
+        if folders
+            .windows(3)
+            .any(|three| three[0] != three[1] && three[1] != three[2])
+        {
+            shapes.interleaved += 1;
+        }
+        held
+    }
+    let mut draws = Draws(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+    let mut kept = Kept::default();
+    let mut made = Vec::new();
+    let mut top = entries(&mut kept, &mut draws, &mut made, 0, shapes);
+    let datalad = format!("{:040x}", 999_999);
+    kept.trees.insert(
+        datalad.clone(),
+        vec![("config".to_owned(), format!("{:040x}", 999_998), false)],
+    );
+    let at = draws.below(top.len() + 1);
+    top.insert(at, (".datalad".to_owned(), datalad, true));
+    kept.top = top;
+    kept
+}
+
+/// for 400 snapshots of every shape [`grown`] makes, the one query lists what the walk lists, in
+/// its order, with the same warnings, from openneuro's answer as its server makes it from the
+/// same trees, in one request.
+#[test]
+fn the_one_query_lists_every_shape_of_snapshot_as_the_walk_does() {
+    let mut shapes = Shapes::default();
+    let mut walked_folders = 0;
+    for seed in 0..400 {
+        let kept = grown(seed, &mut shapes);
+        let deprecated = (seed % 7 == 0).then_some("a newer snapshot fixes its events");
+        let walked = kept.walked(deprecated);
+        let walk = listed("openneuro:ds000003@1.0.0", &walked).unwrap();
+        if walked.asked().len() >= 3 {
+            walked_folders += 1;
+        }
+        let recorded = walked
+            .clone()
+            .on(&whole("ds000003", "1.0.0"), 200, kept.whole(deprecated))
+            .pinned_whole("openneuro:ds000003@1.0.0", pin_of(&walk));
+        let listing = listed("openneuro:ds000003@1.0.0", &recorded).unwrap();
+        assert_eq!(format!("{listing:?}"), format!("{walk:?}"), "seed {seed}");
+        assert_eq!(recorded.asked().len(), 1, "seed {seed}");
+    }
+    let Shapes {
+        shared,
+        empty,
+        deep,
+        interleaved,
+    } = shapes;
+    assert!(
+        shared > 40 && empty > 40 && deep > 40 && interleaved > 40 && walked_folders > 100,
+        "shared {shared}, empty {empty}, deep {deep}, interleaved {interleaved}, walked two folders \
+         or more {walked_folders}"
+    );
+}
+
+/// an answer of more folders and files than half the most files is read no further and walked,
+/// though data.lock pins it whole under the gate, as one file 15 folders down beside ten at the
+/// top makes it at 26 for the most of 51; at 52 it lists in one query.
+#[test]
+fn a_one_query_past_half_the_most_files_with_its_folders_is_walked() {
+    let mut top: Vec<(String, String, bool)> = (0..10)
+        .map(|file| (format!("f{file}"), format!("{:040x}", 500 + file), false))
+        .collect();
+    let mut trees = HashMap::new();
+    let mut inside = vec![("x".to_owned(), format!("{:040x}", 499), false)];
+    for depth in (0..15).rev() {
+        let id = format!("{:040x}", depth + 1);
+        trees.insert(id.clone(), inside);
+        inside = vec![("d".to_owned(), id, true)];
+    }
+    top.extend(inside);
+    let kept = Kept { top, trees };
+    for (most, one_query) in [(51, false), (52, true)] {
+        let walked = kept.walked(None).most(most);
+        let walk = listed("openneuro:ds000003@1.0.0", &walked).unwrap();
+        assert_eq!(walk.files.len(), 11);
+        let recorded = walked
+            .clone()
+            .on(&whole("ds000003", "1.0.0"), 200, kept.whole(None))
+            .pinned_whole("openneuro:ds000003@1.0.0", pin_of(&walk));
+        let listing = listed("openneuro:ds000003@1.0.0", &recorded).unwrap();
+        assert_eq!(format!("{listing:?}"), format!("{walk:?}"), "most {most}");
+        let asked = recorded.asked().len();
+        let expected = if one_query {
+            1
+        } else {
+            1 + walked.asked().len()
+        };
+        assert_eq!(asked, expected, "most {most}");
+    }
+}
+
+/// a folder holding no file at any depth, as git's empty tree, leaves no trace in openneuro's one
+/// query answer, so it counts toward the most files only in the walk: the walk refuses a snapshot
+/// of one file beside 25 such folders where the most is 20, and the one query lists its file.
+#[test]
+fn folders_holding_no_file_count_toward_the_most_only_in_the_walk() {
+    let empty = "4b825dc642cb6eb9a060e54bf8d69288fbee4904".to_owned();
+    let mut top: Vec<(String, String, bool)> = (0..25)
+        .map(|at| (format!("d{at:02}"), empty.clone(), true))
+        .collect();
+    top.push(("f".to_owned(), format!("{:040x}", 2), false));
+    let kept = Kept {
+        top,
+        trees: HashMap::from([(empty, Vec::new())]),
+    };
+    let walk = listed("openneuro:ds000003@1.0.0", &kept.walked(None).most(20)).unwrap_err();
+    assert_eq!(
+        walk.message,
+        "openneuro:ds000003@1.0.0 lists more than 20 files, the most this run lists for one dataset"
+    );
+    let recorded = kept
+        .walked(None)
+        .most(20)
+        .on(&whole("ds000003", "1.0.0"), 200, kept.whole(None))
+        .pinned_whole("openneuro:ds000003@1.0.0", Pin::of(["f"]));
+    let listing = listed("openneuro:ds000003@1.0.0", &recorded).unwrap();
+    assert_eq!(paths(&listing), ["f"]);
+    assert_eq!(recorded.asked().len(), 1);
+}

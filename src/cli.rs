@@ -2098,6 +2098,20 @@ mod tests {
         assert_eq!(quiet(true).net().pages_window(&files), net::HOST_JOBS);
     }
 
+    /// the network a command's sources ask keeps what data.lock pins whole, by the pin's
+    /// `resolved`, until a listing forgets it.
+    #[test]
+    fn the_network_keeps_what_data_lock_pins_until_a_listing_forgets_it() {
+        use crate::net::Api as _;
+        let pin = net::Pin::of(["CHANGES", "sub-01/anat/sub-01_T1w.nii.gz"]);
+        let net = quiet(true).net();
+        net.know_pinned("openneuro:ds000001@1.0.0", pin);
+        assert_eq!(net.pinned("openneuro:ds000001@1.0.0"), Some(pin));
+        assert_eq!(net.pinned("openneuro:ds000001@1.0.1"), None);
+        net.forget_pinned("openneuro:ds000001@1.0.0");
+        assert_eq!(net.pinned("openneuro:ds000001@1.0.0"), None);
+    }
+
     /// keys are looked for when a request first needs one, so a settled sync reads no key files.
     #[test]
     fn a_network_that_sends_nothing_looks_for_no_keys() {

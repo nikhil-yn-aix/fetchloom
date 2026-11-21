@@ -32,6 +32,9 @@ pub(crate) struct Recorded {
     window: Option<usize>,
     /// how many numbered pages a listing may ask for at once, one when unset.
     pages: Option<usize>,
+    /// what data.lock pins of each dataset it pins whole, by its `resolved`, less what a listing
+    /// forgot.
+    pinned: Mutex<HashMap<String, crate::net::Pin>>,
     /// how long each answer takes on tokio's clock, by link, and for any other link.
     holds: HashMap<String, std::time::Duration>,
     hold: Option<std::time::Duration>,
@@ -54,6 +57,12 @@ impl Clone for Recorded {
             most_asked: self.most_asked,
             window: self.window,
             pages: self.pages,
+            pinned: Mutex::new(
+                self.pinned
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone(),
+            ),
             holds: self.holds.clone(),
             hold: self.hold,
         }
@@ -218,6 +227,15 @@ impl Recorded {
         self
     }
 
+    /// says data.lock pins `pin` of the dataset at `resolved`, every file its source lists.
+    pub(crate) fn pinned_whole(mut self, resolved: &str, pin: crate::net::Pin) -> Recorded {
+        self.pinned
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(resolved.to_owned(), pin);
+        self
+    }
+
     /// answers every link `hold` after it is asked, on tokio's clock, which a paused test runtime
     /// moves on at once, so a test counts the requests that waited on each other.
     pub(crate) fn holding(mut self, hold: std::time::Duration) -> Recorded {
@@ -288,6 +306,21 @@ impl Api for Recorded {
 
     fn pages_window(&self, _url: &Url) -> usize {
         self.pages.unwrap_or(1)
+    }
+
+    fn pinned(&self, resolved: &str) -> Option<crate::net::Pin> {
+        self.pinned
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(resolved)
+            .copied()
+    }
+
+    fn forget_pinned(&self, resolved: &str) {
+        self.pinned
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(resolved);
     }
 
     fn get(&self, url: &Url) -> impl Future<Output = Result<Response, Error>> + Send {

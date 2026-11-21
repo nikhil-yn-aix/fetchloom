@@ -38,7 +38,7 @@ use url::Url;
 pub(crate) use address::{Allowed, is_private, looks_internal};
 #[cfg(test)]
 pub(crate) use api::too_large as too_large_answer;
-pub(crate) use api::{Api, Extra, MOST_FILES, Response, Through};
+pub(crate) use api::{Api, Extra, MOST_FILES, Pin, Response, Through};
 #[cfg(test)]
 pub(crate) use azure::Given;
 #[cfg(debug_assertions)]
@@ -281,6 +281,9 @@ pub(crate) struct Net {
     hf_endpoint: Option<Endpoint>,
     jobs: Arc<Semaphore>,
     hosts: Mutex<HashMap<String, Arc<Semaphore>>>,
+    /// what data.lock pins of each dataset it pins whole, by its `resolved`, for a source that may
+    /// list it in one query.
+    pinned: Mutex<HashMap<String, Pin>>,
     paces: pace::Paces,
     /// what the run heard from any host, which tells a lost network from one host down.
     outage: failure::Outage,
@@ -513,6 +516,7 @@ impl Net {
             hf_endpoint: None,
             jobs: Arc::new(Semaphore::new(options.jobs.max(1))),
             hosts: Mutex::new(HashMap::new()),
+            pinned: Mutex::new(HashMap::new()),
             paces: pace::Paces::default(),
             outage: failure::Outage::default(),
             outage_wait: failure::LONGEST_OUTAGE,

@@ -1888,9 +1888,22 @@ fn openneuro_folder(tree: &str) -> String {
     ))
 }
 
+/// the query for every file of snapshot 1.0.0 of ds000001 in one answer, as a listing of the
+/// snapshot data.lock pins whole asks it.
+fn openneuro_whole() -> String {
+    graphql(
+        r#"query{snapshot(datasetId:"ds000001",tag:"1.0.0"){tag deprecated{reason} description{Name License DatasetDOI} files(recursive:true){id filename size directory annexed urls}}}"#,
+    )
+}
+
 /// openneuro's answers for snapshot 1.0.0 of ds000001: a README kept in git, `DataLad`'s own
 /// folder, and a folder holding one scan in git-annex under `key`, whose bytes are `scan`.
 fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
+    Routes::start(openneuro_answers(key, scan)?)
+}
+
+/// the answers [`openneuro`] serves, by link.
+fn openneuro_answers(key: &str, scan: &[u8]) -> Result<Vec<(String, Vec<Part>)>> {
     let objects = format!(
         "https://openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
     );
@@ -1908,7 +1921,7 @@ fn openneuro(key: &str, scan: &[u8]) -> Result<Routes> {
         {"id": key, "filename": "sub-01_T1w.nii.gz", "size": scan.len(), "directory": false, "annexed": true,
          "urls": [format!("https://s3.amazonaws.com{}", OPENNEURO_SCAN.trim_start_matches("/s3.amazonaws.com"))]},
     ]}}});
-    Routes::start(vec![
+    Ok(vec![
         (openneuro_top(), answer(&top)?),
         (openneuro_folder(OPENNEURO_TREE), answer(&folder)?),
         (
@@ -2064,6 +2077,61 @@ fn an_upgrade_to_the_snapshot_data_lock_pins_fetches_no_file() -> Result {
         .cloned()
         .collect();
     assert_eq!(fetched, Vec::<String>::new());
+    Ok(())
+}
+
+/// a snapshot data.lock pins whole is asked again in one query of every file by `lock --upgrade`
+/// and by `audit`, and the pin stands as the walk made it; a first add walks.
+#[test]
+fn a_pinned_openneuro_snapshot_is_asked_again_in_one_query() -> Result {
+    let key = format!("SHA256E-s{}--{}.nii.gz", ROWS.len(), sha256_hex(ROWS));
+    let objects = format!(
+        "https://openneuro.org/crn/datasets/ds000001/objects/{OPENNEURO_README}?filename=README"
+    );
+    let scan = format!(
+        "https://s3.amazonaws.com{}",
+        OPENNEURO_SCAN.trim_start_matches("/s3.amazonaws.com")
+    );
+    // openneuro answers folder by folder from a stack: the top's files, then its last folder first
+    let whole = serde_json::json!({"data": {"snapshot": {
+        "tag": "1.0.0",
+        "deprecated": null,
+        "description": {"Name": "Balloon Analog Risk-taking Task", "License": "CC0", "DatasetDOI": "10.18112/openneuro.ds000001.v1.0.0"},
+        "files": [
+            {"id": OPENNEURO_README, "filename": "README", "size": NOTES.len(), "directory": false, "annexed": false, "urls": [objects]},
+            {"id": key, "filename": "sub-01/sub-01_T1w.nii.gz", "size": ROWS.len(), "directory": false, "annexed": true, "urls": [scan]},
+            {"id": "0d9a3e0f1ae4a6b7c9d0e1f2a3b4c5d6e7f80912", "filename": ".datalad/config", "size": 32, "directory": false, "annexed": false, "urls": []},
+        ],
+    }}});
+    let sandbox = Sandbox::new()?;
+    let mut answers = openneuro_answers(&key, ROWS)?;
+    answers.push((openneuro_whole(), answer(&whole)?));
+    let routes = Routes::start(answers)?;
+    let mut queries: Vec<Vec<String>> = Vec::new();
+    let mut lock = None;
+    for verb in [
+        &["add", "openneuro:ds000001@1.0.0", "--as", "bart"][..],
+        &["lock", "--upgrade"][..],
+        &["audit"][..],
+    ] {
+        let before = routes.targets().len();
+        ok(&command(&sandbox, &routes, verb).output()?)?;
+        queries.push(
+            routes.targets()[before..]
+                .iter()
+                .filter(|target| target.starts_with(OPENNEURO))
+                .cloned()
+                .collect(),
+        );
+        lock.get_or_insert(fs::read_to_string(sandbox.work().join("data.lock"))?);
+    }
+    let walked = vec![openneuro_top(), openneuro_folder(OPENNEURO_TREE)];
+    let again = vec![openneuro_whole()];
+    assert_eq!(queries, [walked, again.clone(), again]);
+    assert_eq!(
+        lock,
+        Some(fs::read_to_string(sandbox.work().join("data.lock"))?)
+    );
     Ok(())
 }
 

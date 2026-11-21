@@ -930,6 +930,16 @@ pub(crate) fn byline(authors: &[String], year: Option<&str>) -> Option<String> {
     })
 }
 
+/// what data.lock pins of the dataset at `resolved`, pinned whole with the files at `paths`, where
+/// its source may list it in one query: an openneuro snapshot of at most 20,000 files; none for
+/// any other.
+pub(crate) fn one_query_pin<'a>(
+    resolved: &str,
+    paths: impl ExactSizeIterator<Item = &'a str>,
+) -> Option<net::Pin> {
+    openneuro::lists_in_one_query(resolved, paths.len()).then(|| net::Pin::of(paths))
+}
+
 /// what the sources say about requests to their hosts, for the network to follow.
 pub(crate) fn rules() -> net::Rules {
     net::Rules {

@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 mod memo;
 pub(super) use memo::{Memo, Sent};
@@ -32,6 +32,31 @@ pub(crate) fn too_large(url: &Url) -> Error {
         "no setting raises this limit, which keeps one answer from filling the memory. if this source really sends that much about one dataset, please report it at {}",
         crate::error::ISSUES
     ))
+}
+
+/// what data.lock pins of a dataset it pins whole, for a source that may list it in one query:
+/// how many files, and a sum of their paths' hashes, which the same paths give in any order. a
+/// listing that leaves a file out, or lists another in its place, gives another pin, but for a
+/// chance of about one in 2^64.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Pin {
+    pub(crate) files: usize,
+    paths: u64,
+}
+
+impl Pin {
+    /// the pin of `paths`.
+    pub(crate) fn of<'a>(paths: impl IntoIterator<Item = &'a str>) -> Pin {
+        use std::hash::Hasher as _;
+        let mut pin = Pin { files: 0, paths: 0 };
+        for path in paths {
+            let mut hasher = std::hash::DefaultHasher::new();
+            hasher.write(path.as_bytes());
+            pin.files += 1;
+            pin.paths = pin.paths.wrapping_add(hasher.finish());
+        }
+        pin
+    }
 }
 
 /// the most files one dataset lists when a run says nothing else, and the least it ever allows.
@@ -105,6 +130,20 @@ pub(crate) trait Api: Sync {
     fn pages_window(&self, url: &Url) -> usize {
         let _ = url;
         1
+    }
+
+    /// what data.lock pins of the dataset at `resolved`, as its `resolved` names it, where it pins
+    /// every file its source lists, with no select or exclude patterns, and its source may list it
+    /// in one query; none for any other, and for one whose one query this run could not use.
+    fn pinned(&self, resolved: &str) -> Option<Pin> {
+        let _ = resolved;
+        None
+    }
+
+    /// that this run could not use the one query of the dataset at `resolved`, so its other
+    /// listings of that dataset walk at once.
+    fn forget_pinned(&self, resolved: &str) {
+        let _ = resolved;
     }
 
     /// tells the network that drive refused item `id` without a token, and asks whether drive's
@@ -233,6 +272,21 @@ impl Api for Net {
         most.map_or(self.host_jobs, |most| most.min(self.host_jobs))
     }
 
+    fn pinned(&self, resolved: &str) -> Option<Pin> {
+        self.pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .get(resolved)
+            .copied()
+    }
+
+    fn forget_pinned(&self, resolved: &str) {
+        self.pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(resolved);
+    }
+
     async fn get(&self, url: &Url) -> Result<Response, Error> {
         Box::pin(self.get_for(url, false, &[])).await
     }
@@ -297,6 +351,15 @@ impl Net {
     pub(crate) fn with_most_files(mut self, most: usize) -> Self {
         self.most_files = most.max(1);
         self
+    }
+
+    /// keeps what data.lock pins of the dataset at `resolved`, every file its source lists, for
+    /// [`Api::pinned`].
+    pub(crate) fn know_pinned(&self, resolved: &str, pin: Pin) {
+        self.pinned
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(resolved.to_owned(), pin);
     }
 
     pub(crate) fn with_memory(mut self, bytes: u64) -> Self {
@@ -974,6 +1037,23 @@ mod tests {
         assert!(requests[1].starts_with("GET /listing/page1 HTTP/1.1"));
         assert!(requests[1].contains("accept: application/json, text/html;q=0.9, */*;q=0.8"));
         assert_eq!(net.work.counts().bytes_down, 21);
+    }
+
+    /// a pin tells the paths it was made of from a listing that leaves one out, lists one twice
+    /// or lists another in its place, whatever their order.
+    #[test]
+    fn a_pin_holds_its_paths_in_any_order() {
+        let pin = Pin::of(["a", "b/c", "b/d"]);
+        assert_eq!(pin.files, 3);
+        assert_eq!(Pin::of(["b/d", "a", "b/c"]), pin);
+        for other in [
+            vec!["a", "b/c"],
+            vec!["a", "b/c", "b/c"],
+            vec!["a", "b/c", "b/e"],
+            vec!["a", "b/c", "b/d", "e"],
+        ] {
+            assert_ne!(Pin::of(other.iter().copied()), pin, "{other:?}");
+        }
     }
 
     #[test]

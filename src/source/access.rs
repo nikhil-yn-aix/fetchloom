@@ -686,6 +686,14 @@ impl<A: Api> Api for Scoped<'_, A> {
         self.api.pages_window(url)
     }
 
+    fn pinned(&self, resolved: &str) -> Option<crate::net::Pin> {
+        self.api.pinned(resolved)
+    }
+
+    fn forget_pinned(&self, resolved: &str) {
+        self.api.forget_pinned(resolved);
+    }
+
     fn drive_refused<'b>(
         &'b self,
         id: &'b str,

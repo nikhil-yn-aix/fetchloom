@@ -1119,6 +1119,7 @@ impl<'a> Loop<'a> {
                 && !waiting.contains(name.as_str())
                 && !drafts.iter().any(|(drafted, _)| drafted == name)
             {
+                know_pinned(&self.net, entry, others.get(name));
                 asks.push((
                     name.clone(),
                     pinned(source, others.get(name), upgrade.includes(name)),
@@ -2785,6 +2786,24 @@ pub(super) fn resolves_locally(reference: &Reference) -> bool {
 /// what to resolve for a changed entry: a changed filter, or a version taken out of the ref,
 /// resolves the version already locked, so tidying data.toml never moves data, as uv keeps a
 /// locked version, while a new ref or an upgrade asks for the newest.
+/// tells `net` what data.lock pins of the dataset `entry` names, where its pin, `previous`, still
+/// answers the entry and pins every file its source lists, for a source that lists such a
+/// dataset in one query.
+fn know_pinned(net: &Net, entry: &Entry, previous: Option<&Locked>) {
+    let source = &entry.source;
+    if let Some(locked) = previous
+        && locked.drift(entry).is_none()
+        && source.select.is_empty()
+        && source.exclude.is_empty()
+        && let Some(pin) = crate::source::one_query_pin(
+            &locked.resolved,
+            locked.files.iter().map(|file| file.path.as_str()),
+        )
+    {
+        net.know_pinned(&locked.resolved, pin);
+    }
+}
+
 fn pinned(source: &Source, previous: Option<&Locked>, upgrading: bool) -> String {
     match previous {
         Some(locked)

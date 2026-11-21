@@ -1,6 +1,9 @@
 //! openneuro: datasets by accession or link, listed through openneuro's GraphQL API at one
-//! snapshot, a request per folder. large files come from its S3 bucket at the snapshot's version,
-//! checked against the SHA-256 or MD5 their git-annex keys state; no key goes to openneuro.
+//! snapshot, a request per folder, or in one query of every file for a snapshot data.lock pins
+//! whole, whose answer must hold just the files the pin holds. folders without files do not
+//! count toward the most files when a pinned snapshot is listed in one query. large files come
+//! from its S3 bucket at the snapshot's version, checked against the SHA-256 or MD5 their
+//! git-annex keys state; no key goes to openneuro.
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
@@ -13,7 +16,7 @@ use super::{Access, Listing, Reference, Remote, invalid, malformed};
 use crate::digest::{Md5, Sha256};
 use crate::error::{Error, Kind};
 use crate::glob::Glob;
-use crate::net::Api;
+use crate::net::{Api, Pin};
 
 pub(super) const API: &str = "https://openneuro.org/crn/graphql";
 const SITE: &str = "https://openneuro.org";
@@ -24,6 +27,9 @@ pub(super) const PREFLIGHT: &[(&str, &str)] = &[("apollo-require-preflight", "tr
 const FIELDS: &str = "id filename size directory annexed urls";
 /// `DataLad`'s own folder at the top of every dataset, which holds none of its data.
 const DATALAD: &str = ".datalad";
+/// the most files data.lock may pin of a snapshot listed in one query: about 7 MB of answer at the
+/// 310 to 360 bytes a file real snapshots take, a tenth of the most one answer may hold.
+const ONE_QUERY_MOST: usize = 20_000;
 
 /// an openneuro dataset, at one snapshot or the newest.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +94,15 @@ impl Dataset {
             id: self.id.clone(),
             tag: Some(tag.clone()),
         };
+        // a snapshot data.lock pins whole, at this tag and far from the most files, is asked for
+        // in one query of every file; an answer that cannot be used walks
+        if select.is_empty()
+            && let Some(pin) = api.pinned(&pinned.to_string())
+            && pin.files <= ONE_QUERY_MOST.min(api.most_files() / 2)
+            && let Some(listing) = pinned.whole(api, &tag, pin).await?
+        {
+            return Ok(listing);
+        }
         let top: Top = pinned
             .ask(
                 api,
@@ -97,21 +112,13 @@ impl Dataset {
                 ),
             )
             .await?;
-        let snapshot = top
+        let mut snapshot = top
             .snapshot
             .ok_or_else(|| invalid(&pinned, "the answer holds no snapshot"))?;
         if snapshot.tag.as_deref() != Some(tag.as_str()) {
             return Err(invalid(&pinned, "the answer names another snapshot"));
         }
-        let mut warnings = Vec::new();
-        if let Some(deprecated) = snapshot.deprecated {
-            warnings.push(
-                match deprecated.reason.filter(|reason| !reason.is_empty()) {
-                    Some(reason) => format!("the owners of {pinned} deprecated it: {reason}"),
-                    None => format!("the owners of {pinned} deprecated it"),
-                },
-            );
-        }
+        let warnings = pinned.warnings(snapshot.deprecated.take());
         let scopes: Option<Vec<String>> = if select.is_empty() {
             None
         } else {
@@ -138,11 +145,36 @@ impl Dataset {
             Some(found) => found,
             None => pinned.walk(api, &tag, snapshot.files, &[]).await?,
         };
-        let description = snapshot.description.unwrap_or_default();
-        Ok(Listing {
+        Ok(pinned.listing(snapshot.description, within, found.files, warnings))
+    }
+
+    /// the warnings of a snapshot its owners `deprecated`.
+    fn warnings(&self, deprecated: Option<Deprecated>) -> Vec<String> {
+        deprecated
+            .map(
+                |deprecated| match deprecated.reason.filter(|reason| !reason.is_empty()) {
+                    Some(reason) => format!("the owners of {self} deprecated it: {reason}"),
+                    None => format!("the owners of {self} deprecated it"),
+                },
+            )
+            .into_iter()
+            .collect()
+    }
+
+    /// the listing of this snapshot: its `files`, the folders `within` patterns narrowed it to,
+    /// and the title, license and DOI its `description` gives.
+    fn listing(
+        self,
+        description: Option<Description>,
+        within: Vec<String>,
+        files: Vec<Remote>,
+        warnings: Vec<String>,
+    ) -> Listing {
+        let description = description.unwrap_or_default();
+        Listing {
             within,
             access: Access::Public,
-            resolved: Reference::OpenNeuro(pinned),
+            resolved: Reference::OpenNeuro(self),
             title: description.name,
             license: description.license.filter(|license| !license.is_empty()),
             doi: description.doi.map(|doi| {
@@ -152,11 +184,150 @@ impl Dataset {
                     .unwrap_or(doi)
                     .to_owned()
             }),
-            files: found.files,
+            files,
             unavailable: Vec::new(),
             warnings,
             rounded: None,
-        })
+        }
+    }
+
+    /// the snapshot's listing from one query of every file, `files(recursive: true)`, when its
+    /// answer is the whole snapshot data.lock pins as `pin`: the files the walk lists, in its
+    /// order, with the title, license, DOI and warnings it tells. none, and the run's other
+    /// listings of the snapshot walk at once, for an answer the walk's small queries need not
+    /// get, past the most an answer may hold or a server's error through every retry, and for
+    /// one that cannot be used or holds other files than the pin, as an answer cut short, so the
+    /// walk lists the snapshot and says what is wrong in its own words. a stop, a refusal, a
+    /// rate limit, a lost network or a private dataset would fail the walk's first query alike,
+    /// and is an error; so is a timeout, by choice, though the walk's small queries might be
+    /// answered: at the source it cannot be told from a lost network, whose wait the walk would
+    /// double.
+    async fn whole(&self, api: &impl Api, tag: &str, pin: Pin) -> Result<Option<Listing>, Error> {
+        let url = self.query_url(&format!(
+            r#"query{{snapshot(datasetId:"{}",tag:"{tag}"){{tag deprecated{{reason}} description{{Name License DatasetDOI}} files(recursive:true){{{FIELDS}}}}}}}"#,
+            self.id
+        ))?;
+        let listing = match api.get_with(&url, PREFLIGHT).await {
+            Ok(response) => match self.read::<Top>(&response) {
+                Ok(Top {
+                    snapshot: Some(snapshot),
+                }) => self.whole_listing(api, tag, snapshot, pin),
+                Err(error) if error.kind == Kind::AuthRequired => return Err(error),
+                _ => None,
+            },
+            Err(error) if matches!(error.kind, Kind::SourceInvalid | Kind::NetworkStatus) => None,
+            Err(error) => return Err(error),
+        };
+        if listing.is_none() {
+            api.forget_pinned(&self.to_string());
+        }
+        Ok(listing)
+    }
+
+    /// the listing of `snapshot`, a recursive answer, as the walk lists it, when it names the
+    /// snapshot `tag` and holds just the files data.lock pins as `pin`, and those a listing keeps
+    /// only when selected; none for any other.
+    fn whole_listing(
+        &self,
+        api: &impl Api,
+        tag: &str,
+        snapshot: Snapshot,
+        pin: Pin,
+    ) -> Option<Listing> {
+        let Snapshot {
+            tag: named,
+            deprecated,
+            description,
+            files,
+        } = snapshot;
+        if named.as_deref() != Some(tag) {
+            return None;
+        }
+        let files = self.whole_files(api, files)?;
+        let warnings = self.warnings(deprecated);
+        let listing = self
+            .clone()
+            .listing(description, Vec::new(), files, warnings);
+        // openneuro answers without the folders whose trees it could not read, so an answer cut
+        // short looks whole but against the pin
+        let kept = Pin::of(
+            listing
+                .files
+                .iter()
+                .map(|file| file.path.as_str())
+                .filter(|path| !listing.kept_only_if_selected(path)),
+        );
+        (kept == pin).then_some(listing)
+    }
+
+    /// the files of a recursive answer's `entries`, each named by its whole path, in the order the
+    /// walk lists them: a folder's files before the folders in it, a depth before the next.
+    /// openneuro answers from a stack of folders (`reconstructFromTrees` in its server): it takes
+    /// the folder it put on last, puts on the folders that one holds, in their order, and answers
+    /// its files, in their order, never a folder itself. so the folders in each come in the
+    /// reverse of the walk's order, which taking them in the reverse of the order the answer
+    /// first names them gives back. `DataLad`'s folder at the top is left out, as the walk leaves
+    /// it. none for an answer of another shape, one naming a folder or a path with an empty part,
+    /// for a file the walk would refuse, and for one past half the most files, its folders
+    /// counted, where the walk decides; what the answer holds is read once, its names never
+    /// copied. a folder holding no file at any depth leaves no trace in the answer, so it counts
+    /// toward the most only in the walk.
+    fn whole_files(&self, api: &impl Api, mut entries: Vec<Entry>) -> Option<Vec<Remote>> {
+        /// a folder's files, by their place in the answer, and the folders in it, by number, in
+        /// the order the answer first names them.
+        #[derive(Default)]
+        struct Holds {
+            files: Vec<usize>,
+            folders: Vec<usize>,
+        }
+        let datalad = format!("{DATALAD}/");
+        entries.retain(|entry| !entry.filename.starts_with(&datalad));
+        let most = api.most_files() / 2;
+        if entries.len() > most
+            || entries
+                .iter()
+                .any(|entry| entry.directory || entry.filename.split('/').any(str::is_empty))
+        {
+            return None;
+        }
+        // the top is folder 0
+        let mut folders = vec![Holds::default()];
+        let mut numbered: HashMap<(usize, &str), usize> = HashMap::new();
+        for (at, entry) in entries.iter().enumerate() {
+            let mut parts = entry.filename.split('/');
+            parts.next_back();
+            let mut here = 0;
+            for part in parts {
+                let next = folders.len();
+                let found = *numbered.entry((here, part)).or_insert(next);
+                if found == next {
+                    if next + entries.len() > most {
+                        return None;
+                    }
+                    folders.push(Holds::default());
+                    folders[here].folders.push(next);
+                }
+                here = found;
+            }
+            folders[here].files.push(at);
+        }
+        let mut order: Vec<usize> = Vec::with_capacity(entries.len());
+        let mut waiting = VecDeque::from([0]);
+        while let Some(folder) = waiting.pop_front() {
+            order.extend(&folders[folder].files);
+            waiting.extend(folders[folder].folders.iter().rev());
+        }
+        let mut listed = Vec::with_capacity(order.len());
+        for at in order {
+            let entry = &mut entries[at];
+            let path = std::mem::take(&mut entry.filename);
+            path.rsplit('/')
+                .next()
+                .unwrap_or_default()
+                .clone_into(&mut entry.filename);
+            listed.push(file(self, path, entry).ok()?);
+        }
+        Some(listed)
     }
 
     /// the snapshot's files, from the top folder's `entries` down, a request for each folder, or
@@ -398,6 +569,16 @@ fn accession(text: &str) -> Option<String> {
     let lower = text.to_ascii_lowercase();
     let digits = lower.strip_prefix("ds")?;
     (digits.len() == 6 && digits.bytes().all(|byte| byte.is_ascii_digit())).then_some(lower)
+}
+
+/// whether data.lock's pin `resolved`, of `files` files, may be listed in one query: an openneuro
+/// snapshot of at most [`ONE_QUERY_MOST`] files.
+pub(super) fn lists_in_one_query(resolved: &str, files: usize) -> bool {
+    files <= ONE_QUERY_MOST
+        && resolved
+            .strip_prefix("openneuro:")
+            .and_then(|text| Dataset::parse(text).ok())
+            .is_some_and(|dataset| dataset.is_snapshot())
 }
 
 /// a snapshot's tag, as `1.0.0` or `00001`: letters, digits, `.`, `-` and `_`, which a query

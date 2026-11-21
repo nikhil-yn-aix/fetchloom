@@ -274,6 +274,9 @@ struct Asked {
     page: bool,
     words: Words,
     access: Access,
+    /// what the pin holds, where it holds every file its source lists, with no select or exclude
+    /// patterns, and the pin answers data.toml's entry.
+    whole: Option<crate::net::Pin>,
 }
 
 /// what a source lists now: at the pinned version, and at the version `lock --upgrade` would pin
@@ -411,6 +414,22 @@ fn pinned<'l>(
             .then(|| Reference::parse(&pin.resolved).ok())
             .flatten()
             .map(|parsed| parsed.reference);
+        let whole = if answers && source.select.is_empty() && source.exclude.is_empty() {
+            match lock.get(name) {
+                Some(locked) => crate::source::one_query_pin(
+                    &pin.resolved,
+                    locked.files.iter().map(|file| file.path.as_str()),
+                ),
+                None => lock.stated(name).and_then(|stated| {
+                    crate::source::one_query_pin(
+                        &pin.resolved,
+                        stated.files.iter().map(|file| file.path.as_str()),
+                    )
+                }),
+            }
+        } else {
+            None
+        };
         asks.push((
             report.datasets.len() - 1,
             Asked {
@@ -421,6 +440,7 @@ fn pinned<'l>(
                 page: source.web_page,
                 words,
                 access: pin.access,
+                whole,
             },
         ));
     }
@@ -441,6 +461,9 @@ async fn listings(net: &Arc<Net>, asks: &[(usize, Asked)]) -> Result<Vec<Listed>
         .collect();
     let mut tasks = JoinSet::new();
     for (at, (_, asked)) in asks.iter().enumerate() {
+        if let Some(pin) = asked.whole {
+            net.know_pinned(&asked.pinned, pin);
+        }
         for (upgrade, text) in [(false, Some(&asked.pinned)), (true, asked.upgrade.as_ref())] {
             let Some(text) = text else {
                 continue;
@@ -1223,6 +1246,7 @@ mod tests {
                 doi: None,
             },
             access: Access::Unknown,
+            whole: None,
         };
         let listing = |title: &str, license: Option<&str>, access: Access| Listing {
             resolved: Reference::parse("zenodo:1").unwrap().reference,
