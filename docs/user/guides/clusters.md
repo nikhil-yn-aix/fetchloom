@@ -79,7 +79,7 @@ then each member runs `umask 002`, so the files and folders they add stay writab
 
 a file a project's `data.lock` pins is shared by every member, whoever downloaded it, since its SHA-256 checks it. a link no project pins is different: anyone who writes the cache could say any bytes are what a link serves, so `get` takes from the cache only the links you downloaded yourself. your reruns and your jobs share each download, a rerun asks the server only whether the file changed, and `--offline get` works, but a link another member fetched downloads again for you, and offline it stops with `offline.missing`, exit 20. to share such a file with the lab, pin it in a project with `fetchloom add`.
 
-a lab that would rather not share a cache can share a [mirror](mirrors.md): a folder of pinned files each person's own cache copies from and checks before use. each member sets `mirrors = ["/scratch/lab/fetchloom-mirror"]` and `push_to = "/scratch/lab/fetchloom-mirror"` in their settings file; whoever synced a project fills the mirror with [`fetchloom push`](../commands/push.md), and nobody needs to write to anyone else's cache.
+a lab that would rather not share a cache can share a [mirror](mirrors.md): a folder of pinned files each person's own cache copies from and checks before use. each member sets `mirrors = ["/scratch/lab/fetchloom-mirror"]` and `push_to = "/scratch/lab/fetchloom-mirror"` in their settings file; whoever synced a project fills the mirror with [`fetchloom push`](../commands/push.md), and nobody needs to write to anyone else's cache. make the mirror's folder as the shared cache's above, owned by the lab's group with `chmod 2770`, so every member may push to it, whatever their umask.
 
 ## no internet on compute nodes
 

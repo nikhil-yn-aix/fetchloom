@@ -115,6 +115,61 @@ impl Sharing {
             self.share(&file);
         }
     }
+
+    /// makes the folders missing from `root` down to the folder `below` it, as a folder mirror a
+    /// group shares needs them, opening each without following a link and giving the group what
+    /// [`Sharing::share`] gives of each one made. nothing for a folder no group shares.
+    ///
+    /// # Errors
+    ///
+    /// a folder that could not be made or opened, or a link or a file in a folder's place.
+    #[cfg(unix)]
+    pub(crate) fn make_folders(self, root: &Path, below: &Path) -> std::io::Result<()> {
+        if !self.is_shared() {
+            return Ok(());
+        }
+        super::folder::walk(root, below, Some(self)).map(drop)
+    }
+
+    #[cfg(not(unix))]
+    #[expect(
+        clippy::unnecessary_wraps,
+        clippy::unused_self,
+        reason = "no group shares a folder there"
+    )]
+    pub(crate) fn make_folders(self, root: &Path, below: &Path) -> std::io::Result<()> {
+        let _ = (root, below);
+        Ok(())
+    }
+
+    /// how the group this sharing shares `what` with, as "the cache", may write `folder` there
+    /// again, which refused a write and lets the group no write: its owner gives the group its
+    /// write. none when no group shares it, or the group may write the folder.
+    pub(crate) fn opening(self, folder: &Path, what: &str) -> Option<String> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            let found = std::fs::symlink_metadata(folder).ok()?;
+            if !self.is_shared() || !found.is_dir() || found.mode() & 0o020 != 0 {
+                return None;
+            }
+            let shown = crate::suggested::shell_folder_path(folder);
+            Some(if found.uid() == super::run_as() {
+                format!(
+                    "the folder is yours, and a group shares {what}: give yourself and the group its write with `chmod ug+rwx {shown}`"
+                )
+            } else {
+                format!(
+                    "a group shares {what}, but only the folder's owner may write to it: they give the group its write with `chmod g+rwx {shown}`"
+                )
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (self, folder, what);
+            None
+        }
+    }
 }
 
 /// whether a group shares the cache whose root has `mode`: the root is setgid and its group may

@@ -38,7 +38,7 @@ pub(crate) use object::{Copied, NewObject, Sealed, holds_pinned, sha256_of};
 #[cfg(test)]
 pub(crate) use partial::partial_key;
 pub(crate) use partial::{Claim, Hashing, Partial, PartialWriter, SAVE_EVERY, names};
-use sharing::Sharing;
+pub(crate) use sharing::Sharing;
 pub(crate) use staging::Staging;
 pub(crate) use unpacked::{
     Member, decompressed_key, members_of, parts_key, tree, tree_hash, tree_key,
@@ -1256,29 +1256,7 @@ impl Cache {
     /// lets the group no write: its owner gives the group its write, as the clusters guide says,
     /// rather than a member leaving the group's cache.
     fn closed_to_group(&self, folder: &Path) -> Option<String> {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::MetadataExt;
-            let found = fs::symlink_metadata(folder).ok()?;
-            if !self.sharing.is_shared() || !found.is_dir() || found.mode() & 0o020 != 0 {
-                return None;
-            }
-            let shown = crate::suggested::shell_folder_path(folder);
-            Some(if found.uid() == run_as() {
-                format!(
-                    "the folder is yours, and a group shares the cache: give yourself and the group its write with `chmod ug+rwx {shown}`"
-                )
-            } else {
-                format!(
-                    "a group shares the cache, but only the folder's owner may write to it: they give the group its write with `chmod g+rwx {shown}`"
-                )
-            })
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (self, folder);
-            None
-        }
+        self.sharing.opening(folder, "the cache")
     }
 
     /// the owner of `folder`, which refused a write, when it is another user than this run's, and

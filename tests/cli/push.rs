@@ -269,6 +269,92 @@ fn an_archive_whose_list_no_reader_takes_is_pushed_whole() -> Result {
     holds_the_project(&folder)
 }
 
+/// a mirror's folder a group shares, setgid and its group may write as a lab makes it, gets from a
+/// push under the usual `umask 022` folders every member may push into and files each may read,
+/// as a cache a group shares does, and nothing every user may write. a folder there the group
+/// cannot write, as another tool or an older push left, stops a member's push naming it, its
+/// owner and the `chmod` that owner runs. a debug build told it runs as another user stands for
+/// that member, and a folder its owner may not write either for one they may not.
+#[cfg(all(unix, debug_assertions))]
+#[test]
+fn a_push_into_a_folder_a_group_shares_lets_the_group_push_there() -> Result {
+    use std::os::unix::fs::{MetadataExt, PermissionsExt};
+    if rustix::process::geteuid().is_root() {
+        return crate::support::skipped("unprivileged", "root ignores file permissions");
+    }
+    let sandbox = Sandbox::new()?;
+    let _source = project(&sandbox)?;
+    let root = sandbox.folder("lab")?.join("mirror");
+    fs::create_dir(&root)?;
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o2770))?;
+    if fs::metadata(&root)?.mode() & 0o7777 != 0o2770 {
+        return crate::support::skipped("permissions", "this disk keeps no setgid folder");
+    }
+    let push = |euid: Option<&str>| {
+        let mut command = sandbox.command(&["--json", "--yes", "push", "--to"]);
+        command.arg(&root);
+        if let Some(euid) = euid {
+            command.env("FETCHLOOM_TEST_EUID", euid);
+        }
+        command.with_umask("022").output()
+    };
+    ok(&push(None)?)?;
+    let mut wrong = Vec::new();
+    let mut folders = vec![root.clone()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(&folder)? {
+            let path = entry?.path();
+            let found = fs::symlink_metadata(&path)?;
+            let shown = format!("{:o} {}", found.mode() & 0o7777, path.display());
+            if found.mode() & 0o002 != 0 {
+                wrong.push(format!("every user may write {shown}"));
+            }
+            if found.is_dir() {
+                if found.mode() & 0o070 != 0o070 {
+                    wrong.push(format!("the group cannot push into {shown}"));
+                }
+                folders.push(path);
+            } else if found.mode() & 0o040 == 0 {
+                wrong.push(format!("the group cannot read {shown}"));
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+
+    let tmp = root.join("tmp");
+    let gone = fs::read_dir(root.join("objects"))?
+        .next()
+        .ok_or("no folder in objects")??
+        .path();
+    for entry in fs::read_dir(&gone)? {
+        fs::remove_file(entry?.path())?;
+    }
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o2550))?;
+    let member = push(Some("3999999999"));
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o2770))?;
+    let member = member?;
+    let document = json(&member)?;
+    assert_eq!(member.status.code(), Some(50), "{document}");
+    let error = &document["errors"][0];
+    let shown = tmp.display().to_string();
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&format!(
+                "permission was denied in {shown}, which belongs to "
+            ))),
+        "{error}"
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "a group shares the mirror, but only the folder's owner may write to it: they give the group its write with `chmod g+rwx {shown}`"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
 /// the dry run also lists what the push would ask about.
 #[test]
 fn a_dry_run_counts_what_it_would_write_and_writes_nothing() -> Result {

@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 #[cfg(test)]
 use super::LARGEST_TREE;
 use super::{MARKER, MARKER_LINE, Wanted, below, is_marker, largest_tree};
-use crate::cache::{Cache, Copied, Stored};
+use crate::cache::{Cache, Copied, Sharing, Stored};
 use crate::digest::{Block, Hasher, Sha256};
 use crate::place::Placer;
 use crate::stop::Stop;
@@ -586,6 +586,10 @@ pub(crate) struct Target {
     held: Option<(PathBuf, File)>,
     /// the mirror's disk gives no locks, so this push writes without one, as add and sync do.
     lockless: bool,
+    /// what the group the mirror's top folder is shared with gets of what this push makes there.
+    sharing: Sharing,
+    /// the folders below the top this push made for that group, or found there.
+    shared: std::collections::HashSet<PathBuf>,
 }
 
 impl Target {
@@ -602,15 +606,20 @@ impl Target {
             id: push_id(),
             held: None,
             lockless: false,
+            sharing: Sharing::default(),
+            shared: std::collections::HashSet::new(),
         };
+        if state != State::Mirror {
+            match fs::create_dir(root) {
+                Err(err) if err.kind() != io::ErrorKind::AlreadyExists => {
+                    return Err(Refused::Failed(err));
+                }
+                _ => {}
+            }
+        }
+        target.sharing = Sharing::of(root);
         if state == State::Mirror {
             return Ok((target, false));
-        }
-        match fs::create_dir(root) {
-            Err(err) if err.kind() != io::ErrorKind::AlreadyExists => {
-                return Err(Refused::Failed(err));
-            }
-            _ => {}
         }
         let started = target.start().map_err(Refused::Failed)?;
         Ok((target, started))
@@ -623,6 +632,7 @@ impl Target {
     /// writes the marker, unless another push wrote it first, and puts it on the disk, its name
     /// too, before any file is pushed. says whether this one wrote it.
     fn start(&mut self) -> io::Result<bool> {
+        self.make_shared(Path::new(TMP));
         self.placer
             .check_folders(&self.root.join(TMP).join(MARKER), true)?;
         let line = format!("{MARKER_LINE}\n");
@@ -661,17 +671,50 @@ impl Target {
         let shards = (0..16)
             .filter(|_| self.sharded)
             .map(|shard| self.root.join(TMP).join(format!("{shard:x}")).join(MARKER));
-        let names = std::iter::once(tmp).chain(shards).chain(
-            items
-                .iter()
-                .map(|item| place(&self.root, item.folder, &item.digest)),
-        );
+        let names: Vec<PathBuf> = std::iter::once(tmp)
+            .chain(shards)
+            .chain(
+                items
+                    .iter()
+                    .map(|item| place(&self.root, item.folder, &item.digest)),
+            )
+            .collect();
+        let root = self.root.clone();
         for name in names {
+            if let Some(below) = name
+                .parent()
+                .and_then(|folder| folder.strip_prefix(&root).ok())
+            {
+                self.make_shared(below);
+            }
             if let Err(err) = self.placer.check_folders(&name, true) {
-                return Err(no_folder(&self.root, &name, err));
+                let refused = name
+                    .ancestors()
+                    .skip(1)
+                    .find(|folder| folder.is_dir())
+                    .unwrap_or(&self.root);
+                return Err(denied_in(
+                    refused,
+                    self.sharing,
+                    no_folder(&self.root, &name, err),
+                ));
             }
         }
         self.hold()
+            .map_err(|err| denied_in(&self.root.join(TMP), self.sharing, err))
+    }
+
+    /// makes the folder `below` the mirror's top, and those above it, where missing, giving the
+    /// group the top is shared with what the push's own user has of each, whatever the umask, as
+    /// a cache a group shares gets, so every member may push there. a folder this fails to make is
+    /// left to the placer's own look, which says what is wrong with it.
+    fn make_shared(&mut self, below: &Path) {
+        if !self.sharing.is_shared() || !self.shared.insert(below.to_path_buf()) {
+            return;
+        }
+        if let Err(err) = self.sharing.make_folders(&self.root, below) {
+            tracing::debug!(%err, "could not make a folder of the mirror for its group");
+        }
     }
 
     /// locks a file in `tmp/` named for this push, for as long as it writes, so a later push can
@@ -686,6 +729,7 @@ impl Target {
             let lock = self.root.join(TMP).join(format!(".{}{LOCK}", self.id));
             match self.placer.create_file(&lock, false) {
                 Ok(file) => {
+                    self.sharing.share(&file);
                     // a push that sweeps may hold it a moment to see whether it is free
                     match crate::volume::lock(&file) {
                         Ok(()) => self.held = Some((lock, file)),
@@ -742,7 +786,10 @@ impl Target {
             Ok(()) if aside.is_some() => Ok(Put::Replaced),
             Ok(()) => Ok(Put::Copied),
             Err(_) if taken && holds(&name, item.size) => Ok(Put::Present),
-            Err(err) => Err(Fault::Mirror(err)),
+            Err(err) => Err(Fault::Mirror(match name.parent() {
+                Some(folder) => denied_in(folder, self.sharing, err),
+                None => err,
+            })),
         }
     }
 
@@ -993,6 +1040,7 @@ impl Target {
             let path = folder.join(format!(".{}-{:016x}.part", self.id, fastrand::u64(..)));
             match self.placer.create_file(&path, true) {
                 Ok(file) => {
+                    self.sharing.share(&file);
                     return Ok(Temporary {
                         target: self,
                         path,
@@ -1001,10 +1049,37 @@ impl Target {
                     });
                 }
                 Err(err) if err.kind() == io::ErrorKind::AlreadyExists => {}
-                Err(err) => return Err(err),
+                Err(err) => return Err(denied_in(&folder, self.sharing, err)),
             }
         }
     }
+}
+
+/// `err`, a write the mirror's folder `folder` refused, in words that name the folder and, when
+/// another user owns it, who, with how its owner lets the group write it in a mirror a group
+/// shares. any other error stays as it is.
+fn denied_in(folder: &Path, sharing: Sharing, err: io::Error) -> io::Error {
+    if err.kind() != io::ErrorKind::PermissionDenied || err.raw_os_error().is_none() {
+        return err;
+    }
+    let words = format!("{} in {}", crate::error::said(&err), folder.display());
+    #[cfg(unix)]
+    let words =
+        match crate::cache::owner_of(folder).filter(|owner| *owner != crate::cache::run_as()) {
+            Some(owner) => format!(
+                "{words}, which belongs to {}",
+                crate::cache::said_user(owner)
+            ),
+            None => words,
+        };
+    io::Error::new(
+        err.kind(),
+        crate::error::Explained {
+            words,
+            help: sharing.opening(folder, "the mirror"),
+            cause: err,
+        },
+    )
 }
 
 /// a file a push is writing in the mirror's `tmp/`. dropped before it takes its name, it goes.
