@@ -858,8 +858,13 @@ fn level(set: Set<crate::settings::Level>) -> Shown {
 /// it, its origin and variable on a line of their own, so the other rows keep their columns.
 const VALUE: usize = 24;
 
+/// the narrowest the value column gets so the variables still fit beside it, as at 80 columns;
+/// past this a terminal leaves the variables out.
+const VALUE_LEAST: usize = 12;
+
 /// the settings in aligned columns, a line each, for a person or `grep`. a terminal `width` shows
-/// the cache from `~`, breaks after a long value, and when narrow drops variables, then origins.
+/// the cache from `~`, breaks after a long value, and when narrow gives the value column less room
+/// first, then drops variables, then origins.
 fn table(shown: &[Shown], width: Option<usize>) -> String {
     let rows: Vec<[String; 4]> = shown
         .iter()
@@ -901,9 +906,20 @@ fn table(shown: &[Shown], width: Option<usize>) -> String {
             .max()
             .unwrap_or_default()
     };
+    // the variables keep their column while the values can take less room, a longer one running
+    // past its column as a deep cache folder does
+    let beside = widest(0, usize::MAX) + 2 + widest(2, usize::MAX) + 2 + widest(3, usize::MAX);
+    let most = width.map_or(VALUE, |width| {
+        let room = width.saturating_sub(beside + 2);
+        if room >= VALUE_LEAST {
+            room.min(VALUE)
+        } else {
+            VALUE
+        }
+    });
     let widths = [
         widest(0, usize::MAX),
-        widest(1, VALUE),
+        widest(1, most),
         widest(2, usize::MAX),
     ];
     let full = widths.iter().map(|width| width + 2).sum::<usize>() + widest(3, usize::MAX);
@@ -1075,6 +1091,51 @@ mod tests {
         assert!(
             told.lines().all(|line| units::columns(line) <= 40),
             "{told}"
+        );
+    }
+
+    /// at 80 columns, where every setting's variable once went missing, the value column gives
+    /// up room first: a value too wide for it runs past, its origin and variable under it.
+    #[test]
+    fn an_eighty_column_terminal_keeps_every_variable() {
+        let row = |name: &'static str, said: &str, variable: &'static str, only: bool| Shown {
+            name,
+            value: json!(said),
+            origin: vec![Origin::Default],
+            variable,
+            said: said.to_owned(),
+            only_variable: only,
+        };
+        let shown = [
+            row("resources", "default", "FETCHLOOM_RESOURCES", false),
+            row("cache", "~/.cache/fetchloom", "FETCHLOOM_CACHE", false),
+            row(
+                "azure_containers",
+                "none",
+                "FETCHLOOM_AZURE_CONTAINERS",
+                false,
+            ),
+            row("split", "when one stream is slow", "FETCHLOOM_SPLIT", true),
+        ];
+        let told = table(&shown, Some(80));
+        assert_eq!(
+            told,
+            format!(
+                "resources         default             default        FETCHLOOM_RESOURCES\n\
+                 cache             ~/.cache/fetchloom  default        FETCHLOOM_CACHE\n\
+                 azure_containers  none                default        FETCHLOOM_AZURE_CONTAINERS\n\
+                 split             when one stream is slow\n\
+                 {:38}variable only  FETCHLOOM_SPLIT",
+                ""
+            )
+        );
+        assert!(
+            told.lines().all(|line| units::columns(line) <= 80),
+            "{told}"
+        );
+        assert!(
+            !table(&shown, Some(72)).contains("FETCHLOOM_"),
+            "a value column narrower than its least gives way to the variables"
         );
     }
 
