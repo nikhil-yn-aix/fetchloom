@@ -3357,6 +3357,42 @@ fn an_outputs_line_ends_git_converted_are_told_with_their_fix() -> Result {
     Ok(())
 }
 
+/// a file of an output's folder that git tracks as a link, as a clone can hold one to a fifo, a
+/// terminal or any file of the person's, is never opened to look at its line ends: it is no file
+/// that differs from its pin only in those, whatever the file it names holds.
+#[cfg(unix)]
+#[test]
+fn a_tracked_link_in_an_outputs_folder_is_never_read_for_its_line_ends() -> Result {
+    let sandbox = Sandbox::new()?;
+    if crate::merge::ok(&sandbox, &["init", "-q"])?.is_none() {
+        return Ok(());
+    }
+    let work = sandbox.work();
+    let author = sandbox.folder("author")?;
+    fs::create_dir_all(author.join("results"))?;
+    fs::write(author.join("results/a.csv"), b"a,b\n1,2\n")?;
+    ok(&sandbox
+        .command_in(&author, &["add", "results", "--as", "results"])
+        .output()?)?;
+    for file in ["data.toml", "data.lock"] {
+        fs::copy(author.join(file), work.join(file))?;
+    }
+    // the pinned bytes with CRLF, which a read through the link would take for git's checkout
+    let named = sandbox.folder("outside")?.join("a.csv");
+    fs::write(&named, b"a,b\r\n1,2\r\n")?;
+    fs::create_dir_all(work.join("results"))?;
+    std::os::unix::fs::symlink(&named, work.join("results/a.csv"))?;
+    crate::merge::ok(&sandbox, &["add", "results"])?;
+    crate::merge::ok(&sandbox, &["commit", "-qm", "results"])?;
+    let output = sandbox.run(&["status"])?;
+    let said = format!("{}{}", text(&output.stdout)?, text(&output.stderr)?);
+    assert_eq!(output.status.code(), Some(0), "{said}");
+    assert!(said.contains("results"), "{said}");
+    assert!(!said.contains("line ends"), "{said}");
+    assert_eq!(fs::read_link(work.join("results/a.csv"))?, named);
+    Ok(())
+}
+
 /// the line-ends check reads the blobs git keeps for its files with one git run, as `-vv` tells,
 /// tells each file and the one checkout that writes them all, and runs nothing the repository's own
 /// config names.

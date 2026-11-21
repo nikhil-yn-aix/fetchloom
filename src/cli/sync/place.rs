@@ -3960,19 +3960,27 @@ pub(crate) fn git_tracked(root: &Path, at: &str, paths: &[&str]) -> Vec<String> 
 
 /// those of `files`, each at its path in the project with the SHA-256 and size its pin holds, that
 /// differ from the pin only in their line ends, as git converts a whole file, by the kind they hold
-/// where the pin holds the other: none when none does. it hashes only a file whose size and line
-/// ends fit, as [`crate::digest::with_line_ends_made`] counts them, and for those holding CRLF
+/// where the pin holds the other: none when none does. it hashes only a plain file whose size and
+/// line ends fit, as [`crate::digest::with_line_ends_made`] counts them, never following a link
+/// git tracks there, as a clone can hold one to a fifo or any file, and for those holding CRLF
 /// reads what git's index and its last commit hold, so the commands that write a file fresh from
 /// that commit are offered only where they write the pin.
 pub(crate) fn line_ends(root: &Path, files: &[(&str, Sha256, u64)]) -> Option<LineEnds> {
     let mut ends = LineEnds::default();
     let mut crlf = Vec::new();
     for (path, sha256, size) in files {
-        let made = fs::File::open(native(root, path)).ok().and_then(|file| {
-            let held = file.metadata().ok()?.len();
-            let made = crate::digest::with_line_ends_made(file, held, *size).ok()??;
-            (made == *sha256).then_some(held > *size)
-        });
+        let made = crate::volume::read_unfollowed(&native(root, path))
+            .ok()
+            .and_then(|file| {
+                let held = file.metadata().ok()?.len();
+                // each line end made the other kind takes a byte off or adds one, so a file over
+                // twice its pin's size, or under half of it, is no such file and is not read
+                if held.abs_diff(*size) > held.min(*size) {
+                    return None;
+                }
+                let made = crate::digest::with_line_ends_made(file, held, *size).ok()??;
+                (made == *sha256).then_some(held > *size)
+            });
         match made {
             Some(true) => crlf.push((*path, *sha256, *size)),
             Some(false) => ends.lf.push((*path).to_owned()),
