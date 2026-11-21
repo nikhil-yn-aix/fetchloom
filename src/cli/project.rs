@@ -2059,6 +2059,7 @@ pub(super) async fn hold_until<T>(
                 told = true;
                 told_owner = true;
             }
+            Hold::Unchecked { who, path } => return Err(unchecked(&who, &path)),
             Hold::Busy(_) | Hold::Owner(_) => {}
         }
         tokio::select! {
@@ -2066,6 +2067,21 @@ pub(super) async fn hold_until<T>(
             () = context.stop.asked() => return Err(Error::new(Kind::Interrupted, "stopped while waiting for another fetchloom")),
         }
     }
+}
+
+/// the error for a project another system's fetchloom, `who`, may hold from a machine this one
+/// cannot check, by the record at `path`, which waiting would not end if it is gone.
+fn unchecked(who: &str, path: &std::path::Path) -> Error {
+    Error::new(
+        Kind::ProjectInvalid,
+        format!(
+            "{who} may be working in this project from another system, which this machine cannot check, so this command did not wait for it"
+        ),
+    )
+    .help(format!(
+        "if no fetchloom runs in this project there, as when the project was copied from that system, delete {}, then run the command again",
+        path.display()
+    ))
 }
 
 /// refuses a name data.toml does not have, suggesting the closest as `command` would take it, as
@@ -2181,23 +2197,14 @@ pub(crate) mod tests {
         }
     }
 
-    pub(crate) fn waiting_project() -> (tempfile::TempDir, Project, Context) {
+    /// a project another fetchloom holds for a sync, as the hold given, which dropping lets go.
+    pub(crate) fn waiting_project() -> (tempfile::TempDir, Project, Context, Held) {
         let dir = tempfile::tempdir().unwrap();
         let project = Project::at(dir.path().to_path_buf());
         std::fs::create_dir(project.own_folder()).unwrap();
-        let os = if cfg!(windows) { "linux" } else { "windows" };
-        let owner = serde_json::json!({
-            "os": os,
-            "pid": 42,
-            "started": "2026-10-30T12:00:00Z",
-            "command": "sync",
-            "folder": crate::project::state::Folder::of_on(&project.root, os),
-        });
-        std::fs::write(
-            project.own_folder().join("owner"),
-            serde_json::to_vec(&owner).unwrap(),
-        )
-        .unwrap();
+        let Hold::Held(held) = project.hold("sync").unwrap() else {
+            panic!("nothing else holds a new project")
+        };
         let style = Style {
             color: false,
             unicode: false,
@@ -2207,12 +2214,12 @@ pub(crate) mod tests {
             accessible: false,
         };
         let context = Context::new(Output::new(style, Level::Quiet, false, false));
-        (dir, project, context)
+        (dir, project, context, held)
     }
 
     #[test]
     fn an_owner_wait_stops_on_ctrl_c() {
-        let (_dir, project, context) = waiting_project();
+        let (_dir, project, context, _held) = waiting_project();
         let path = project.own_folder().join("owner");
         let before = std::fs::read(&path).unwrap();
         block_on(async {
@@ -2242,8 +2249,8 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn an_owner_wait_resumes_when_the_record_is_removed() {
-        let (_dir, project, context) = waiting_project();
+    fn an_owner_wait_resumes_once_the_other_lets_go() {
+        let (_dir, project, context, other) = waiting_project();
         let path = project.own_folder().join("owner");
         block_on(async {
             let mut waiting = Box::pin(hold(&context, &project, "remove"));
@@ -2252,7 +2259,7 @@ pub(crate) mod tests {
                 std::task::Poll::Ready(())
             })
             .await;
-            std::fs::remove_file(&path).unwrap();
+            drop(other);
             let held = tokio::time::timeout(Duration::from_secs(2), &mut waiting)
                 .await
                 .unwrap()

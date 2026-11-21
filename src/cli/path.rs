@@ -683,7 +683,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn path_waiters_recheck_changed_state_without_claiming_the_owner() {
-        let (dir, project, context) = waiting_project();
+        let (dir, project, context, _other) = waiting_project();
         let owner = project.own_folder().join("owner");
         let owner_before = std::fs::read(&owner).unwrap();
         let stamp = std::time::UNIX_EPOCH + Duration::from_secs(1_600_000_000);

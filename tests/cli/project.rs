@@ -1272,6 +1272,52 @@ fn an_owner_record_no_fetchloom_writes_is_removed_with_a_warning() -> Result {
     Ok(())
 }
 
+/// a record another system wrote, as a project copied from windows to a linux disk carries, for a
+/// folder this system cannot match with its own, holds the project for no process this machine
+/// runs or can check, so a command stops at once rather than wait for ever, says what to do, and
+/// leaves the record for a person to judge.
+#[test]
+fn another_systems_owner_record_for_an_unmatched_folder_stops_at_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let owner = sandbox.work().join(".fetchloom").join("owner");
+    let (os, folder) = if cfg!(windows) {
+        ("linux", "/home/ada/cc")
+    } else {
+        ("windows", r"C:\Users\ada\cc")
+    };
+    let record = serde_json::json!({
+        "os": os,
+        "pid": 4242,
+        "started": "2026-11-19T02:00:00Z",
+        "command": "sync",
+        "folder": { "inode": 1, "os": os, "path": folder },
+    })
+    .to_string();
+    fs::write(&owner, &record)?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(50), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "project.invalid", "{document}");
+    assert_eq!(
+        error["message"],
+        format!(
+            "`fetchloom sync` ({os}, pid 4242, started 2026-11-19T02:00:00Z) may be working in this project from another system, which this machine cannot check, so this command did not wait for it"
+        )
+    );
+    assert_eq!(
+        error["help"],
+        format!(
+            "if no fetchloom runs in this project there, as when the project was copied from that system, delete {}, then run `fetchloom --json sync` again",
+            owner.display()
+        )
+    );
+    assert_eq!(fs::read_to_string(&owner)?, record);
+    Ok(())
+}
+
 /// a project begun outside git, by an add or by a sync of a hand-written data.toml, keeps each
 /// dataset's folder out of git from its start, so a `git init` and `git add -A` right after it
 /// commit no data file, and no .gitignore beside data.toml is written. the line that says so

@@ -85,6 +85,13 @@ pub(crate) enum Hold {
     Busy(Option<String>),
     /// the owner record blocks this command; tell the user who holds it and how to recover.
     Owner(String),
+    /// another system's owner record, naming `who`, holds the project at `path`, for a folder this
+    /// system cannot match with its own: no process on this machine holds it, and one elsewhere,
+    /// as across a network share, this machine cannot check, so a wait might never end.
+    Unchecked {
+        who: String,
+        path: PathBuf,
+    },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -226,13 +233,16 @@ impl Held {
             }
             // a record written for another folder, as a clone or a copy carries, or naming none, as
             // one written by hand, does neither
-            let elsewhere = owner.as_ref().is_some_and(|owner| {
-                let written = owner
+            let written = |owner: &Owner, untold: Untold| {
+                let folder = owner
                     .folder
                     .as_ref()
                     .map(|folder| folder.read_on(&owner.os));
-                !Folder::written_here(written.as_ref(), self.here.as_ref(), Untold::Here)
-            });
+                Folder::written_here(folder.as_ref(), self.here.as_ref(), untold)
+            };
+            let elsewhere = owner
+                .as_ref()
+                .is_some_and(|owner| !written(owner, Untold::Here));
             if elsewhere {
                 remove_stale_owner(path, &bytes, modified)?;
                 self.removed = Some(path.to_path_buf());
@@ -246,6 +256,9 @@ impl Held {
                 remove_stale_owner(path, &bytes, modified)?;
                 continue;
             }
+            let unchecked = owner.as_ref().is_some_and(|owner| {
+                owner.os != std::env::consts::OS && !written(owner, Untold::Elsewhere)
+            });
             let who = owner.map_or_else(
                 || "another fetchloom".to_owned(),
                 |owner| {
@@ -255,6 +268,12 @@ impl Held {
                     )
                 },
             );
+            if unchecked {
+                return Ok(Hold::Unchecked {
+                    who,
+                    path: path.to_path_buf(),
+                });
+            }
             return Ok(Hold::Owner(format!(
                 "for {who} working in this project; if that process is gone, delete {}",
                 path.display()
@@ -2316,7 +2335,7 @@ mod tests {
             .unwrap();
             if holds {
                 assert!(
-                    matches!(claimed, Hold::Owner(_)),
+                    matches!(claimed, Hold::Owner(_) | Hold::Unchecked { .. }),
                     "a record wsl wrote for this folder was removed: {written}"
                 );
                 assert_eq!(fs::read(&path).unwrap(), record, "{written}");
@@ -2329,28 +2348,69 @@ mod tests {
         }
     }
 
+    /// another system's record of this folder, by the path a windows drive gives windows and wsl
+    /// alike, may be a process on this machine, so a command waits for it, naming the record;
+    /// one whose folder this system cannot match with its own, as a project copied from windows
+    /// to a linux disk carries, no process on this machine holds, and this machine cannot check
+    /// one elsewhere, so the command stops at once, and the record stays.
     #[test]
-    fn another_os_owner_waits() {
+    fn another_systems_owner_waits_only_for_a_folder_both_systems_name() {
         let (_dir, project) = project(&[(".fetchloom/owner", "")]);
         let path = project.own_folder().join("owner");
-        let os = if cfg!(windows) { "linux" } else { "windows" };
-        let record = owner_record(os, &project);
-        fs::write(&path, &record).unwrap();
-        let modified = fs::metadata(&path).unwrap().modified().unwrap();
-        let now = modified + Duration::from_hours(24);
-        let Hold::Owner(message) = project.hold_at("remove", now).unwrap() else {
-            panic!("another os owns the project")
+        let (os, other) = if cfg!(windows) {
+            ("windows", "linux")
+        } else {
+            ("linux", "windows")
         };
-        assert_eq!(
-            message,
-            format!(
-                "for `fetchloom sync` ({os}, pid 42, started 2026-10-30T12:00:00Z) working in this project; if that process is gone, delete {}",
-                path.display()
-            )
-        );
-        assert_eq!(fs::read(&path).unwrap(), record);
-        fs::remove_file(&path).unwrap();
-        assert!(!path.exists());
+        let folder = |os: &str, path: &str| -> Folder {
+            serde_json::from_value(serde_json::json!({ "os": os, "path": path, "inode": 7 }))
+                .unwrap()
+        };
+        let named = |os: &str, path: &str| {
+            if os == "windows" {
+                format!(r"C:\Users\ada\{path}")
+            } else {
+                format!("/mnt/c/Users/ada/{path}")
+            }
+        };
+        for (here, waits) in [
+            (folder(os, &named(os, "cc")), true),
+            (folder(os, "/datadisk/ada/cc"), false),
+        ] {
+            let record = serde_json::to_vec(&serde_json::json!({
+                "os": other,
+                "pid": 4242,
+                "started": "2026-11-19T02:00:00Z",
+                "command": "sync",
+                "folder": folder(other, &named(other, "cc")),
+            }))
+            .unwrap();
+            fs::write(&path, &record).unwrap();
+            let held = Held {
+                lock: None,
+                owner: None,
+                removed: None,
+                here: Some(here.clone()),
+            };
+            let who = format!("`fetchloom sync` ({other}, pid 4242, started 2026-11-19T02:00:00Z)");
+            match held.claim(&path, "remove", SystemTime::now()).unwrap() {
+                Hold::Owner(message) if waits => assert_eq!(
+                    message,
+                    format!(
+                        "for {who} working in this project; if that process is gone, delete {}",
+                        path.display()
+                    )
+                ),
+                Hold::Unchecked {
+                    who: named,
+                    path: at,
+                } if !waits => {
+                    assert_eq!((named, at), (who, path.clone()));
+                }
+                _ => panic!("{here:?} waits: {waits}"),
+            }
+            assert_eq!(fs::read(&path).unwrap(), record);
+        }
     }
 
     /// an owner record this system wrote for another folder, as a clone or a copy of a project
@@ -2400,7 +2460,10 @@ mod tests {
         let here = serde_json::to_value(Folder::of_on(&project.root, other)).unwrap();
         fs::write(&path, record(other, Some(here))).unwrap();
         assert!(
-            matches!(project.hold("remove").unwrap(), Hold::Owner(_)),
+            matches!(
+                project.hold("remove").unwrap(),
+                Hold::Owner(_) | Hold::Unchecked { .. }
+            ),
             "one written for this folder by another system holds it"
         );
     }
