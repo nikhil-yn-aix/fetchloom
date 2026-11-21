@@ -186,11 +186,14 @@ pub(super) fn accepts_ranges(headers: &HeaderMap) -> bool {
         .any(|unit| unit.trim().eq_ignore_ascii_case("bytes"))
 }
 
-/// the size of the whole file, from a range answer or from the length of a full one.
+/// the size of the whole file, from a range answer or from the length of a full one. a chunked
+/// answer ends where its chunks do, whatever length it also states, as RFC 9112 section 6.3 says.
 pub(super) fn total_length(headers: &HeaderMap, status: StatusCode) -> Option<u64> {
     if status == StatusCode::PARTIAL_CONTENT {
         let value = headers.get(header::CONTENT_RANGE)?.to_str().ok()?;
         value.rsplit_once('/')?.1.trim().parse().ok()
+    } else if headers.contains_key(header::TRANSFER_ENCODING) {
+        None
     } else {
         headers
             .get(header::CONTENT_LENGTH)?

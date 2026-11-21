@@ -2587,6 +2587,23 @@ fn a_body_of_unstated_length_cut_before_the_pinned_size_resumes() {
     assert!(heads[1].contains("range: bytes=4-"), "{heads:?}");
 }
 
+/// a chunked answer that also states a length is framed by its chunks, as RFC 9112 section 6.3
+/// says and the http client reads it, so that length says nothing of the file.
+#[test]
+fn a_chunked_answer_is_judged_by_its_chunks_not_its_stated_length() {
+    let answer = "HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n8\r\naaaabbbb\r\n0\r\n\r\n";
+    let (url, asked) = serve(vec![answer.as_bytes().to_vec()]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let fetched =
+        block_on(net(&url).download(&Fetch::new(url.clone()), &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(
+        fs::read(cache.object_path(&fetched.digest)).unwrap(),
+        b"aaaabbbb"
+    );
+    assert_eq!(asked.lock().unwrap().len(), 1);
+}
+
 #[test]
 fn malformed_tags_do_not_enable_range_splitting() {
     let url = Url::parse("https://example.org/file").unwrap();
