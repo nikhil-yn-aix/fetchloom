@@ -351,10 +351,11 @@ impl Project {
         None
     }
 
-    /// whether the project is an R package: its DESCRIPTION file names one.
+    /// whether the project is an R package: its DESCRIPTION file names one. one that is a link or
+    /// a special file, as a clone can hold to a fifo or a terminal a read would wait on, makes none.
     pub(crate) fn is_r_package(&self) -> bool {
         let mut text = Vec::new();
-        File::open(self.root.join("DESCRIPTION"))
+        crate::volume::read_unfollowed(&self.root.join("DESCRIPTION"))
             .and_then(|file| file.take(DESCRIPTION_READ).read_to_end(&mut text))
             .is_ok()
             && String::from_utf8_lossy(&text)
@@ -3126,6 +3127,19 @@ mod tests {
                 format!("{} is a folder, not a file", path.display())
             );
         }
+    }
+
+    /// a DESCRIPTION that is a link, as a clone can hold to a fifo or a terminal a read would wait
+    /// on, makes no R package, whatever the file it names says: it is never read.
+    #[cfg(unix)]
+    #[test]
+    fn a_linked_description_makes_no_r_package() {
+        let (dir, project) = project(&[("DESCRIPTION", "Package: irisdata\nVersion: 0.1.0\n")]);
+        assert!(project.is_r_package());
+        let named = dir.path().join("named");
+        fs::rename(project.root.join("DESCRIPTION"), &named).unwrap();
+        std::os::unix::fs::symlink(&named, project.root.join("DESCRIPTION")).unwrap();
+        assert!(!project.is_r_package());
     }
 
     #[test]

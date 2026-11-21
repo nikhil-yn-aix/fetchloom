@@ -159,7 +159,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.unportable` | files have names windows and fat disks cannot store |
 | `project.not_restored` | a stopped add could not put data.toml and data.lock back as they were |
 | `project.owner_removed` | `.fetchloom/owner` held something no fetchloom wrote, as a cloned project can, so taking the project removed it and the command went on; the message names the file |
-| `project.r_package` | the add that starts a project found a DESCRIPTION file naming an R package, whose data/ holds the datasets R loads and R CMD check refuses other files in; said once, and `help` names `data_dir = "data-raw"` |
+| `project.r_package` | the add that starts a project found a DESCRIPTION file, a plain one rather than a link, naming an R package, whose data/ holds the datasets R loads and R CMD check refuses other files in; said once, and `help` names `data_dir = "data-raw"` |
 | `push.left_out` | a push of every dataset leaves out one `add --no-sync` pinned by what its source states, which only a sync downloads; `details` names each |
 | `search.partial` | a search site did not answer in time, or its search failed; for a site that did not answer, `help` names the command that searches it alone |
 | `settings.broken` | `settings set` or `settings unset` changed a settings file that still holds a problem runs stop at, such as a key that is no setting, which stops every run, or a cache folder runs refuse, which stops every run that opens the cache; the change did not bring it, and a change that brings a problem of its own is refused |
