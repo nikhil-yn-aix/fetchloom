@@ -116,6 +116,50 @@ fn a_checksum_list_at_a_link_pins_every_file_it_lists() -> Result {
     Ok(())
 }
 
+/// files a list states one SHA-256 for share their bytes, which the add downloads once: its dry
+/// run counts that one download, as get's does, and the add places every file.
+#[test]
+fn files_a_list_gives_one_sha256_are_one_download() -> Result {
+    let sandbox = Sandbox::new()?;
+    let sums = format!("{}  copy/iris.csv\n{}", sha256_hex(IRIS), gnu());
+    let copy = String::from_utf8(IRIS.to_vec())?;
+    let server = served(&[("SHA256SUMS", sums), ("copy/iris.csv", copy)])?;
+    let list = format!("{}/data/SHA256SUMS", server.url);
+    let got = json(&sandbox.run(&["--json", "get", &list, "--dry-run"])?)?;
+    let changes = &got["result"]["changes"];
+    assert_eq!(changes["to_download"]["files"], 2, "{got}");
+    assert_eq!(
+        changes["download"].as_array().map(Vec::len),
+        Some(2),
+        "{got}"
+    );
+    let dry = json(&sandbox.run(&["--json", "add", &list, "--dry-run"])?)?;
+    let changes = &dry["result"]["changes"];
+    assert_eq!(changes["to_download"]["files"], 2, "{dry}");
+    // a SHA256SUMS states no sizes
+    assert_eq!(changes["to_download"]["sizes_unknown"], 2, "{dry}");
+    assert_eq!(
+        changes["download"].as_array().map(Vec::len),
+        Some(2),
+        "{dry}"
+    );
+    let told = text(&sandbox.run(&["add", &list, "--dry-run"])?.stderr)?;
+    assert_eq!(told.matches("Would fetch").count(), 2, "{told}");
+    let added = sandbox.run(&["add", &list])?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("Downloaded 2 files"), "{stderr}");
+    let folder = sandbox.work().join("data/data");
+    for (path, bytes) in [
+        ("copy/iris.csv", IRIS),
+        ("iris.csv", IRIS),
+        ("sub/tips.csv", TIPS),
+    ] {
+        assert_eq!(fs::read(folder.join(path))?, bytes, "{path}");
+    }
+    Ok(())
+}
+
 /// an MD5SUMS line checks the first download: other bytes are refused, naming the file, and the
 /// project stays as it was.
 #[test]

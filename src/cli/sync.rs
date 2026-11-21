@@ -1344,6 +1344,7 @@ impl<'a> Loop<'a> {
         self.refuse_unreachable(manifest, &[])?;
         self.refuse_unmirrored(jobs.iter().filter(|job| !gettable(job)))?;
         self.refuse_unasked(jobs.iter().map(|job| &job.fetch.from))?;
+        fetch::once_each(&mut jobs);
         // the run itself would ask before downloads the cache's disk may lack room for
         if !self.net.offline().enabled() {
             let needed = jobs

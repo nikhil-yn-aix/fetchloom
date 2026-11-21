@@ -193,7 +193,7 @@ for `add`, `remove`, `exclude` and `sync`, `lock_changed` says whether `data.loc
 | `place` | files that would be placed where nothing is |
 | `replace` | files that would be overwritten, also counted in `placement.replaced` |
 | `remove` | managed files no dataset needs that would be deleted |
-| `download` | files that would be downloaded first, as `{path, size}` with `path` as `<dataset>/<file>` and `size` in bytes, or null when only the download can tell |
+| `download` | files that would be downloaded first, as `{path, size}` with `path` as `<dataset>/<file>` and `size` in bytes, or null when only the download can tell. files their source states one SHA-256 for are one download, named by the first of them |
 | `unpack` | archives, as `<dataset>/<file>`, that would be unpacked first; their members are not in `place` or the counts |
 
 a run that plans downloads adds `to_download` to `changes`, those downloads added up, a [download total](#download-totals).

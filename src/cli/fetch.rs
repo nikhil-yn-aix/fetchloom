@@ -7,7 +7,7 @@ pub(super) mod data_folder;
 pub(super) mod mirrors;
 pub(super) mod reuse;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
@@ -1473,6 +1473,18 @@ pub(super) fn limits(context: &Context) -> estimate::Limits {
         host_jobs: context.settings.host_jobs.value,
         rate: context.settings.rate.value,
     }
+}
+
+/// keeps one of the `jobs` that expect the same SHA-256, as a run downloads such bytes once and
+/// takes them from the cache for the rest, so a plan counts what the run downloads.
+pub(super) fn once_each(jobs: &mut Vec<Job>) {
+    let mut digests = HashSet::new();
+    jobs.retain(|job| {
+        job.fetch
+            .expect
+            .sha256
+            .is_none_or(|digest| digests.insert(digest))
+    });
 }
 
 /// the host a job's requests start at, as its downloads are queued and its speed remembered.

@@ -2,6 +2,7 @@
 //! listings and the cache, writing nothing, not even the cache folder. an unstated size, or an
 //! archive never unpacked here, stays unknown, and offline it fails where the get would download.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -31,6 +32,9 @@ struct Planned {
     download: Vec<Download>,
     /// the host each of those downloads starts at, with its size, in the same order.
     hosts: Vec<(String, crate::net::estimate::Size)>,
+    /// the SHA-256 each of those expects, where its source states one: files that share bytes
+    /// download once.
+    downloading: HashSet<Sha256>,
     /// files whose bytes the cache holds from the last get, whose server is asked whether they
     /// changed.
     check: Vec<String>,
@@ -136,6 +140,7 @@ fn plan(
             place: path.clone(),
             download: Vec::new(),
             hosts: Vec::new(),
+            downloading: HashSet::new(),
             check: Vec::new(),
             unpack: Vec::new(),
             decompress: Vec::new(),
@@ -175,6 +180,7 @@ fn plan(
         place,
         download: Vec::new(),
         hosts: Vec::new(),
+        downloading: HashSet::new(),
         check: Vec::new(),
         unpack: Vec::new(),
         decompress: Vec::new(),
@@ -236,6 +242,11 @@ fn fetching(
             context.offline,
             pinned,
         ));
+    }
+    if let Some(digest) = job.fetch.expect.sha256
+        && !planned.downloading.insert(digest)
+    {
+        return Ok(());
     }
     planned.download.push(Download {
         path: job.label.clone(),
