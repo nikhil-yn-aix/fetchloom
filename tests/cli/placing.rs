@@ -1428,6 +1428,40 @@ fn status_points_to_sync_verify_for_changes_only_hashing_finds() -> Result {
     Ok(())
 }
 
+/// an edit through a link that kept its size, time and mode changed the cache's copy with it, so
+/// `status --verify` counts the download `sync --verify` makes to put it back.
+#[test]
+fn status_verify_counts_the_download_a_changed_link_needs() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![file(V1, "\"v1\""), file(V1, "\"v1\"")],
+    )?;
+    let Some(other) = shared_and_edited(&sandbox, &server)? else {
+        return Ok(());
+    };
+    keep_time(&sandbox.work())?;
+    let edited = sandbox.work().join("data").join("iris").join("iris.csv");
+    let mut permissions = fs::metadata(&edited)?.permissions();
+    permissions.set_readonly(true);
+    fs::set_permissions(&edited, permissions)?;
+
+    let status = sandbox
+        .command_in(&other, &["--json", "status", "--verify"])
+        .output()?;
+    let report: serde_json::Value = serde_json::from_slice(&status.stdout)?;
+    assert_eq!(
+        report["result"]["damaged"],
+        serde_json::json!(["data/iris/iris.csv"]),
+        "{report}"
+    );
+    assert_eq!(report["result"]["to_download"]["files"], 1, "{report}");
+    let synced = sandbox.command_in(&other, &["sync", "--verify"]).output()?;
+    assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
+    assert_eq!(server.requests().len(), 2, "the changed copy is downloaded");
+    Ok(())
+}
+
 /// an edit keeping the size and time shows in no listing, so the cache's mark is all the other
 /// project has. status, sync and path agree on it, and the copy sync keeps is all that differs.
 #[test]

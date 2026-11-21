@@ -12,7 +12,7 @@ use super::sync::disk::{self, Blocker, Entry, Folders, Survey};
 use super::sync::place::{Action, Reason, Stale};
 use super::sync::placed_archives::PlacedArchives;
 use super::sync::{Scope, place};
-use crate::cache::Cache;
+use crate::cache::{Cache, Identity};
 use crate::digest::{self, Sha256};
 use crate::error::Error;
 use crate::output::{Output, Warning};
@@ -773,7 +773,7 @@ fn check(
             paths.push(path.clone());
         }
     }
-    status.downloads = downloads(&status, &planned, &cache);
+    status.downloads = downloads(&status, &planned, (&cache, &project.root));
     status.gone = gone(&status.missing, &manifest, &survey, &planned);
     let listed: HashSet<&String> = status.damaged.iter().collect();
     status.hashed_only.retain(|path| listed.contains(path));
@@ -910,13 +910,24 @@ fn dropped_here(status: &mut Status, manifest: Manifest, survey: &Survey) -> Man
     super::drop::placed_owned(manifest, &Scope::All, &survey.state.dropped)
 }
 
+/// whether the file at `file` is the cache's `object` itself, a link to it, compared by identity,
+/// which unix reads without opening either, so a fifo put in the file's place since the survey
+/// never holds status.
+fn is_cache_copy(file: &std::path::Path, object: &std::path::Path) -> bool {
+    match (Identity::of(file), Identity::of(object)) {
+        (Ok(file), Ok(object)) => file == object,
+        _ => false,
+    }
+}
+
 /// the files a sync of `status` would download, once each, by the link it starts at: one neither
-/// the cache nor the data folder holds, or the archive holding it when the cache lacks that too,
-/// and each archive never unpacked here that the cache lacks, which a sync downloads first.
+/// the cache nor the data folder below `root` holds, or the archive holding it when the cache
+/// lacks that too, and each archive never unpacked here that the cache lacks, which a sync
+/// downloads first.
 fn downloads(
     status: &Status,
     planned: &plan::Plan<'_>,
-    cache: &Cache,
+    (cache, root): (&Cache, &std::path::Path),
 ) -> Vec<(url::Url, Option<u64>)> {
     let placing: HashSet<&str> = status
         .missing
@@ -925,9 +936,23 @@ fn downloads(
         .chain(&status.damaged)
         .map(String::as_str)
         .collect();
+    // a changed link that is still the cache's copy changed that copy too, though it looks sealed
+    let changed: HashSet<&Sha256> = planned
+        .targets
+        .iter()
+        .filter(|target| status.linked.contains(&target.path))
+        .filter(|target| {
+            is_cache_copy(
+                &native(root, &target.path),
+                &cache.object_path(&target.sha256),
+            )
+        })
+        .map(|target| &target.sha256)
+        .collect();
     let mut seen = HashSet::new();
     let lacks = |sha256: &Sha256, size: u64| {
-        !status.holding.contains(sha256) && cache.find(sha256, Some(size)).is_none()
+        !status.holding.contains(sha256)
+            && (changed.contains(sha256) || cache.find(sha256, Some(size)).is_none())
     };
     planned
         .targets
@@ -1806,6 +1831,30 @@ fn sum_up(output: &Output, status: &Status) -> bool {
 mod tests {
     use super::*;
     use crate::output::{Level, Style};
+
+    /// a link is the cache's copy, a fifo put in its place is not and is never opened, and a file
+    /// of its own is not either.
+    #[cfg(unix)]
+    #[test]
+    fn only_a_link_to_the_object_is_the_cache_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let object = dir.path().join("object");
+        std::fs::write(&object, b"pinned").unwrap();
+        let own = dir.path().join("own");
+        std::fs::write(&own, b"pinned").unwrap();
+        assert!(!is_cache_copy(&own, &object));
+        let link = dir.path().join("link");
+        if std::fs::hard_link(&object, &link).is_err() {
+            return crate::test_skips::skip("hardlinks", "this disk makes no hardlinks");
+        }
+        assert!(is_cache_copy(&link, &object));
+        let fifo = dir.path().join("fifo");
+        let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+        if !made.is_ok_and(|made| made.success()) {
+            return crate::test_skips::skip("fifos", "this disk or system makes no fifo");
+        }
+        assert!(!is_cache_copy(&fifo, &object));
+    }
 
     #[test]
     fn sync_is_suggested_for_repairable_differences_but_not_for_personal_edits() {
