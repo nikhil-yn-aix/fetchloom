@@ -58,7 +58,8 @@ pub(crate) struct Partial {
     /// is made, read and removed through it, so a link put at its name never takes one elsewhere.
     folder: Arc<Folder>,
     bytes: PathBuf,
-    record: PathBuf,
+    // a box too, so the claim stays as small where a path takes more room, as on windows
+    record: Box<Path>,
     lock: Option<Arc<Claimed>>,
 }
 
@@ -191,7 +192,7 @@ impl Cache {
         };
         let names = [lock_name, format!("{stem}.part"), format!("{stem}.json")];
         let bytes = folder.join(&names[1]);
-        let record = folder.join(&names[2]);
+        let record = folder.join(&names[2]).into_boxed_path();
         let lock = lock.map(|file| {
             Arc::new(Claimed {
                 file,
@@ -523,7 +524,7 @@ impl Partial {
             named: recorded.is_some(),
             folder: Arc::clone(&self.folder),
             bytes: self.bytes.clone(),
-            record_path: self.record.clone(),
+            record_path: self.record.to_path_buf(),
             record: Record {
                 url: self.url.to_string(),
                 received: offset,
