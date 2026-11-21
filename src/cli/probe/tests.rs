@@ -12,6 +12,7 @@ fn outcome(judged: Result<(), Lack>) -> (&'static str, Option<u64>) {
             assert_eq!(host, "data.example.org");
             ("changed", Some(size))
         }
+        Err(Lack::Restated { .. }) => ("restated", None),
         Err(Lack::Gone(_)) => ("gone", None),
         Err(Lack::Refused(_)) => ("refused", None),
         Err(Lack::Unsized(_)) => ("unsized", None),

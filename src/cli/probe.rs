@@ -17,6 +17,7 @@ use crate::error::{Error, Kind};
 use crate::mirror::{Wanted, folder, web};
 use crate::net::{Expect, Fetch, Net, Probed};
 use crate::project::lock::{LockedFile, StatedFile};
+use crate::source::Listing;
 
 /// copies looked at on one folder mirror at once, as sync copies from one.
 const LOOKS: usize = 8;
@@ -88,6 +89,23 @@ impl<'a> Pinned<'a> {
         format!("{}/{}", self.dataset, self.path)
     }
 
+    /// why `listing`, its source's answer at the version data.lock pins, shows the source no
+    /// longer serves its pinned bytes: a checksum it states for the file contradicts the pin.
+    /// `size` is what its source serves, when it said.
+    pub(in crate::cli) fn restated(&self, listing: &Listing, size: Option<u64>) -> Option<Lack> {
+        let Stated::Contradicts(checksum) = stated(listing, self.url, self.sha256, self.md5) else {
+            return None;
+        };
+        let host = Url::parse(self.url)
+            .map(|url| crate::net::host(&url).to_owned())
+            .unwrap_or_default();
+        Some(Lack::Restated {
+            checksum,
+            host,
+            size,
+        })
+    }
+
     /// what a mirror keeps it as, when its SHA-256 is pinned.
     fn wanted(&self) -> Option<Wanted> {
         Some(Wanted {
@@ -136,6 +154,47 @@ impl<'a> Pinned<'a> {
     }
 }
 
+/// what a source's listing states of the file data.lock pins at `url`, by its SHA-256 or the MD5
+/// data.lock records.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::cli) enum Stated {
+    /// a checksum it states is the pin's.
+    Agrees,
+    /// a checksum it states is not the pin's, named as `SHA-256` or `MD5`.
+    Contradicts(&'static str),
+    /// it lists no such file, or states no checksum data.lock records to compare with.
+    Silent,
+}
+
+/// what `listing` states of the file data.lock pins at `url` by `sha256`, or by `md5` where data.lock
+/// records one: a SHA-256 decides when both sides have one, else an MD5.
+pub(in crate::cli) fn stated(
+    listing: &Listing,
+    url: &str,
+    sha256: Option<Sha256>,
+    md5: Option<Md5>,
+) -> Stated {
+    let Some(remote) = listing
+        .files
+        .iter()
+        .find(|remote| remote.url.as_str() == url)
+    else {
+        return Stated::Silent;
+    };
+    let judge = |same: bool, checksum| {
+        if same {
+            Stated::Agrees
+        } else {
+            Stated::Contradicts(checksum)
+        }
+    };
+    match (remote.sha256, sha256, remote.md5, md5) {
+        (Some(stated), Some(pinned), _, _) => judge(stated == pinned, "SHA-256"),
+        (_, _, Some(stated), Some(pinned)) => judge(stated == pinned, "MD5"),
+        _ => Stated::Silent,
+    }
+}
+
 /// where a pinned file can still be had, or why nowhere.
 #[derive(Debug)]
 pub(in crate::cli) enum Found {
@@ -157,6 +216,14 @@ pub(in crate::cli) enum Found {
 pub(in crate::cli) enum Lack {
     /// its source serves a file of `size` bytes in its place, at `host`.
     Changed { size: u64, host: String },
+    /// its source, at `host`, lists the file with another `checksum`, as `SHA-256`, than data.lock
+    /// pins, so it no longer serves the pinned bytes, whatever their size; `size` is what it
+    /// serves, when it said.
+    Restated {
+        checksum: &'static str,
+        host: String,
+        size: Option<u64>,
+    },
     /// its source has nothing at its link, as 404 or 410 says.
     Gone(Error),
     /// its source refused it, as 401 or 403 says, with the sign-in hint a download gives.
@@ -173,7 +240,7 @@ impl Lack {
     /// what `--json` calls it: `changed`, `gone`, `refused`, `unsized`, `unknown` or `imported`.
     pub(in crate::cli) fn outcome(&self) -> &'static str {
         match self {
-            Lack::Changed { .. } => "changed",
+            Lack::Changed { .. } | Lack::Restated { .. } => "changed",
             Lack::Gone(_) => "gone",
             Lack::Refused(_) => "refused",
             Lack::Unsized(_) => "unsized",
@@ -185,13 +252,17 @@ impl Lack {
     /// whether it shows the file is lost: its source has nothing at its link or another file
     /// there, or no source ever had it. a refusal or no answer shows nothing either way.
     pub(in crate::cli) fn lost(&self) -> bool {
-        matches!(self, Lack::Changed { .. } | Lack::Gone(_) | Lack::Imported)
+        matches!(
+            self,
+            Lack::Changed { .. } | Lack::Restated { .. } | Lack::Gone(_) | Lack::Imported
+        )
     }
 
     /// the size a changed file has now.
     pub(in crate::cli) fn size(&self) -> Option<u64> {
         match self {
             Lack::Changed { size, .. } => Some(*size),
+            Lack::Restated { size, .. } => *size,
             _ => None,
         }
     }
@@ -207,6 +278,10 @@ impl Lack {
                     sized(size, pinned),
                     sized(pinned, size)
                 ),
+            ),
+            Lack::Restated { checksum, host, .. } => Error::new(
+                Kind::IntegrityMismatch,
+                format!("{host} lists it with another {checksum} than data.lock pins"),
             ),
             Lack::Gone(error)
             | Lack::Refused(error)

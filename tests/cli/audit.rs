@@ -839,3 +839,36 @@ fn a_record_pinned_by_its_version_names_a_newer_one() -> Result {
     );
     Ok(())
 }
+
+/// a checksum list states each file's SHA-256, so a list naming other bytes for a pinned file of
+/// the same size says its source changed that file: audit names it and `--check` fails, rather
+/// than saying the source lists it as data.lock pins it.
+#[test]
+fn a_list_stating_other_bytes_for_a_pinned_file_fails_the_check() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (old, new): (&[u8], &[u8]) = (b"a,b\n1,2\n", b"a,b\n3,4\n");
+    let sums = |bytes: &[u8]| format!("{}  f.csv\n", sha256_hex(bytes)).into_bytes();
+    let source = Routes::start(vec![
+        ("/lab/SHA256SUMS".to_owned(), file(&sums(old), "\"s1\"")),
+        ("/lab/f.csv".to_owned(), file(old, "\"f1\"")),
+    ])?;
+    pinned(&sandbox, &source, &["/lab/SHA256SUMS"])?;
+    source.change(vec![
+        ("/lab/SHA256SUMS".to_owned(), file(&sums(new), "\"s2\"")),
+        ("/lab/f.csv".to_owned(), file(new, "\"f2\"")),
+    ]);
+    let audited = sandbox.run(&["audit"])?;
+    let stderr = text(&audited.stderr)?;
+    assert!(!stderr.contains("as data.lock pins it"), "{stderr}");
+    let checked = sandbox.run(&["--json", "audit", "--check"])?;
+    let document = json(&checked)?;
+    assert_eq!(checked.status.code(), Some(1), "{document}");
+    assert_eq!(
+        document["errors"][0]["kind"], "data.not_ready",
+        "{document}"
+    );
+    let changed = &dataset(&document, "lab")?["not_served"][0];
+    assert_eq!(changed["file"], "lab/f.csv", "{document}");
+    assert_eq!(changed["outcome"], "changed", "{document}");
+    Ok(())
+}

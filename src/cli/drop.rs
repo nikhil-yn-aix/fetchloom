@@ -395,21 +395,29 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
         return Ok(checked);
     }
     let answers = probe::find(context, &net, &rest, Ask::Elsewhere).await?;
-    // the files served at their size alone or with none, by their place in `locked`, each with
-    // whether it came with none
-    let mut by_size: Vec<(usize, bool)> = Vec::new();
+    // the files served at their size alone or with none, by their place in `locked`
+    let mut by_size: Vec<BySize> = Vec::new();
     for ((pinned, answer), &at) in rest.iter().zip(answers).zip(&rest_at) {
         let lacks = checked.lacks(pinned.dataset);
         let why = match answer {
             Found::Mirror { .. } | Found::Source { .. } => {
                 lacks.sized += 1;
-                by_size.push((at, false));
+                let at_source = matches!(answer, Found::Source { .. });
+                by_size.push(BySize {
+                    at,
+                    without_size: false,
+                    at_source,
+                });
                 continue;
             }
             // its source answered with the file, and asking again gets that answer again
             Found::Nowhere(Lack::Unsized(_)) => {
                 lacks.no_size += 1;
-                by_size.push((at, true));
+                by_size.push(BySize {
+                    at,
+                    without_size: true,
+                    at_source: true,
+                });
                 continue;
             }
             Found::Nowhere(why) => why,
@@ -423,25 +431,34 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
             lacks.unchecked.push((said, error));
         }
     }
-    if !context.yes {
-        stated(&net, &locked, &by_size, &mut checked).await?;
-    }
+    // asked under --yes too: a source's own checksum can show the pinned bytes are gone
+    stated(&net, &locked, &by_size, &mut checked).await?;
     Ok(checked)
+}
+
+/// a file served at its size alone or with none, by its place in `locked`: whether it came with no
+/// size, and whether its source served it rather than a web or bucket mirror.
+struct BySize {
+    at: usize,
+    without_size: bool,
+    at_source: bool,
 }
 
 /// takes off the counts in `checked` each file of `by_size`, by its place in `locked`, whose
 /// source states at the version data.lock pins a checksum data.lock records for it: its SHA-256,
-/// or an MD5 data.lock keeps, as zenodo states one. each dataset's source lists it once; one that
-/// does not answer leaves its files counted by their size. fails at a stop.
+/// or an MD5 data.lock keeps, as zenodo states one. a file its source served while stating another
+/// such checksum is lost instead, since the source no longer has the pinned bytes. each dataset's
+/// source lists it once; one that does not answer leaves its files counted by their size. fails at
+/// a stop.
 async fn stated(
     net: &Arc<crate::net::Net>,
     locked: &[(&Named<'_>, &LockedFile)],
-    by_size: &[(usize, bool)],
+    by_size: &[BySize],
     checked: &mut Checked,
 ) -> Result<(), Error> {
     let mut asked: Vec<&Named<'_>> = Vec::new();
-    for &(at, _) in by_size {
-        let named = locked[at].0;
+    for served in by_size {
+        let named = locked[served.at].0;
         if !asked.iter().any(|seen| seen.name == named.name) {
             asked.push(named);
         }
@@ -475,8 +492,8 @@ async fn stated(
             Err(error) => tracing::debug!(%error, "a source did not list a dataset to drop"),
         }
     }
-    for &(at, without_size) in by_size {
-        let (named, file) = locked[at];
+    for served in by_size {
+        let (named, file) = locked[served.at];
         let Some(listing) = asked
             .iter()
             .position(|seen| seen.name == named.name)
@@ -484,19 +501,26 @@ async fn stated(
         else {
             continue;
         };
-        let states = listing.files.iter().any(|remote| {
-            remote.url.as_str() == file.url
-                && (remote.sha256 == Some(file.sha256)
-                    || (file.md5.is_some() && remote.md5 == file.md5))
-        });
-        if states {
-            let lacks = checked.lacks(named.name);
-            if without_size {
-                lacks.no_size = lacks.no_size.saturating_sub(1);
-            } else {
-                lacks.sized = lacks.sized.saturating_sub(1);
+        let lost = match probe::stated(listing, &file.url, Some(file.sha256), file.md5) {
+            probe::Stated::Agrees => None,
+            probe::Stated::Contradicts(_) if served.at_source => {
+                let pinned = Pinned::locked(named.name, file, named.page);
+                let size = (!served.without_size).then_some(file.size);
+                pinned.restated(listing, size).map(|lack| {
+                    let outcome = lack.outcome();
+                    let error = lack.error(file.size);
+                    format!("{} · {outcome}: {}", pinned.label(), error.message)
+                })
             }
+            _ => continue,
+        };
+        let lacks = checked.lacks(named.name);
+        if served.without_size {
+            lacks.no_size = lacks.no_size.saturating_sub(1);
+        } else {
+            lacks.sized = lacks.sized.saturating_sub(1);
         }
+        lacks.lost.extend(lost);
     }
     Ok(())
 }

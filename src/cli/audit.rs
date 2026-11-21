@@ -359,9 +359,11 @@ pub(super) async fn run(context: &Context, args: args::Audit) -> Result<Report, 
             probe::find(context, &net, &pinned, Ask::Sources),
             listings(&net, &asks),
         );
-        gathered(context, &mut report, &pinned, found?);
+        let (found, listed) = (found?, listed?);
+        let found = restated(context, &net, (&report, &asks, &listed), &pinned, found).await?;
+        gathered(context, &mut report, &pinned, found);
         tell_modified(output, &report);
-        for ((index, asked), listed) in asks.iter().zip(listed?) {
+        for ((index, asked), listed) in asks.iter().zip(listed) {
             judge(&mut report.datasets[*index], asked, listed);
         }
     }
@@ -581,6 +583,60 @@ fn changes(asked: &Asked, listing: &Listing) -> Vec<Change> {
         });
     }
     changed
+}
+
+/// `found` with each file its source served that the source's listing at the pinned version gives
+/// another checksum than data.lock pins: its source no longer serves the pinned bytes, so a mirror
+/// that holds them serves it, and otherwise none does. fails at a stop.
+async fn restated(
+    context: &Context,
+    net: &Arc<Net>,
+    (report, asks, listed): (&Report, &[(usize, Asked)], &[Listed]),
+    pinned: &[Pinned<'_>],
+    mut found: Vec<Found>,
+) -> Result<Vec<Found>, Error> {
+    let listings: HashMap<&str, &Listing> = asks
+        .iter()
+        .zip(listed)
+        .filter_map(|((index, _), listed)| {
+            let listing = listed.now.as_ref().ok()?;
+            Some((report.datasets[*index].name.as_str(), listing))
+        })
+        .collect();
+    let mut changed: Vec<(usize, Lack)> = Vec::new();
+    for (at, (pinned, found)) in pinned.iter().zip(&found).enumerate() {
+        let size = match found {
+            Found::Source { .. } => Some(pinned.size),
+            Found::Nowhere(Lack::Unsized(_)) => None,
+            _ => continue,
+        };
+        if let Some(lack) = listings
+            .get(pinned.dataset)
+            .and_then(|listing| pinned.restated(listing, size))
+        {
+            changed.push((at, lack));
+        }
+    }
+    if changed.is_empty() {
+        return Ok(found);
+    }
+    let held = if context.mirrors.mirrors.list.is_empty() {
+        Vec::new()
+    } else {
+        let asked: Vec<Pinned<'_>> = changed.iter().map(|(at, _)| pinned[*at]).collect();
+        probe::find(context, net, &asked, Ask::Mirrors).await?
+    };
+    let mut held = held.into_iter();
+    for (at, lack) in changed {
+        found[at] = match held.next() {
+            Some(Found::Mirror { index, .. }) => Found::Mirror {
+                index,
+                source: Some(lack),
+            },
+            _ => Found::Nowhere(lack),
+        };
+    }
+    Ok(found)
 }
 
 /// what `found` says of each of `pinned`, under its dataset in `report`.

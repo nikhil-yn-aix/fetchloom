@@ -396,7 +396,8 @@ fn zenodo_record(md5: &str) -> Result<Vec<crate::support::Part>> {
 }
 
 /// a source that states the MD5 data.lock pins a file by, as zenodo does, shows more than a size:
-/// the dataset drops without `--yes`. one stating another MD5 shows a size alone.
+/// the dataset drops without `--yes`. one stating another MD5 no longer has the pinned bytes, so
+/// the dataset stays with `data.not_ready`, `--yes` or not.
 #[test]
 fn a_source_stating_the_pinned_md5_needs_no_yes() -> Result {
     let sandbox = Sandbox::new()?;
@@ -418,10 +419,16 @@ fn a_source_stating_the_pinned_md5_needs_no_yes() -> Result {
     ok(&run(&["add", "zenodo:101", "--as", "iris"])?)?;
     let placed = sandbox.work().join("data/iris/iris.csv");
     routes.change(vec![(record.clone(), zenodo_record(&"0".repeat(32))?)]);
-    let output = run(&["--json", "drop", "iris"])?;
-    assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
-    assert_eq!(json(&output)?["errors"][0]["kind"], "unconfirmed");
-    assert!(placed.exists());
+    for args in [
+        &["--json", "drop", "iris"][..],
+        &["--json", "drop", "iris", "--yes"],
+    ] {
+        let output = run(args)?;
+        assert_eq!(output.status.code(), Some(1), "{}", text(&output.stderr)?);
+        let error = &json(&output)?["errors"][0];
+        assert_eq!(error["kind"], "data.not_ready", "{args:?}: {error}");
+        assert!(placed.exists());
+    }
     routes.change(vec![(record, zenodo_record(&pinned)?)]);
     let output = run(&["--json", "drop", "iris"])?;
     ok(&output)?;
@@ -605,5 +612,47 @@ fn an_add_leaves_a_dropped_dataset_dropped() -> Result {
     assert_eq!(iris(source.requests()), asked, "the add fetched it");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(status["result"]["dropped"], json!(["iris"]));
+    Ok(())
+}
+
+/// a checksum list that names other bytes for a pinned file of the same size says its source no
+/// longer has the pinned bytes: no source has the file, so the dataset stays with `data.not_ready`,
+/// even with `--yes`, rather than as a file checked by its size alone.
+#[test]
+fn a_list_stating_other_bytes_keeps_its_dataset() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (old, new): (&[u8], &[u8]) = (b"a,b\n1,2\n", b"a,b\n3,4\n");
+    let sums =
+        |bytes: &[u8]| format!("{}  f.csv\n", crate::support::sha256_hex(bytes)).into_bytes();
+    let source = Routes::start(vec![
+        ("/lab/SHA256SUMS".to_owned(), file(&sums(old), "\"s1\"")),
+        ("/lab/f.csv".to_owned(), file(old, "\"f1\"")),
+    ])?;
+    sandbox.allow(&source.url);
+    ok(&sandbox.run(&["add", &format!("{}/lab/SHA256SUMS", source.url)])?)?;
+    let placed = sandbox.work().join("data/lab/f.csv");
+    source.change(vec![
+        ("/lab/SHA256SUMS".to_owned(), file(&sums(new), "\"s2\"")),
+        ("/lab/f.csv".to_owned(), file(new, "\"f2\"")),
+    ]);
+    for args in [
+        &["--json", "drop", "lab"][..],
+        &["--json", "drop", "lab", "--yes"],
+    ] {
+        let output = sandbox.run(args)?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(1), "{args:?}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "data.not_ready", "{args:?}: {document}");
+        assert_eq!(
+            error["details"],
+            json!([
+                "lab/f.csv · changed: 127.0.0.1 lists it with another SHA-256 than data.lock pins"
+            ]),
+            "{args:?}"
+        );
+        assert!(placed.exists(), "{args:?}");
+        assert_eq!(fs::read(&placed)?, old, "{args:?}");
+    }
     Ok(())
 }
