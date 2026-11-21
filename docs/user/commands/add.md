@@ -45,6 +45,8 @@ fetchloom add [options] -i <file>
 
 below a project's folder, `add` works on that project, says `using the project in <folder>` once at a terminal, and gives the dataset's folder from where you stand, such as `../data/iris`. the search for a project stops at a git repository, so in a repository with no `data.toml` of its own, `add` starts a project there, as [finding the project](../reference/project-folder.md#finding-the-project) explains. there is no `init` command: `fetchloom init` is a usage error, exit 2, whose help says `add` starts a project.
 
+at a terminal, the add that starts a project also says its files are read-only, which protects the cache's copy, and how to edit them, with `copy = true` in data.toml, or delete them, with `fetchloom remove <name>`.
+
 stderr for a single-file addition in a new project, from a test snapshot, where `[time]` stands for the duration and `[sandbox]` for the test's folder:
 
 ```text

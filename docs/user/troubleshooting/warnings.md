@@ -3,6 +3,7 @@
 | what you see | fix | see |
 |---|---|---|
 | `fl` runs another program, or an installer said it left `fl` alone | type `fetchloom`, which always works. the installers never replace or hide another `fl`, so for the short name add `alias fl=fetchloom` to your shell's startup file; in powershell, `fl` is the alias of `Format-List` | [short name](../guides/windows.md#short-name) |
+| `Permission denied` when you edit a file in the data folder, or `rm` asks to remove a write-protected file | placed files are read-only, which protects the cache's copy: set `copy = true` for the dataset and run `fetchloom sync` to edit them; `fetchloom remove <name>` deletes a dataset's files, and a sync puts back a data folder you deleted | [edit input files](../guides/edit-input-files.md#editing-raw-files) |
 | sync succeeds but a file is still edited | sync keeps conflicts: inspect `status` and JSON `placement.kept`, and save edits before choosing `--force` | [local changes](../commands/sync.md#local-changes) |
 | `Put back data/pets/images/x.png, which was deleted or moved, since data.lock pins it` | nothing, if you deleted it by mistake. to leave it out for good, run `fetchloom exclude <path>`, which takes a folder too; keep files of your own outside the data folder | [local changes](../commands/sync.md#local-changes) |
 | `warning: exclude "images/x.png" in datasets.pets names a file inside pets.zip, which exclude does not reach` | run the `fetchloom exclude` the help names, which writes the archive's members table | [exclude](../commands/exclude.md) |

@@ -65,6 +65,8 @@ for several files, the `Fetched` line is followed by the folder's top level, lar
             README.md              913 B
 ```
 
+the files in the folder are read-only, which protects the cache's copy, and at a terminal a hint says so: to edit one, write a file of your own with `-o`, as [one file](#one-file) shows, or copy it and make the copy writable, since a copy keeps the read-only mode.
+
 a download that went on from bytes an earlier run kept says how much came from that run, as in `Downloaded 3 files · 79.6 MiB in 2.4 s · 23.6 MiB/s · 23.0 MiB from an earlier run`, and one that could not says so first, as [interruptions](../concepts/questions-and-interruptions.md#interruptions) shows. while a slow disk keeps the file, a bar shows `waiting for the disk`, and the closing line names that part, as in `Downloaded big.bin · 1.0 GiB in 30.2 s, 12.3 s of it waiting for the disk · 57.2 MiB/s`. time spent waiting for your answer to a question, such as whether to download a large file, counts toward neither the time nor the speed.
 
 a plain link whose server answers that the file is unchanged, with a 304, downloads nothing while the cache or the folder holds what it served last; without such validators, the bytes may download again. a later `get` takes changed bytes from the source, so use [add](add.md) and commit the pins, or check the bytes with `--sha256`, to keep them fixed.

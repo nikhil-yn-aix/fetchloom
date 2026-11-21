@@ -1650,7 +1650,7 @@ pub(super) fn render_add(
 ) {
     tell_started(work, starting);
     tell_marked(&work.context.output, placed);
-    tell_added(work, manifest, added, here, (private, list));
+    tell_added(work, manifest, added, here, starting, (private, list));
 }
 
 fn tell_started(work: &Loop<'_>, starting: bool) {
@@ -1997,6 +1997,7 @@ fn tell_added(
     manifest: &Manifest,
     (name, has_files): (&str, bool),
     here: &Path,
+    starting: bool,
     (private, list): (&[url::Origin], Option<&str>),
 ) {
     if has_files {
@@ -2008,6 +2009,9 @@ fn tell_added(
             "scripts can find it with `{}`",
             super::project::command(&format!("path {name}"))
         ));
+        if starting {
+            tell_read_only(&work.context.output, manifest, name);
+        }
     } else {
         work.context.output.done(
             "Added",
@@ -2019,6 +2023,23 @@ fn tell_added(
         .get(name)
         .is_some_and(manifest::Entry::is_import);
     close(work, private, list, imported.then_some(name));
+}
+
+/// why the files of `name` are read-only, and how to edit or delete them, for a person at a
+/// terminal, who meets them as an editor's permission denied or `rm -r` asking about each file.
+/// a script needs no telling, and the first add of a project tells it once.
+fn tell_read_only(output: &Output, manifest: &Manifest, name: &str) {
+    let writable = manifest
+        .datasets
+        .get(name)
+        .is_none_or(|entry| entry.copy || entry.is_output());
+    if writable || !output.shows_next() {
+        return;
+    }
+    output.hint(&format!(
+        "its files are read-only, which protects the cache's copy: to edit them, set copy = true for {name} in data.toml; to delete them, run `{}`",
+        super::project::command(&format!("remove {name}"))
+    ));
 }
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.

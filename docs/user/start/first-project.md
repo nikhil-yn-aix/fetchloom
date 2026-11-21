@@ -57,6 +57,8 @@ fetchloom path iris/Iris.csv
 
 `fetchloom list` shows every dataset in the project with its size and folder.
 
+the files are read-only, which protects the cache's copy, so an editor says permission denied and `rm -r data` asks before each file. to edit a dataset's files, set `copy = true` for it in data.toml, as [edit input files](../guides/edit-input-files.md) shows; to delete them, run `fetchloom remove iris`, as [undo](#undo) shows.
+
 ## restore it somewhere else
 
 commit `data.toml` and `data.lock` to git, or copy them to another machine; leave `data/` and `.fetchloom/` out. each dataset's folder already holds its own `.gitignore`, in a git repository or not, so a `git init` later leaves the data out. then:

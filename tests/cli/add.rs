@@ -1651,6 +1651,34 @@ fn a_private_link_is_told_before_the_closing_line() -> Result {
     Ok(())
 }
 
+/// a person meets the read-only files of a project's first add as an editor's permission denied
+/// or `rm -r` asking about each one, so that add says why and how to edit or delete them, once:
+/// the next add says nothing of it, and neither does a pipe, where no person reads it.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_first_add_says_its_files_are_read_only() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\""), file(IRIS, "\"v1\"")])?;
+    let Some(screen) = sandbox.on_a_terminal(&["add", &server.url])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("\n  hint: its files are read-only, which protects the cache's copy: to edit them, set copy = true for iris in data.toml; to delete them, run `fetchloom remove iris`\n"),
+        "{screen}"
+    );
+    let folder = sandbox.folder("measurements")?;
+    fs::write(folder.join("heights.csv"), b"cm\n170\n")?;
+    let Some(again) = sandbox.on_a_terminal(&["add", "../measurements"])? else {
+        return Ok(());
+    };
+    assert!(!again.contains("read-only"), "{again}");
+    let piped = Sandbox::new()?;
+    let told = piped.run(&["add", &server.url])?;
+    assert_eq!(told.status.code(), Some(0), "{}", text(&told.stderr)?);
+    assert!(!text(&told.stderr)?.contains("read-only"));
+    Ok(())
+}
+
 /// data.toml has no entry for a new link or id yet, so the help reruns the add and names no
 /// data.toml, with `--as` or without.
 #[test]

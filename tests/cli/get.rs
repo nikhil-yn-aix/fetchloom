@@ -28,6 +28,23 @@ fn a_link_lands_in_a_folder_named_after_its_file() -> Result {
     Ok(())
 }
 
+/// the file a get puts in a folder is read-only, which a person at a terminal hears of with how to
+/// edit it, since an editor's permission denied says nothing of why.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_get_at_a_terminal_says_its_file_is_read_only() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    let Some(screen) = sandbox.on_a_terminal(&["get", &server.url])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("\n  hint: the file is read-only, which protects the cache's copy: to edit it, write a file of your own with -o <file>, or copy it and make the copy writable\n"),
+        "{screen}"
+    );
+    Ok(())
+}
+
 /// a hugging face dataset, `lab/flowers`, holding a card, `Iris.csv` and `data/train.csv`: its
 /// hub, which lists the whole tree or the `data` folder alone, and the server of `Iris.csv`.
 #[cfg(debug_assertions)]

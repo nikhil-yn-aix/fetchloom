@@ -331,6 +331,15 @@ fn tell_placed(
     if let Some(why @ (Unlinked::NoLinks | Unlinked::OtherDrive | Unlinked::ReadOnlyCache)) = why {
         output.hint(&why.copied_because(folder.display(), things).to_string());
     }
+    // a person at a terminal meets them as an editor's permission denied; a script needs no telling
+    if output.shows_next() {
+        // a copy keeps the read-only mode, as cp and windows' copy give it
+        output.hint(if targets.len() == 1 {
+            "the file is read-only, which protects the cache's copy: to edit it, write a file of your own with -o <file>, or copy it and make the copy writable"
+        } else {
+            "the files are read-only, which protects the cache's copy: to edit one, copy it and make the copy writable"
+        });
+    }
 }
 
 /// the top level of a filled folder, largest first, as a person looking for the main file
