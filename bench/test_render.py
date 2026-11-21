@@ -505,10 +505,27 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual((alone["rival"], alone["reason"]), (None, "no a/a arm measured this machine's noise"))
 
     def test_a_verdict_needs_ten_paired_rounds_and_a_fetchloom_that_never_failed(self):
-        self.assertEqual(self.judged(headline_rows(rounds=9, curl=2))["reason"], "9 rounds paired with curl, fewer than 10")
+        poor = self.judged(headline_rows(rounds=9, scenario="s2r", profile="poor", curl=2), scenario="s2r", profile="poor")
+        self.assertEqual((poor["rival"], poor["reason"]), (None, "curl has 9 paired rounds, fewer than 10"))
         rows = headline_rows(curl=2)
         rows[0] = dict(rows[0], status="failed")
         self.assertEqual(self.judged(rows)["reason"], "fetchloom failed 1 of 10 runs")
+
+    def test_the_aa_gate_needs_every_round_passed_and_paired_and_withholds_every_verdict_of_its_case(self):
+        rows = headline_rows(curl=2)
+        failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+aa", 4) else row for row in rows]
+        missing = [row for row in rows if (row["tool"], row["round"]) != ("fetchloom+aa", 10)]
+        for changed, said in ((failed, "the a/a arm failed 1 of 10 runs, so it cannot measure this machine's noise"),
+                              (missing, "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise"),
+                              (headline_rows(rounds=9, curl=2), "the a/a arm has 9 paired rounds, fewer than 10, so it cannot measure this machine's noise")):
+            judged = self.judged(changed)
+            self.assertEqual((judged["rival"], judged["reason"], judged["withheld"]), (None, said, said))
+            # the table's verdicts are withheld too, though curl's interval alone would say fetchloom faster
+            self.assertIsNone(judged["comparisons"]["curl"]["word"])
+            self.assertEqual(render.said("curl", judged), "withheld")
+        # on the lossy link the a/a arm reports the network's spread and gates nothing
+        poor = self.judged([dict(row, scenario="s2r", profile="poor") for row in failed], scenario="s2r", profile="poor")
+        self.assertEqual((poor["rival"], poor["withheld"]), ("curl", None))
 
     def test_a_case_outside_the_headline_set_is_judged_at_95_percent(self):
         judged = self.judged(headline_rows(scenario="s3", profile="lan", curl=.5), scenario="s3", profile="lan")

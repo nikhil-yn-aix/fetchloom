@@ -205,10 +205,24 @@ def word(interval, rival):
     return "inconclusive"
 
 
+def standing(base, measured, comparison):
+    """why a comparison with fetchloom cannot stand, as a phrase after the tool's name, or None: a
+    failed run, rounds other than fetchloom's, or fewer than ab.MIN_PAIRS paired rounds."""
+    failed = sum(row.get("status") != "passed" for row in measured.values())
+    if failed:
+        return f"failed {failed} of {len(measured)} runs"
+    if measured.keys() != base.keys():
+        return "ran other rounds than fetchloom"
+    if comparison["pairs"] < ab.MIN_PAIRS or comparison["interval"] is None or None in comparison["interval"]:
+        return f"has {comparison['pairs']} paired rounds, fewer than {ab.MIN_PAIRS}"
+    return None
+
+
 def judge(case, runs):
     """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
     99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the verdict against
-    the fastest other tool that passed every run, or the reason there is none."""
+    the fastest other tool that passed every run, or the reason there is none. a reason that holds
+    for the whole case, such as a noisy machine, withholds every tool's verdict in it."""
     key = (case["filesystem"], case["profile"], case["scenario"])
     headline = key in HEADLINE
     level = FAMILY if headline else .95
@@ -219,31 +233,38 @@ def judge(case, runs):
         if tool == ab.BASE:
             continue
         comparison = ab.paired(base, measured, level=.95 if tool == AA else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
-        failed = sum(row.get("status") != "passed" for row in measured.values())
-        decided = not failed and comparison["pairs"] >= ab.MIN_PAIRS and comparison["interval"] and None not in comparison["interval"]
-        comparisons[tool] = dict(comparison, failed=failed, rounds=len(measured),
-                                 word=word(comparison["interval"], tool) if decided else None)
+        comparisons[tool] = dict(comparison, failed=sum(row.get("status") != "passed" for row in measured.values()),
+                                 rounds=len(measured), unmet=standing(base, measured, comparison))
     aa = comparisons.get(AA)
     own_failed = sum(row.get("status") != "passed" for row in base.values())
+    if not base:
+        withheld = "fetchloom did not run"
+    elif own_failed:
+        withheld = f"fetchloom failed {own_failed} of {len(base)} runs"
+    elif case["profile"] in GATED and aa is None:
+        withheld = "no a/a arm measured this machine's noise"
+    elif case["profile"] in GATED and aa["unmet"]:
+        withheld = f"the a/a arm {aa['unmet']}, so it cannot measure this machine's noise"
+    elif case["profile"] in GATED and not (AA_GATE[0] <= aa["interval"][0] and aa["interval"][1] <= AA_GATE[1]):
+        withheld = f"the a/a arm's 95% interval, {bounds(aa)}, is not inside {AA_GATE[0]} to {AA_GATE[1]}, so the machine was too noisy"
+    else:
+        withheld = None
+    for tool, comparison in comparisons.items():
+        comparison["word"] = (word(comparison["interval"], tool) if withheld is None and comparison["unmet"] is None
+                              and not tool.startswith(ab.BASE + "+") else None)
     summaries = case["summaries"]
     rivals = [tool for tool, comparison in comparisons.items()
               if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
     rival = min(rivals, key=lambda tool: (summaries[tool]["median"], tool)) if rivals else None
-    if not base:
-        reason = "fetchloom did not run"
-    elif own_failed:
-        reason = f"fetchloom failed {own_failed} of {len(base)} runs"
-    elif case["profile"] in GATED and (aa is None or aa["interval"] is None):
-        reason = "no a/a arm measured this machine's noise"
-    elif case["profile"] in GATED and not (AA_GATE[0] <= aa["interval"][0] and aa["interval"][1] <= AA_GATE[1]):
-        reason = f"the a/a arm's 95% interval, {bounds(aa)}, is not inside {AA_GATE[0]} to {AA_GATE[1]}, so the machine was too noisy"
+    if withheld:
+        reason = withheld
     elif rival is None:
         reason = "no other tool passed every run"
-    elif comparisons[rival]["word"] is None:
-        reason = f"{comparisons[rival]['pairs']} rounds paired with {rival}, fewer than {ab.MIN_PAIRS}"
+    elif comparisons[rival]["unmet"]:
+        reason = f"{rival} {comparisons[rival]['unmet']}"
     else:
         reason = None
-    return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason,
+    return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason, withheld=withheld,
                 rival=rival if reason is None else None)
 
 
@@ -649,7 +670,8 @@ def over(tool, judged):
 
 
 def said(tool, judged):
-    """what a tool's interval says against fetchloom, in the table's verdict column."""
+    """what a tool's interval says against fetchloom, in the table's verdict column: withheld when the
+    whole case has no verdict, as the line under the table says why."""
     comparison = judged["comparisons"].get(tool)
     if comparison is None or comparison["failed"]:
         return ""
@@ -657,7 +679,9 @@ def said(tool, judged):
         return "a/a arm, never a rival"
     if tool.startswith(ab.BASE + "+"):
         return "fetchloom variant, never a rival"
-    return comparison["word"] or f"fewer than {ab.MIN_PAIRS} paired rounds"
+    if judged["withheld"]:
+        return "withheld"
+    return comparison["word"] or comparison["unmet"]
 
 
 def verdict_lines(case):
