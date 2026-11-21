@@ -1861,7 +1861,7 @@ fn a_sign_in_is_offered_only_when_no_public_name_is_close() -> Result {
     let (hub, _kaggle) = typo_sources("401 Unauthorized")?;
     for (name, after, keys, asked, exit) in [
         ("irsi", "did you mean", "", false, 10),
-        ("zzzz", "sign in to hugging face now?", "\r", true, 40),
+        ("zzzz", "sign in to hugging face now?", "\r", true, 10),
     ] {
         let mut add = sandbox.command(&["add", &format!("hf:datasets/scikit-learn/{name}")]);
         add.env("FETCHLOOM_TEST_HF_API", &hub.url);
@@ -1989,7 +1989,7 @@ fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
         hub.change(vec![(OWNED.to_owned(), reply(status, &headers, b""))]);
         let output = add(&hub)?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(40), "{stderr}");
+        assert_eq!(output.status.code(), Some(10), "{stderr}");
         assert!(!stderr.contains("did you mean"), "{stderr}");
         assert_eq!(asked(&hub), 1, "{status}: {stderr}");
     }
@@ -2008,7 +2008,7 @@ fn a_list_of_datasets_that_fails_is_asked_once() -> Result {
     )]);
     let output = add(&hub)?;
     let stderr = text(&output.stderr)?;
-    assert_eq!(output.status.code(), Some(40), "{stderr}");
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
     assert!(!stderr.contains("did you mean"), "{stderr}");
     assert_eq!(
         asked(&hub),
