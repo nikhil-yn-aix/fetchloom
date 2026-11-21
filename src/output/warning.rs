@@ -88,6 +88,8 @@ pub(crate) enum Warning {
     /// a merge kept one side's entry of a dataset, which the other side writes differently
     /// only in comments or spacing.
     MergeFormatting,
+    /// a side a person chose in a merge left out the other side's change of a dataset.
+    MergeLeftOut,
     /// after a merge, neither side's data.lock pins datasets as data.toml now asks.
     MergeUnpinned,
     /// a mirror holds a damaged copy, so it was not used.
@@ -209,6 +211,7 @@ impl Warning {
             Warning::LockListMissing => "lock.list_missing",
             Warning::LockStalePart => "lock.stale_part",
             Warning::MergeFormatting => "merge.formatting",
+            Warning::MergeLeftOut => "merge.left_out",
             Warning::MergeUnpinned => "merge.unpinned",
             Warning::MirrorDamaged => "mirror.damaged",
             Warning::MirrorSkipped => "mirror.skipped",
@@ -305,6 +308,7 @@ mod tests {
             LockListMissing,
             LockStalePart,
             MergeFormatting,
+            MergeLeftOut,
             MergeUnpinned,
             MirrorDamaged,
             MirrorSkipped,

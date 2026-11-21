@@ -143,6 +143,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `lock.list_missing` | a dataset waits for its file list, which data.lock names and `data.lock.d` lacks, as in a clone of a commit that left it out; every other dataset is used. `details` names the part |
 | `lock.stale_part` | `data.lock.d` holds lists data.lock no longer names; `details` names them |
 | `merge.formatting` | a merge kept one side's entry of a dataset, which the other side writes differently only in comments or spacing |
+| `merge.left_out` | a side `lock --ours` or `--theirs` chose left out the other side's change of a dataset, which the message gives |
 | `merge.unpinned` | after a merge, neither side's data.lock pins datasets as data.toml now asks |
 | `mirror.damaged` | a mirror holds a damaged copy of a file, so it was not used |
 | `mirror.skipped` | a mirror is missing, unreadable, unreachable or busy, so the run skips it |

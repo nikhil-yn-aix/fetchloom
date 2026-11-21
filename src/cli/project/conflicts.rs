@@ -98,6 +98,14 @@ pub(super) fn merge(
     for warning in &merged.warnings {
         context.output.warn(Warning::MergeFormatting, warning);
     }
+    for left in &merged.left_out {
+        match &left.both {
+            Some(both) => context
+                .output
+                .warn_with(Warning::MergeLeftOut, &left.said, both),
+            None => context.output.warn(Warning::MergeLeftOut, &left.said),
+        }
+    }
     if let Some(lock) = &merged.lock {
         super::tell_waiting(&context.output, &super::waiting_in(lock), &Scope::All);
     }

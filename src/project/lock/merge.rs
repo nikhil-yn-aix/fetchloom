@@ -76,6 +76,17 @@ pub(crate) struct Merged {
     pub(crate) repinned: Vec<String>,
     /// what the merge left behind that a person may want back, such as one side's comments.
     pub(crate) warnings: Vec<String>,
+    /// what each side a person chose left out of its dataset: the other side's change.
+    pub(crate) left_out: Vec<LeftOut>,
+}
+
+/// the other side's change of a dataset a person chose a side of, which the merge left out.
+#[derive(Debug)]
+pub(crate) struct LeftOut {
+    /// which side the merge took, and what the other one held, in words.
+    pub(crate) said: String,
+    /// how to keep both sides' changes, where both sides' data.toml held the dataset apart.
+    pub(crate) both: Option<String>,
 }
 
 /// how each dataset came out of a merge, by name, as `lock --json` reports it.
@@ -325,8 +336,20 @@ pub(crate) fn merge(
             summary.sides.insert(name.clone(), held);
         }
         let shown = manifest.shows_base || lock.is_some_and(|lock| lock.shows_base);
-        return Err(undecided(&decided.conflicts, &summary, shown, root));
+        let editable: Vec<&str> = decided
+            .conflicts
+            .keys()
+            .filter(|name| combinable(&manifests, name))
+            .map(String::as_str)
+            .collect();
+        return Err(undecided(
+            &decided.conflicts,
+            &summary,
+            (shown, &editable),
+            root,
+        ));
     }
+    let left_out = left_out(&manifests, locks.as_ref(), choices, &decided.chosen);
     let repinned = match (&locks, &records) {
         (Some(locks), Some(records)) => repinned(&locks.ours, records),
         _ => Vec::new(),
@@ -343,6 +366,7 @@ pub(crate) fn merge(
         summary,
         repinned,
         warnings: decided.warnings,
+        left_out,
     })
 }
 
@@ -385,6 +409,86 @@ fn sides_weight(sides: &Sides) -> (u64, u64, u64) {
         bytes,
         kept.saturating_add(parse.max(merged_parse)),
         kept.saturating_add(merged_kept),
+    )
+}
+
+/// what the side `choices` keeps of each dataset `chosen` names leaves out of the other side's,
+/// as data.toml's entries or, where those are alike, `locks`' pins tell the sides apart.
+fn left_out(
+    manifests: &Manifests<'_>,
+    locks: Option<&Locks>,
+    choices: &Choices,
+    chosen: &BTreeSet<String>,
+) -> Vec<LeftOut> {
+    chosen
+        .iter()
+        .filter_map(|name| {
+            let kept = *choices.get(name)?;
+            let held = entry_held(manifests, name).unwrap_or_else(|| Held {
+                ours: pins_held(locks, name, Side::Ours),
+                theirs: pins_held(locks, name, Side::Theirs),
+            });
+            let other = match kept {
+                Side::Ours => held.theirs,
+                Side::Theirs => held.ours,
+            };
+            (!other.is_empty()).then(|| LeftOut {
+                said: format!(
+                    "{name} takes {} side, leaving out {}: {}",
+                    kept.whose(),
+                    kept.other().word(),
+                    other.join("; ")
+                ),
+                both: if combinable(manifests, name) {
+                    Some(keep_both(&[name.as_str()]))
+                } else {
+                    (entry_on(manifests, name, Side::Ours).is_some()
+                        && entry_on(manifests, name, Side::Theirs).is_some())
+                    .then(|| keep_beside(kept.other()))
+                },
+            })
+        })
+        .collect()
+}
+
+/// whether a person can write `name`'s table as both sides want it: each side's data.toml has it,
+/// and the keys they hold apart are `select` and `exclude` alone, since one list holds both sides'
+/// patterns where one table holds a single `ref` or `path`.
+fn combinable(manifests: &Manifests<'_>, name: &str) -> bool {
+    let (Some(ours), Some(theirs)) = (
+        entry_on(manifests, name, Side::Ours),
+        entry_on(manifests, name, Side::Theirs),
+    ) else {
+        return false;
+    };
+    let mut apart = ours
+        .keys()
+        .chain(theirs.keys())
+        .filter(|key| ours.get(*key) != theirs.get(*key))
+        .peekable();
+    apart.peek().is_some() && apart.all(|key| matches!(key.as_str(), "select" | "exclude"))
+}
+
+/// how to keep `other`'s version of a dataset beside the one the merge took, where one table
+/// cannot hold both.
+fn keep_beside(other: Side) -> String {
+    format!(
+        "to keep {} side's too, add it to data.toml as a dataset of another name, then run `{}`",
+        other.whose(),
+        crate::suggested::command("sync")
+    )
+}
+
+/// how to keep both sides' changes of `names` rather than one side's.
+fn keep_both(names: &[&str]) -> String {
+    let (datasets, its) = match names {
+        [one] => ((*one).to_owned(), "its table"),
+        many => (units::listed(many, "and"), "their tables"),
+    };
+    format!(
+        "to keep both sides' changes to {datasets}, write {its} in data.toml as both want it, with no conflict lines left there, then run `{}` and `{}`",
+        crate::suggested::command("lock"),
+        crate::suggested::command("sync")
     )
 }
 
@@ -1111,13 +1215,7 @@ fn answering<'a>(records: &'a [Parsed], name: &str, wanted: &str) -> Option<&'a 
 /// each key of its entry that one side lacks or holds otherwise, as git's whole side writes it
 /// where it can, and `not in data.toml` for a side without it. none where data.toml has it alike.
 fn entry_held(manifests: &Manifests<'_>, name: &str) -> Option<Held> {
-    let entry = |side: Side| {
-        let text = match manifests.whole(side) {
-            Some(whole) => whole.tables.get(name),
-            None => manifests.texts[usize::from(side == Side::Theirs)].get(name),
-        };
-        text.map(|text| keys(text, name))
-    };
+    let entry = |side: Side| entry_on(manifests, name, side);
     let held = match (entry(Side::Ours), entry(Side::Theirs)) {
         (Some(ours), Some(theirs)) => Held {
             ours: differing(&ours, &theirs),
@@ -1138,6 +1236,16 @@ fn entry_held(manifests: &Manifests<'_>, name: &str) -> Option<Held> {
         }
     };
     (!held.ours.is_empty() || !held.theirs.is_empty()).then_some(held)
+}
+
+/// the keys of `name`'s entry in `side`'s data.toml, as git's whole side writes it where it can,
+/// or none where that side lacks it.
+fn entry_on(manifests: &Manifests<'_>, name: &str, side: Side) -> Option<toml::Table> {
+    let text = match manifests.whole(side) {
+        Some(whole) => whole.tables.get(name),
+        None => manifests.texts[usize::from(side == Side::Theirs)].get(name),
+    };
+    text.map(|text| keys(text, name))
 }
 
 /// the keys of `name`'s entry in `text`, its own text as [`manifest::tables`] gives it.
@@ -1382,11 +1490,12 @@ pub(crate) fn reads(file: &str, text: &str) -> bool {
 
 /// the error naming each dataset in `conflicts` and why, with the merge so far, in the project at
 /// `root`. `shown` says the conflict lines showed a base, so the help names no conflict style: one
-/// is in use already.
+/// is in use already. the help says how to keep both sides of those `editable`, whose tables a
+/// person can write in data.toml as both sides want them.
 fn undecided(
     conflicts: &BTreeMap<String, Why>,
     summary: &Summary,
-    shown: bool,
+    (shown, editable): (bool, &[&str]),
     root: &Path,
 ) -> Error {
     let message = match conflicts.keys().collect::<Vec<_>>().as_slice() {
@@ -1434,11 +1543,15 @@ fn undecided(
             )
         });
     }
-    let error = error.help(format!(
+    let mut help = format!(
         "choose a side for each with `{}` or `{}`; both repeat",
         crate::suggested::command("lock --ours <name>"),
         crate::suggested::command("lock --theirs <name>")
-    ));
+    );
+    if !editable.is_empty() {
+        let _ = write!(help, ". {}", keep_both(editable));
+    }
+    let error = error.help(help);
     match serde_json::to_value(summary) {
         Ok(merge) => error.with_result(serde_json::json!({ "merge": merge })),
         Err(_) => error,

@@ -102,7 +102,7 @@ data.toml holds what a person asked for, data.lock what it resolved to, and `.fe
 | `src/project/lock/canonical.rs` | a fast reader for data.lock as fetchloom writes it; any other TOML goes to the general reader and its exact errors | `read` |  |
 | `src/project/lock/archives.rs` | the archives among a dataset's pins, a split archive with its parts | `pinned` | `Archive`, `Pinned`, `archive`, `of` |
 | `src/project/lock/lists.rs` | the compressed file lists in `data.lock.d`, never a link, for sources past 50,000 files | `Listed`, `read` | `texts`, `listed`, `compress`, `is_part`, `inline`, `folder` |
-| `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `kept`, `reads` |
+| `src/project/lock/merge.rs` | data.toml and data.lock merged a dataset at a time after a git merge, with the choices a person made | `merge` | `Merged`, `Summary`, `Side`, `Choices`, `decide`, `decide_removals`, `left_out`, `kept`, `reads` |
 | `src/project/lock/merge/markers.rs` | each side, and the base, read back from git's conflict lines without the tables a conflict cuts, beside the sides whole from git | `split` | `Sides`, `first` |
 | `src/project/overlap.rs` | where a project's data may never go: the cache folder, each found through the links above it and compared as a disk that ignores case compares names | `overlap`, `Overlap` | `resolved`, `folded` |
 | `src/project/state.rs` | `.fetchloom/state`, one JSON document with an index of its records: each placed file's size and time (`Look`) and the last sync's inputs (`Synced`) | `State`, `Placed` | `nanos`, `render`, `read_within`, `read_whole` |

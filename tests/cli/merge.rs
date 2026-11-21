@@ -830,6 +830,16 @@ fn lock_merges_an_upgrade_beside_a_new_dataset_by_itself() -> Result {
 /// a project importing kappa, committed on main, then placed in tables-tom on branch tom and in
 /// tables-priya on main, each in a commit of its own. none without git.
 fn placed_apart(sandbox: &Sandbox) -> Result<Option<()>> {
+    changed_apart(
+        sandbox,
+        ("path = \"tables-tom\"", "tom keeps the tables apart"),
+        ("path = \"tables-priya\"", "priya keeps the tables apart"),
+    )
+}
+
+/// a repository whose main branch, priya's, and branch tom each added their own line, with the
+/// commit subject beside it, to the dataset kappa, an import of one file. none without git.
+fn changed_apart(sandbox: &Sandbox, tom: (&str, &str), priya: (&str, &str)) -> Result<Option<()>> {
     fs::write(sandbox.folder("base")?.join("k.csv"), "k")?;
     if git(sandbox, &sandbox.work(), &["init", "-q"])?.is_none() {
         return Ok(None);
@@ -838,16 +848,16 @@ fn placed_apart(sandbox: &Sandbox) -> Result<Option<()>> {
     ok(sandbox, &["add", "."])?;
     ok(sandbox, &["commit", "-qm", "kappa"])?;
     let manifest = sandbox.work().join("data.toml");
-    let place = |folder: &str, why: &str| -> Result {
+    let change = |(line, why): (&str, &str)| -> Result {
         let text = fs::read_to_string(&manifest)?;
-        fs::write(&manifest, format!("{text}path = \"{folder}\"\n"))?;
+        fs::write(&manifest, format!("{text}{line}\n"))?;
         ok(sandbox, &["commit", "-qam", why])?;
         Ok(())
     };
     ok(sandbox, &["checkout", "-qb", "tom"])?;
-    place("tables-tom", "tom keeps the tables apart")?;
+    change(tom)?;
     ok(sandbox, &["checkout", "-q", "main"])?;
-    place("tables-priya", "priya keeps the tables apart")?;
+    change(priya)?;
     Ok(Some(()))
 }
 
@@ -924,6 +934,50 @@ fn a_needed_choice_shows_what_each_side_holds_and_whose_it_is() -> Result {
         );
         abandon(&sandbox)?;
         ok(&sandbox, &["checkout", "-q", "main"])?;
+    }
+    Ok(())
+}
+
+/// a side chosen names what it left out of the other. two exclude lists can be written as one, as
+/// the refusal says beforehand; two paths cannot, so the other side's goes under another name.
+#[test]
+fn a_chosen_side_says_what_it_left_out_and_how_to_keep_both() -> Result {
+    let choose = "choose a side for each with `fetchloom lock --ours <name>` or `fetchloom lock --theirs <name>`; both repeat";
+    let both = "to keep both sides' changes to kappa, write its table in data.toml as both want it, with no conflict lines left there, then run `fetchloom lock` and `fetchloom sync`";
+    let beside = "to keep our side's too, add it to data.toml as a dataset of another name, then run `fetchloom sync`";
+    let cases = [
+        (
+            ("exclude = [\"tom.csv\"]", "tom leaves his file out"),
+            ("exclude = [\"priya.csv\"]", "priya leaves hers out"),
+            "exclude = [\"priya.csv\"]",
+            format!("{choose}. {both}"),
+            both,
+        ),
+        (
+            ("path = \"tables-tom\"", "tom keeps the tables apart"),
+            ("path = \"tables-priya\"", "priya keeps the tables apart"),
+            "path = \"tables-priya\"",
+            choose.to_owned(),
+            beside,
+        ),
+    ];
+    for (tom, priya, ours, help, kept) in cases {
+        let sandbox = Sandbox::new()?;
+        if changed_apart(&sandbox, tom, priya)?.is_none() {
+            return Ok(());
+        }
+        stopped(&sandbox, &["merge", "-q", "tom"])?;
+        let refused = json(&run(&sandbox, &["--json", "lock"])?)?;
+        assert_eq!(refused["errors"][0]["help"], help, "{refused}");
+        let chosen = run(&sandbox, &["lock", "--theirs", "kappa"])?;
+        succeeded(&chosen)?;
+        let told = text(&chosen.stderr)?;
+        assert!(
+            told.contains(&format!(
+                "warning: kappa takes their side, leaving out ours: {ours}\n  help: {kept}\n"
+            )),
+            "{told}"
+        );
     }
     Ok(())
 }
