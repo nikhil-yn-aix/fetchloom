@@ -908,6 +908,12 @@ impl Output {
         self.style.interactive
     }
 
+    /// whether stdout goes to a pipe or a file while a person watches stderr at a terminal, as in
+    /// `fetchloom search iris | less`: what stderr tells then lands among what reads the pipe.
+    pub(crate) fn pipes_answer(&self) -> bool {
+        self.style.interactive && !self.style.watched
+    }
+
     /// a dim remark for a person at a terminal, never for a script, such as which project a
     /// command found above the current folder.
     pub(crate) fn aside(&self, text: &str) {

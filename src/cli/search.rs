@@ -23,12 +23,17 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     let limit = args.limit.map(usize::from);
     let report = find(context, &context.net(), &words, &args.source, limit).await?;
     let output = &context.output;
-    output.done(
-        "Found",
-        &format!("{} for \"{words}\"", counted(&report.candidates)),
-    );
+    // a pipe a person reads at the same terminal, as `| less` or `| grep`, gets the rows alone:
+    // lines told on stderr meanwhile showed each match twice and landed inside the pager's screen
+    let piped = output.pipes_answer();
+    if !piped {
+        output.done(
+            "Found",
+            &format!("{} for \"{words}\"", counted(&report.candidates)),
+        );
+    }
     // without an interactive terminal, as under CI, the references on stdout are the list
-    if output.watched_story() {
+    if output.watched_story() && !piped {
         let parts = parts(output, &report.candidates, output.width(), LIST_LEAD);
         let pad = widest(parts.iter().map(|shown| shown.reference.as_str()))
             .min(crate::output::REFERENCE_COLUMN);
@@ -51,6 +56,9 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         for candidate in &report.candidates {
             output.answer(&line(candidate));
         }
+    }
+    if piped {
+        return Ok(report);
     }
     let each = limit.unwrap_or(search::LIMIT);
     if report.left_out > 0 {

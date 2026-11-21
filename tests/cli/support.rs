@@ -309,11 +309,36 @@ impl Sandbox {
     /// [`Sandbox::on_a_terminal`] for a command built elsewhere, with its arguments and settings.
     #[cfg(target_os = "linux")]
     pub(crate) fn on_a_terminal_running(&self, inner: &Fetchloom) -> Result<Option<String>> {
+        self.on_a_terminal_answering(inner, None)
+    }
+
+    /// [`Sandbox::on_a_terminal_running`] with stdout going to `file`, as `> file` sends it, while
+    /// stderr stays on the terminal: what a person watches while a file or a pipe takes the answer.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn on_a_terminal_into(
+        &self,
+        inner: &Fetchloom,
+        file: &Path,
+    ) -> Result<Option<String>> {
+        self.on_a_terminal_answering(inner, Some(file))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn on_a_terminal_answering(
+        &self,
+        inner: &Fetchloom,
+        answer: Option<&Path>,
+    ) -> Result<Option<String>> {
+        let quoted =
+            |word: &std::ffi::OsStr| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''"));
         let mut script = inner.through(|inner| {
-            let line: Vec<String> = std::iter::once(inner.get_program())
+            let mut line: Vec<String> = std::iter::once(inner.get_program())
                 .chain(inner.get_args())
-                .map(|word| format!("'{}'", word.to_string_lossy().replace('\'', r"'\''")))
+                .map(quoted)
                 .collect();
+            if let Some(file) = answer {
+                line.push(format!("> {}", quoted(file.as_os_str())));
+            }
             let mut script = Command::new("script");
             script
                 .args(["-qec", &line.join(" "), "/dev/null"])

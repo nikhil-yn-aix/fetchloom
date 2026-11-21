@@ -102,6 +102,34 @@ fn search_at_a_terminal_says_how_to_add_a_match() -> Result {
     Ok(())
 }
 
+/// `fetchloom search iris | less` once showed every match twice, the table through stderr in the
+/// middle of the pager's screen: with stdout in a pipe or a file, it holds the matches alone and
+/// stderr says only that the sites are searched.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_search_into_a_pipe_leaves_the_matches_to_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let command = catalogs.command(&sandbox, &["search", "iris"]);
+    let answer = sandbox.folder("answer")?.join("rows.txt");
+    let Some(screen) = sandbox.on_a_terminal_into(&command, &answer)? else {
+        return Ok(());
+    };
+    let rows = std::fs::read_to_string(&answer)?;
+    assert!(
+        rows.starts_with("hf:datasets/scikit-learn/iris\t"),
+        "{rows}"
+    );
+    assert!(rows.lines().all(|row| row.contains('\t')), "{rows}");
+    let told: Vec<&str> = screen
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    assert_eq!(told.len(), 1, "{screen:?}");
+    assert!(told[0].trim_start().starts_with("Searching "), "{screen:?}");
+    Ok(())
+}
+
 /// a list taller than the terminal scrolls in place: a draw that climbed past the top of the
 /// screen could not reach its own first row again, and each key would add another copy below.
 #[cfg(target_os = "linux")]
