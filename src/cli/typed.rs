@@ -195,7 +195,7 @@ pub(super) fn command_line(args: impl Iterator<Item = std::ffi::OsString>) -> Op
 
 /// whether `arg` holds a link with a query, a fragment or a login, which may carry a secret under
 /// a name no list knows, as dropbox's `rlkey`, even after `=` or a short option or percent-encoded.
-fn may_hold_secret(arg: &str) -> bool {
+pub(in crate::cli) fn may_hold_secret(arg: &str) -> bool {
     if matches!(crate::shown::mask_query(arg), Cow::Owned(_)) {
         return true;
     }

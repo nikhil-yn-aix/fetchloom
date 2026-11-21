@@ -409,6 +409,8 @@ fn describe(
         meant
     } else if let Some(meant) = guess(err, parent) {
         format!("did you mean `{meant}`?")
+    } else if let Some(meant) = dataset_meant(err, parent) {
+        meant
     } else if let Some(reason) = (err.kind() == ErrorKind::ValueValidation)
         .then(|| std::error::Error::source(err))
         .flatten()
@@ -513,6 +515,45 @@ fn guess(err: &clap::Error, parent: Option<&str>) -> Option<String> {
         ErrorKind::UnknownArgument => option_meant(&raw(ContextKind::InvalidArg)?, parent),
         _ => None,
     }
+}
+
+/// what to run for a link, an id, search words or a path typed where the command goes, as in
+/// `fetchloom iris`: the person's own line with `get` or `add` before the word, as `download` is
+/// answered. a word that may hold a secret is never repeated.
+fn dataset_meant(err: &clap::Error, parent: Option<&str>) -> Option<String> {
+    if parent.is_some() || err.kind() != ErrorKind::InvalidSubcommand {
+        return None;
+    }
+    let word = typed(err, ContextKind::InvalidSubcommand)
+        .into_iter()
+        .next()?;
+    let path = crate::source::local::is_path(&word);
+    let reference = crate::source::Reference::parse(&word).is_ok();
+    if !path && !reference && !crate::source::search::is_search(&word) {
+        return None;
+    }
+    let repeated =
+        !super::typed::may_hold_secret(&word) && crate::shown::mask_reference(&word) == word;
+    let line = |command: &str| {
+        let instead = if repeated {
+            format!("fetchloom {command} {}", super::shell_word(&word))
+        } else {
+            format!("fetchloom {command} <link>")
+        };
+        super::meant(&[&word], &[command, &word], instead)
+    };
+    Some(if path {
+        format!(
+            "`{}` adds files on this machine to the project",
+            line("add")
+        )
+    } else {
+        format!(
+            "`{}` downloads once; `{}` pins it",
+            line("get"),
+            line("add")
+        )
+    })
 }
 
 /// the long option whose name is nearest to `typed` in spelling, ignoring case, among those of
@@ -974,8 +1015,58 @@ mod tests {
             Some("`fetchloom add <name>` adds a dataset; `fetchloom sync` fills data/")
         );
         assert_eq!(
-            problem(&["fetchloom", "banana"])?.help.as_deref(),
+            problem(&["fetchloom", "%%"])?.help.as_deref(),
             Some("`fetchloom --help` lists commands and options")
+        );
+        Ok(())
+    }
+
+    /// a link, an id, a name or a path where the command goes is what the person wants fetched,
+    /// so the help puts get or add before it, as it does for `download`.
+    #[test]
+    fn a_dataset_where_the_command_goes_is_answered_with_get_and_add()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for word in [
+            "iris",
+            "GSE60450",
+            "https://example.org/data/penguins.csv",
+            "zenodo:3608990",
+            "10.5281/zenodo.3608990",
+        ] {
+            let error = problem(&["fetchloom", word])?;
+            assert_eq!(
+                error.message,
+                format!("there is no command called \"{word}\"")
+            );
+            assert_eq!(
+                error.help.as_deref(),
+                Some(
+                    format!(
+                        "`fetchloom get {word}` downloads once; `fetchloom add {word}` pins it"
+                    )
+                    .as_str()
+                ),
+                "{word}"
+            );
+        }
+        assert_eq!(
+            problem(&["fetchloom", "../measurements"])?.help.as_deref(),
+            Some("`fetchloom add ../measurements` adds files on this machine to the project")
+        );
+        // a link that may hold a secret is never repeated
+        assert_eq!(
+            problem(&[
+                "fetchloom",
+                "https://example.org/data.csv?token=SECRET_CANARY"
+            ])?
+            .help
+            .as_deref(),
+            Some("`fetchloom get <link>` downloads once; `fetchloom add <link>` pins it")
+        );
+        // a word a level down is no dataset
+        assert_eq!(
+            problem(&["fetchloom", "cache", "iris"])?.help.as_deref(),
+            Some("`fetchloom cache --help` says what it takes")
         );
         Ok(())
     }
