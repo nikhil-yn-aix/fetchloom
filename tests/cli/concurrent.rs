@@ -66,7 +66,7 @@ fn path_waits_for_a_running_sync_and_answers() -> Result {
 /// first's download, so its log says it waited and never that it downloads, which the file's
 /// size, known from data.lock, would otherwise have it say before it learns it waits.
 #[test]
-fn a_sync_that_waited_for_anothers_download_says_it_downloaded_nothing() -> Result {
+fn a_sync_that_waited_for_another_download_says_it_downloaded_nothing() -> Result {
     let sandbox = Sandbox::new()?;
     let mut slow = reply(
         "200 OK",
