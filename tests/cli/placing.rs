@@ -4383,7 +4383,7 @@ fn a_placing_sync_says_what_it_places_as_it_starts() -> Result {
     assert!(!stderr.contains("Placing"), "{stderr}");
     let data = sandbox.work().join("data");
     let placed = |args: &[&str]| -> Result<std::process::Output> {
-        fs::remove_dir_all(&data)?;
+        crate::support::delete_folder(&data)?;
         let synced = sandbox.run(args)?;
         assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
         assert_eq!(fs::read(data.join("flowers/b.csv"))?, b"b.csv");
@@ -4417,7 +4417,7 @@ fn only_a_placing_sync_says_what_it_places_as_it_starts() -> Result {
     };
     run(&["add", &flowers.display().to_string()])?;
     let data = sandbox.work().join("data");
-    fs::remove_dir_all(&data)?;
+    crate::support::delete_folder(&data)?;
     let dry = run(&["sync", "--dry-run"])?;
     assert!(dry.contains("Would"), "{dry}");
     assert!(!dry.contains("Placing"), "{dry}");
