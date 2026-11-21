@@ -8,12 +8,13 @@ the examples come from one real run, in order, in a project holding `penguins`, 
 
 write results, cleaned tables and features outside the data folder, such as in `processed/` beside it. fetchloom never looks there. code finds the inputs with `fetchloom path <name>`, so it keeps working when a dataset's folder changes.
 
-a file written inside the data folder is kept too: `status` lists it as extra and `sync` leaves it there.
+a file written inside a dataset's folder is kept too, but that folder's .gitignore hides it from git, so `status` lists it as extra, with a hint, and `sync` leaves it there. one written elsewhere in the data folder, as in `data/processed/`, is yours alone, which git sees and status never lists.
 
 ```text
 $ fetchloom status
       Extra data/penguins/clean.csv
       Found 1 difference from data.lock
+  hint: git sees none of the files you put in data/penguins, since its .gitignore hides the folder: keep files of your own in a folder outside it
 ```
 
 tools that write their own index or cache files beside the files they read leave such extras as well.

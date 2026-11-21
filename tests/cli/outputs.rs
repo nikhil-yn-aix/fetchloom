@@ -163,7 +163,8 @@ fn a_teammate_gets_an_output_where_the_author_had_it_and_may_write_it() -> Resul
 /// a teammate pulling an output's moved folder gets its pin in the new folder, and the copies a
 /// sync placed in the old one go as any dataset's old placement goes, with the emptied folder and
 /// its marker. a copy changed there, or a file added, stays under the folder's marker, and one line
-/// names the folder, once. the marker goes with the folder once those files go.
+/// names the folder, once; status lists them as extra, as git sees none of them. the marker goes
+/// with the folder once those files go.
 #[test]
 fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
     let sandbox = Sandbox::new()?;
@@ -214,7 +215,7 @@ fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
         b"*\n",
         "{stderr}"
     );
-    let said = "data/processed held processed until its folder moved to data/proc2, and still holds 2 files its pin does not hold, such as data/processed/notes.txt, so the folder stays";
+    let said = "data/processed held processed until its folder moved to data/proc2, and still holds 2 files its pin does not hold, such as data/processed/notes.txt, so the folder stays\n  help: they are yours, and the folder's .gitignore still hides them from git: move them out to keep them, or delete data/processed once you no longer need them\n";
     assert_eq!(stderr.matches(said).count(), 1, "{stderr}");
     assert!(!stderr.contains("no longer needed"), "{stderr}");
     let again = sandbox.command_in(&edited, &["sync"]).output()?;
@@ -224,6 +225,22 @@ fn a_moved_outputs_old_copies_go_from_a_teammates_folder() -> Result {
     assert_eq!(
         crate::support::marker(&old.join(".gitignore"))?,
         b"*\n",
+        "{stderr}"
+    );
+    let document = json(
+        &sandbox
+            .command_in(&edited, &["--json", "status"])
+            .output()?,
+    )?;
+    assert_eq!(
+        listed(&document, "extra"),
+        ["data/processed/notes.txt", "data/processed/summary.txt"],
+        "{document}"
+    );
+    let status = sandbox.command_in(&edited, &["status"]).output()?;
+    let stderr = text(&status.stderr)?;
+    assert!(
+        stderr.contains("hint: git sees none of the files you put in data/processed, since"),
         "{stderr}"
     );
     for file in ["summary.txt", "notes.txt"] {
@@ -366,7 +383,7 @@ fn an_outputs_folder_gets_its_marker_and_never_takes_it_in() -> Result {
             .command_in(project, &["--json", "status"])
             .output()?;
         let document = json(&status)?;
-        for kind in ["missing", "edited", "extra", "yours"] {
+        for kind in ["missing", "edited", "extra"] {
             assert_eq!(
                 listed(&document, kind),
                 Vec::<String>::new(),
@@ -2844,7 +2861,7 @@ fn a_dropping_coming_or_going_is_no_change_to_an_output() -> Result {
     let checked = sandbox.run(&["status", "--verify", "--check"])?;
     assert_eq!(checked.status.code(), Some(0), "{}", text(&checked.stderr)?);
     let document = json(&sandbox.run(&["--json", "status"])?)?;
-    for kind in ["missing", "edited", "extra", "yours"] {
+    for kind in ["missing", "edited", "extra"] {
         assert_eq!(
             listed(&document, kind),
             Vec::<String>::new(),

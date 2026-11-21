@@ -46,8 +46,8 @@ fn status_reports_a_hardlink_edited_through_the_caches_name() -> Result {
 }
 
 /// a file named as sync names the changed copy it keeps of a file it put back gets a row saying
-/// what it is and what to do with it; any other file of a person's in the folder is theirs, kept,
-/// with no row, and only `-v` names it.
+/// what it is and what to do with it; any other file of a person's in the folder is extra too, on
+/// a row with no such words.
 #[test]
 fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
     let sandbox = Sandbox::new()?;
@@ -64,16 +64,11 @@ fn a_changed_copy_sync_kept_says_what_to_do_with_it() -> Result {
     assert_eq!(
         text(&output.stdout)?,
         format!(
-            "      Extra data/iris/iris.csv.changed · {kept}\n      Extra data/iris/iris.csv.changed.2 · {kept}\n"
+            "      Extra data/iris/iris.csv.changed · {kept}\n      Extra data/iris/iris.csv.changed.2 · {kept}\n      Extra data/iris/notes.changed\n"
         )
     );
     let stderr = text(&output.stderr)?;
     assert!(!stderr.contains("notes.changed"), "{stderr}");
-    let detailed = text(&sandbox.run(&["status", "-v"])?.stderr)?;
-    assert!(
-        detailed.contains("       Kept data/iris/notes.changed · yours\n"),
-        "{detailed}"
-    );
     // with the pinned file edited too, status surveys the whole folder and says the same
     delete(&folder.join("iris.csv"))?;
     fs::write(folder.join("iris.csv"), "mine\n")?;
@@ -113,14 +108,13 @@ fn status_writes_a_lists_rows_together() -> Result {
     fs::write(data.join("c/c.csv"), "mine\n")?;
     fs::write(data.join("d/notes.txt"), "mine\n")?;
     fs::write(data.join("d/more.txt"), "mine\n")?;
-    // a person's own files in a dataset folder get no row in a plain status
-    let rows = "    Missing data/a/a.csv\n    Missing data/b/b.csv\n     Edited data/c/c.csv\n";
+    let rows = "    Missing data/a/a.csv\n    Missing data/b/b.csv\n     Edited data/c/c.csv\n      Extra data/d/more.txt\n      Extra data/d/notes.txt\n";
     let plain = sandbox.run(&["status"])?;
     assert_eq!(plain.status.code(), Some(0));
     assert_eq!(text(&plain.stdout)?, rows);
     assert_eq!(
         text(&plain.stderr)?,
-        "      Found 3 differences from data.lock\n  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n  hint: save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock\n"
+        "      Found 5 differences from data.lock\n  hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps\n  hint: save any changes you need, then use `fetchloom sync --force` to replace edited or conflicting files at paths in data.lock\n  hint: git sees none of the files you put in data/d, since its .gitignore hides the folder: keep files of your own in a folder outside it\n"
     );
     // -v's stderr names the resources it took, which follow the memory free at the moment
     let verbose = sandbox.run(&["status", "-v"])?;
@@ -129,7 +123,7 @@ fn status_writes_a_lists_rows_together() -> Result {
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     let result = &document["result"];
     assert_eq!(
-        (&result["missing"], &result["edited"], &result["yours"]),
+        (&result["missing"], &result["edited"], &result["extra"]),
         (
             &serde_json::json!(["data/a/a.csv", "data/b/b.csv"]),
             &serde_json::json!(["data/c/c.csv"]),
@@ -191,16 +185,16 @@ fn a_settled_status_answers_alike_with_only_its_recorded_files() -> Result {
     assert_eq!(settled[0].0, Some(0));
     assert_eq!(settled[0].1, "");
     fs::write(work.join("data/b/notes.txt"), "mine\n")?;
-    let yours = alike("a person's file")?;
+    let theirs = alike("a person's file")?;
     assert_eq!(
-        found(&yours, "yours")?,
+        found(&theirs, "extra")?,
         serde_json::json!(["data/b/notes.txt"])
     );
     fs::write(work.join("data/b/b.csv.changed"), "theirs\n")?;
     let kept = alike("a changed copy")?;
     assert_eq!(
         found(&kept, "extra")?,
-        serde_json::json!(["data/b/b.csv.changed"])
+        serde_json::json!(["data/b/b.csv.changed", "data/b/notes.txt"])
     );
     assert!(
         kept[0].1.contains("Extra data/b/b.csv.changed"),
@@ -460,8 +454,8 @@ fn as_a_whole_read(sandbox: &Sandbox, case: &str, unlisted: bool) -> Result {
 }
 
 /// the files finder, a mac on another disk and explorer make in a data folder are no difference,
-/// a person's own file there is theirs, kept, which json names, and a folder sync or remove leaves
-/// holding only the system's files goes, taking them with it.
+/// a person's own file there is extra, kept, and a folder sync or remove leaves holding only the
+/// system's files goes, taking them with it.
 #[test]
 fn files_the_system_makes_are_no_difference() -> Result {
     let sandbox = Sandbox::new()?;
@@ -487,13 +481,10 @@ fn files_the_system_makes_are_no_difference() -> Result {
     fs::write(b.join("notes.txt"), "mine\n")?;
     let output = sandbox.run(&["status"])?;
     ok(&output)?;
-    assert_eq!(text(&output.stdout)?, "");
-    let stderr = text(&output.stderr)?;
-    assert!(!stderr.contains("notes.txt"), "{stderr}");
+    assert_eq!(text(&output.stdout)?, "      Extra data/b/notes.txt\n");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(document["result"]["extra"], serde_json::json!([]));
     assert_eq!(
-        document["result"]["yours"],
+        document["result"]["extra"],
         serde_json::json!(["data/b/notes.txt"])
     );
     let output = sandbox.run(&["remove", "iris"])?;
@@ -511,7 +502,7 @@ fn files_the_system_makes_are_no_difference() -> Result {
 }
 
 /// what a person files under a folder a system names, as a disk's trash holding what they may
-/// still restore, is theirs: status names it as theirs, kept, and its folder stays when its
+/// still restore, is theirs: status lists it as extra, kept, and its folder stays when its
 /// dataset goes.
 #[test]
 fn files_in_a_folder_a_system_names_are_a_persons() -> Result {
@@ -538,7 +529,7 @@ fn files_in_a_folder_a_system_names_are_a_persons() -> Result {
     fs::write(b.join(".DS_Store"), "made by the system\n")?;
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
-        document["result"]["yours"],
+        document["result"]["extra"],
         serde_json::json!(theirs),
         "{document}"
     );

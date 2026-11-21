@@ -1,6 +1,7 @@
 //! what fetchloom owns in a project: its datasets' folders, and nothing beside them. a file
-//! outside every dataset's folder is the person's alone, never counted, listed or touched, and one
-//! a person puts inside a dataset's folder is theirs too, named once and kept.
+//! outside every dataset's folder is the person's alone, which git sees, never counted, listed or
+//! touched, and one a person puts inside a dataset's own folder, which its .gitignore hides from
+//! git, is theirs too, kept, and listed as extra.
 
 use std::fs;
 
@@ -10,7 +11,7 @@ use crate::support::{
 };
 
 /// a marker whose record went with a lost state is fetchloom's still, in a data folder no link
-/// leads to, though it names the id the lost state held: status never names it as the person's,
+/// leads to, though it names the id the lost state held: status never lists it as extra,
 /// the next sync writes it again naming the project's new id, and removing the dataset takes it
 /// with the folder.
 #[test]
@@ -34,9 +35,9 @@ fn a_marker_whose_record_was_lost_is_fetchlooms() -> Result {
         assert_eq!(output.status.code(), Some(0), "{args:?}: {stderr}");
         if args[0] == "--json" {
             let document = json(&output)?;
-            assert_eq!(
-                document["result"]["yours"],
-                serde_json::json!([]),
+            let extra = document["result"]["extra"].as_array().ok_or("a list")?;
+            assert!(
+                !extra.iter().any(|path| path == "data/flowers/.gitignore"),
                 "{document}"
             );
         }
@@ -77,10 +78,10 @@ fn write_all(sandbox: &Sandbox, files: &[(&str, &str)]) -> Result {
 }
 
 /// status judges only what lies in a dataset's folder: files a pipeline writes beside the
-/// datasets, as cookiecutter's data/processed and data/interim, are never counted or listed, and
-/// files a person puts in a dataset's folder are theirs, kept, never counted: a plain status says
-/// nothing of them, `-v` and json name them. sync, with --force too, leaves every one as it was,
-/// and lock --check has nothing to say of them.
+/// datasets, as cookiecutter's data/processed and data/interim, are the person's, which git sees,
+/// never counted or listed. a file a person puts in a dataset's folder, which its .gitignore keeps
+/// out of git, is extra, as a row, in json and in the count, with a hint that says so. sync, with
+/// --force too, leaves every one as it was, and lock --check has nothing to say of them.
 #[test]
 fn only_files_in_dataset_folders_are_judged() -> Result {
     let sandbox = Sandbox::new()?;
@@ -96,34 +97,28 @@ fn only_files_in_dataset_folders_are_judged() -> Result {
 
     let status = sandbox.run(&["status"])?;
     assert_eq!(status.status.code(), Some(0));
-    assert_eq!(text(&status.stdout)?, "", "no row, since nothing differs");
+    assert_eq!(
+        text(&status.stdout)?,
+        "      Extra data/iris/iris_clean.csv\n      Extra data/iris/notes/readme.md\n"
+    );
     let told = without_copy_warning(&text(&status.stderr)?);
     assert_eq!(
         told,
-        "         Ok everything matches data.lock by size and time\n"
+        "      Found 2 differences from data.lock\n  hint: git sees none of the files you put in data/iris, since its .gitignore hides the folder: keep files of your own in a folder outside it\n"
     );
-    let bare = sandbox.run(&[])?;
-    assert_eq!(
-        without_copy_warning(&text(&bare.stderr)?),
-        "         Ok everything matches data.lock by size and time\n",
-        "the one-line answer counts none of them"
-    );
-    let detailed = without_copy_warning(&text(&sandbox.run(&["status", "-v"])?.stderr)?);
+    let bare = without_copy_warning(&text(&sandbox.run(&[])?.stderr)?);
     assert!(
-        detailed.contains(
-            "       Kept 2 files of yours in dataset folders\n            data/iris/iris_clean.csv\n            data/iris/notes/readme.md\n"
-        ),
-        "{detailed}"
+        bare.starts_with("      Found 2 differences from data.lock\n"),
+        "the one-line answer counts them: {bare}"
     );
-    assert!(!detailed.contains("processed"), "{detailed}");
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     let result = &document["result"];
-    assert_eq!(result["extra"], serde_json::json!([]), "{document}");
     assert_eq!(
-        result["yours"],
+        result["extra"],
         serde_json::json!(["data/iris/iris_clean.csv", "data/iris/notes/readme.md"]),
         "{document}"
     );
+    assert!(result.get("yours").is_none(), "{document}");
     let whole = document.to_string();
     assert!(
         !whole.contains("processed") && !whole.contains("interim"),
@@ -133,13 +128,8 @@ fn only_files_in_dataset_folders_are_judged() -> Result {
     write_all(&sandbox, &[("data/iris/one.csv", "e\n")])?;
     fs::remove_file(sandbox.work().join("data/iris/notes/readme.md"))?;
     fs::remove_file(sandbox.work().join("data/iris/iris_clean.csv"))?;
-    let one = without_copy_warning(&text(&sandbox.run(&["status"])?.stderr)?);
-    assert!(!one.contains("one.csv"), "{one}");
-    let one = without_copy_warning(&text(&sandbox.run(&["status", "-v"])?.stderr)?);
-    assert!(
-        one.contains("       Kept data/iris/one.csv · yours\n"),
-        "{one}"
-    );
+    let one = sandbox.run(&["status"])?;
+    assert_eq!(text(&one.stdout)?, "      Extra data/iris/one.csv\n");
 
     for args in [&["sync"][..], &["sync", "--force"], &["lock", "--check"]] {
         let output = sandbox.run(args)?;
@@ -496,7 +486,8 @@ fn a_marker_goes_with_its_dataset() -> Result {
 
 /// a marker someone deleted comes back with the next sync, quietly, since the add said its line
 /// once and neither the dry run nor the sync says it again. a .gitignore of the person's own where
-/// a marker would go is never written over, and status names it as theirs.
+/// a marker would go is never written over, and status lists it as extra, never saying git hides
+/// the folder, as no marker of fetchloom's does.
 #[test]
 fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     let sandbox = Sandbox::new()?;
@@ -536,18 +527,20 @@ fn a_marker_comes_back_but_never_over_a_persons_file() -> Result {
     }
     assert_eq!(fs::read(&theirs)?, b"");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(
-        status["result"]["yours"],
-        serde_json::json!(["data/wine/.gitignore"]),
+    let extra = status["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        extra.iter().any(|path| path == "data/wine/.gitignore"),
         "{status}"
     );
+    let told = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(!told.contains("git sees none"), "{told}");
     Ok(())
 }
 
 /// a .gitignore that holds just what fetchloom writes, `*`, in a dataset's folder of a data folder
 /// no link leads to, is taken as its marker, as one whose record was lost is, and written again
-/// naming the project: status names none as the person's, and removing the dataset takes it with
-/// the folder.
+/// naming the project: status lists none as extra, and removing the dataset takes it with the
+/// folder.
 #[test]
 fn a_gitignore_like_fetchlooms_is_taken_as_its_marker() -> Result {
     let sandbox = Sandbox::new()?;
@@ -555,7 +548,11 @@ fn a_gitignore_like_fetchlooms_is_taken_as_its_marker() -> Result {
     write_all(&sandbox, &[("data/iris/.gitignore", "*\n")])?;
     with_iris(&sandbox, &server)?;
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(status["result"]["yours"], serde_json::json!([]), "{status}");
+    let extra = status["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        !extra.iter().any(|path| path == "data/iris/.gitignore"),
+        "{status}"
+    );
     assert_eq!(
         crate::support::marker(&sandbox.work().join("data/iris/.gitignore"))?,
         b"*\n"
@@ -646,9 +643,9 @@ fn the_marker_is_readable_as_a_persons_own_files_are() -> Result {
 
 /// a dataset placed in the data folder itself shares it with the person's own files, so its
 /// .gitignore names the dataset's own entries, anchored, rather than everything: git still sees
-/// what the person writes there. the list follows the datasets' entries as they change, and a
-/// folder that holds another dataset's folder is listed the same way, while a folder only a
-/// dataset fills keeps `*`.
+/// what the person writes there, and status lists none of it. the list follows the datasets'
+/// entries as they change, and a folder that holds another dataset's folder is listed the same
+/// way, while a folder only a dataset fills keeps `*`, so status lists the person's files there.
 #[test]
 fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> Result {
     let sandbox = Sandbox::new()?;
@@ -689,6 +686,7 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
         crate::support::marker(&data.join("nested/inner/.gitignore"))?,
         b"*\n"
     );
+    write_all(&sandbox, &[("data/nested/mine.txt", "mine\n")])?;
     if in_git {
         write_all(&sandbox, &[("data/scores.csv", "0.9\n")])?;
         assert_eq!(
@@ -697,6 +695,7 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
                 "data.lock",
                 "data.toml",
                 "data/my_labels.csv",
+                "data/nested/mine.txt",
                 "data/scores.csv"
             ]
         );
@@ -721,6 +720,8 @@ fn a_marker_in_a_folder_shared_with_the_person_names_the_datasets_entries() -> R
         crate::support::marker(&data.join("nested/.gitignore"))?,
         b"*\n"
     );
+    let status = sandbox.run(&["status"])?;
+    assert_eq!(text(&status.stdout)?, "      Extra data/nested/mine.txt\n");
     if in_git {
         assert!(stderr.contains(&ignored_line("data/nested")), "{stderr}");
         // the remove said it, so the marker made again says nothing more

@@ -64,7 +64,7 @@ if answer["result"]["placement"]["kept"]:
 
 pass `--yes` only when you approve the download: JSON mode cannot answer a question, so an unapproved large download fails with `unconfirmed` and exit 1. never add `--force` by itself, since it overwrites a person's files.
 
-`kept` lists the files sync left as they were, each with its reason, and does not include other extra files. for those, run `fetchloom --json status` and check its arrays, which [status](../commands/status.md#categories) explains: every array empty, but `unplaced`, means status found no differences. it compares sizes and times, not every byte, unless `--verify` asks it to hash every placed file.
+`kept` lists the files sync left as they were, each with its reason, and does not include other extra files. for those, run `fetchloom --json status` and check its arrays, which [status](../commands/status.md#categories) explains: every array empty, but `adoptable` and `dropped`, which name no difference, means status found no differences. it compares sizes and times, not every byte, unless `--verify` asks it to hash every placed file.
 
 a job that needs one dataset names it, as in `fetchloom --json --yes sync --locked small`: only small is downloaded, placed and checked against data.lock, and `result.selected` echoes `["small"]`.
 

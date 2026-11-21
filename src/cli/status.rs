@@ -2,7 +2,7 @@
 //! nothing and hashing only files their size and time cannot vouch for, or all for `--verify`.
 
 use std::cell::OnceCell;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::Serialize;
@@ -58,12 +58,15 @@ pub(super) struct Status {
     /// files fetchloom placed for an older lock, or read-only for a dataset that now asks for
     /// writable copies, which `sync` replaces.
     outdated: Vec<String>,
-    /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps, that
-    /// count as differences: a changed copy sync kept, a file moved aside, or one in a folder
-    /// whose extras count.
+    /// files no dataset places, not placed by fetchloom or changed since, which `sync` keeps and
+    /// nothing else would show: a changed copy sync kept, a file moved aside, one in an output's
+    /// folder, or a person's file in a dataset's folder whose .gitignore keeps it out of git. a
+    /// person's file git sees is none of these.
     extra: Vec<String>,
-    /// files a person put in a dataset's folder, which fetchloom keeps and never counts.
-    yours: Vec<String>,
+    /// the folders of the files of `extra` a person put in a fetched dataset's own folder, where
+    /// fetchloom's .gitignore hides them from git.
+    #[serde(skip)]
+    hidden: BTreeSet<String>,
     /// the files of `extra` named as the changed copy sync keeps of a file it put back, with that
     /// file.
     #[serde(skip)]
@@ -239,6 +242,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
         }
         tell_imported_elsewhere(output, &status, &manifest);
         tell_repairs(output, &status);
+        tell_hidden(output, &status);
     }
     if status.unfinished > 0 {
         let them = if status.unfinished == 1 { "it" } else { "them" };
@@ -1127,7 +1131,7 @@ fn compare(
 
 /// sorts `extra` of `status`, the files no dataset places, `wanted` naming those placed: a changed
 /// copy sync kept and a file kept aside stay, an output's folder keeps its own files, and a
-/// dataset's folder the person's, in `yours`.
+/// dataset's folder the person's, as [`sort_extra`] says.
 fn sort_unplaced(
     status: &mut Status,
     survey: &Survey,
@@ -1139,7 +1143,12 @@ fn sort_unplaced(
     });
     status.kept_copies = kept_copies(&status.extra, wanted);
     status.set_aside = set_aside(&status.extra, survey);
-    sort_extra(status, &plan::Owned::of(manifest));
+    let marked = |folder: &str| {
+        matches!(survey.marks.get(folder), Some(disk::Mark::Made(_)))
+            || survey.unrecorded_marker(folder)
+    };
+    let owned = plan::Owned::of(manifest).with_left(&survey.state.left);
+    sort_extra(status, &owned, &marked);
 }
 
 /// sorts into `status` the files a settled project's data folder holds that no record claims, as
@@ -1155,20 +1164,27 @@ fn settled_extra(status: &mut Status, survey: &Survey, manifest: &Manifest) {
     sort_unplaced(status, survey, manifest, &recorded);
 }
 
-/// leaves in `extra` only the files fetchloom did not place that count as differences: a changed
-/// copy sync kept, a file moved aside, and any in a folder whose extras count. the others in a
-/// dataset's folder are a person's, kept in `yours`, and those outside every dataset's folder are
-/// none of fetchloom's business.
-fn sort_extra(status: &mut Status, owned: &plan::Owned) {
+/// leaves in `extra` the files fetchloom did not place that count as differences: a changed copy
+/// sync kept and a file moved aside wherever they are, any file in an output's folder, and a
+/// person's file in a fetched dataset's own folder, whose .gitignore hides all it holds from git,
+/// noting in `hidden` each such folder `marked` says fetchloom's marker stands in. a person's
+/// file git sees, outside every dataset's folder or in one shared with the person, is none of
+/// fetchloom's business.
+fn sort_extra(status: &mut Status, owned: &plan::Owned, marked: &dyn Fn(&str) -> bool) {
     for path in std::mem::take(&mut status.extra) {
         if status.kept_copies.contains_key(&path) || status.set_aside.contains_key(&path) {
             status.extra.push(path);
             continue;
         }
         match owned.holding(&path) {
-            Some(folder) if folder.extras_count => status.extra.push(path),
-            Some(_) => status.yours.push(path),
-            None => {}
+            Some((_, owned)) if owned.extras_count => status.extra.push(path),
+            Some((folder, owned)) if !owned.shared => {
+                if marked(folder) {
+                    status.hidden.insert(folder.to_owned());
+                }
+                status.extra.push(path);
+            }
+            _ => {}
         }
     }
 }
@@ -1689,27 +1705,33 @@ fn list(output: &Output, status: &Status) {
         (format!("{path} · {cause}"), 1)
     });
     report_rows(output, "Damaged", damaged.collect(), shown);
-    tell_yours(output, status);
 }
 
-/// with `-v`, a faint line on stderr for the files a person put in dataset folders, which
-/// fetchloom keeps and never counts: one by its path, more by their number, each then on a line of
-/// its own. a plain status says nothing of them.
-fn tell_yours(output: &Output, status: &Status) {
-    if !output.shows_details() {
+/// says where a person's files lie that git never sees: a fetched dataset's own folder, whose
+/// .gitignore hides all it holds, so `git status` lists none of them.
+fn tell_hidden(output: &Output, status: &Status) {
+    let folders: Vec<&str> = status.hidden.iter().map(String::as_str).collect();
+    if folders.is_empty() {
         return;
     }
-    match status.yours.as_slice() {
-        [] => {}
-        [one] => output.faint_step("Kept", &format!("{one} · yours")),
-        many => {
-            let count = units::count(many.len() as u64, "file", "files");
-            output.faint_step("Kept", &format!("{count} of yours in dataset folders"));
-            for path in many {
-                output.detail(path);
-            }
-        }
-    }
+    let named = if folders.len() > 3 {
+        format!(
+            "{}, {} and {} more dataset folders",
+            folders[0],
+            folders[1],
+            units::grouped(folders.len() as u64 - 2)
+        )
+    } else {
+        units::listed(&folders, "and")
+    };
+    let (hides, them) = if folders.len() == 1 {
+        ("its .gitignore hides the folder", "it")
+    } else {
+        ("each one's .gitignore hides its folder", "them")
+    };
+    output.hint(&format!(
+        "git sees none of the files you put in {named}, since {hides}: keep files of your own in a folder outside {them}"
+    ));
 }
 
 /// at most `shown` of `rows` under `verb`, each a row's text and the files it stands for, then
@@ -1858,16 +1880,19 @@ mod tests {
         assert!(!unlocked.sync_repairs_all(), "a sync would pin new bytes");
     }
 
-    /// a file fetchloom did not place is a difference only where it means one: a changed copy sync
-    /// kept and a file moved aside wherever they are, and any file in a folder whose extras count,
-    /// the innermost folder deciding. the rest of a dataset's folder is the person's, and a file
-    /// outside every dataset's folder is dropped.
+    /// a file fetchloom did not place is a difference in a fetched dataset's own folder, the
+    /// innermost folder deciding, named as hidden from git where fetchloom's marker stands, and so
+    /// are a changed copy sync kept, a file moved aside and a file in an output's folder. a
+    /// person's file git sees, outside every dataset's folder or in one shared with the person, is
+    /// dropped.
     #[test]
     fn only_owned_folders_judge_the_files_fetchloom_did_not_place() {
         let owned = plan::Owned::from_folders(&[
-            ("data/iris", false),
-            ("data/iris/inner", true),
-            ("data/out", true),
+            ("data/iris", false, false),
+            ("data/iris/inner", true, false),
+            ("data/out", true, false),
+            ("data/shared", false, true),
+            ("data/wine", false, false),
         ]);
         let paths = |paths: &[&str]| paths.iter().map(|path| (*path).to_owned()).collect();
         let mut status = Status {
@@ -1880,6 +1905,8 @@ mod tests {
                 "data/out/new.csv",
                 "data/processed/clean.csv",
                 "data/processed/.clean.csv.aside",
+                "data/shared/mine.csv",
+                "data/wine/.gitignore",
                 "notes.txt",
             ]),
             ..Status::default()
@@ -1892,19 +1919,23 @@ mod tests {
             "data/processed/.clean.csv.aside".to_owned(),
             ("data/processed/clean.csv".to_owned(), true),
         );
-        sort_extra(&mut status, &owned);
+        sort_extra(&mut status, &owned, &|folder| folder != "data/wine");
         assert_eq!(
             status.extra,
             paths(&[
+                "data/iris/notes.txt",
                 "data/iris/iris.csv.changed",
                 "data/iris/inner/made.csv",
+                "data/iris/innermost.csv",
                 "data/out/new.csv",
                 "data/processed/.clean.csv.aside",
+                "data/wine/.gitignore",
             ]) as Vec<String>
         );
         assert_eq!(
-            status.yours,
-            paths(&["data/iris/notes.txt", "data/iris/innermost.csv"]) as Vec<String>
+            status.hidden,
+            BTreeSet::from(["data/iris".to_owned()]),
+            "git sees the files of an output's folder, a shared one and one fetchloom left unmarked"
         );
     }
 

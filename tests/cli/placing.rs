@@ -281,8 +281,8 @@ fn remove_deletes_files_and_folders_with_accented_names() -> Result {
     Ok(())
 }
 
-/// status calls the pin missing and the respelled file the person's, kept, and force puts the pin
-/// back beside the respelled file, which stays.
+/// status calls the pin missing and the respelled file extra, the person's, kept, and force puts
+/// the pin back beside the respelled file, which stays.
 #[test]
 fn a_respelled_file_is_yours_where_the_disk_tells_names_apart() -> Result {
     for (original, other, url) in [
@@ -310,7 +310,7 @@ fn a_respelled_file_is_yours_where_the_disk_tells_names_apart() -> Result {
             serde_json::json!([format!("data/iris/{original}")])
         );
         assert_eq!(
-            document["result"]["yours"],
+            document["result"]["extra"],
             serde_json::json!([format!("data/iris/{other}")])
         );
         let output = sandbox.run(&["sync", "--offline", "--force"])?;
@@ -321,7 +321,7 @@ fn a_respelled_file_is_yours_where_the_disk_tells_names_apart() -> Result {
             serde_json::from_slice(&sandbox.run(&["--json", "status"])?.stdout)?;
         assert_eq!(status["result"]["missing"], serde_json::json!([]));
         assert_eq!(
-            status["result"]["yours"],
+            status["result"]["extra"],
             serde_json::json!([format!("data/iris/{other}")])
         );
         assert_eq!(server.requests().len(), 1);
@@ -406,7 +406,7 @@ fn where_case_matters_the_exact_name_is_adoptable_and_its_case_twin_yours() -> R
         serde_json::json!(["Data/iris/iris.csv"])
     );
     assert_eq!(
-        document["result"]["yours"],
+        document["result"]["extra"],
         serde_json::json!(["Data/iris/Iris.csv"])
     );
     Ok(())
@@ -2391,13 +2391,8 @@ fn status_tells_the_files_sync_removes_from_your_own() -> Result {
     assert!(!stderr.contains("notes.txt"), "{stderr}");
     let status = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(
+        (&status["result"]["extra"], &status["result"]["unneeded"]),
         (
-            &status["result"]["extra"],
-            &status["result"]["yours"],
-            &status["result"]["unneeded"]
-        ),
-        (
-            &serde_json::json!([]),
             &serde_json::json!([]),
             &serde_json::json!(["data/penguins/penguins.csv"])
         )

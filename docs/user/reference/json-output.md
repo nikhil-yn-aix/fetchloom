@@ -85,7 +85,7 @@ status arrays, each a list of project-relative paths or dataset names, as [statu
 | `outdated` | unchanged files that sync replaces: pinned to other bytes now, or read-only where the dataset asks for `copy = true` |
 | `damaged` | files fetchloom placed that hold other bytes though no edit of the project's shows, as a hardlink an edit through another link changed |
 | `blocked` | entries in a pinned file's way |
-| `extra` | files no dataset places, which sync keeps |
+| `extra` | files no dataset places, which fetchloom did not place or which changed since, and which sync keeps: `.changed` copies sync kept, files `sync --force` moved out of the way, and files in a dataset's own folder, which its .gitignore hides from git. a person's file git sees, as one outside every dataset's folder, is in no array |
 | `unneeded` | files fetchloom placed that no dataset needs now, which the next sync removes |
 | `not_unpacked` | archives whose files this machine does not know |
 

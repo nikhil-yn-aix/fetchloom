@@ -40,11 +40,12 @@ when `iris.csv` is missing and `notes.txt` is extra, stdout holds the rows:
       Extra data/iris/notes.txt
 ```
 
-and stderr the closing line and the hint:
+and stderr the closing line and the hints, the second since git never sees `notes.txt` there:
 
 ```text
       Found 2 differences from data.lock
   hint: `fetchloom sync` places missing or updated files and reports any conflicts it keeps
+  hint: git sees none of the files you put in data/iris, since its .gitignore hides the folder: keep files of your own in a folder outside it
 ```
 
 ## categories
@@ -61,7 +62,7 @@ and stderr the closing line and the hint:
 | `outdated` | an unchanged managed file needs a new pin or a mode that fits its dataset: writable for `copy = true`, or, for a link to the cache's copy someone made writable, read-only again. a read-only file that holds the pinned bytes where `copy = true` asks for writable copies is here too, though fetchloom did not place it, since sync replaces it |
 | `damaged` | a file fetchloom placed holds other bytes, though no edit of this project's shows: a hardlink whose shared copy an edit through another link changed, or a file whose bytes changed under an unchanged size and time, which `--verify` finds |
 | `blocked` | an entry stands in a file's way: a link, a special file or a folder where the file belongs, or a file or link where a folder on its way belongs |
-| `extra` | a file in the data folder that no dataset places, which fetchloom did not place or which changed since, such as notes of your own: sync keeps it. files a system writes beside yours by itself, as finder's `.DS_Store` and `._` files or windows' `Thumbs.db` and `desktop.ini`, are no difference and in no list. what a system's folder holds, as a disk's trash or a `__MACOSX` folder, is extra, since it may be yours |
+| `extra` | a file no dataset places, which fetchloom did not place or which changed since, and which sync keeps: a `.changed` copy sync kept, a file `sync --force` moved out of the way, or a file of yours in a dataset's own folder, such as notes, which that folder's .gitignore hides from git, so a hint names the folder. a file of yours that git sees is no difference and in no list: one outside every dataset's folder, as `data/processed/clean.csv` beside `data/iris`, or in a folder you share with datasets, as the data folder itself when a dataset has `path = "."`, whose .gitignore names only the datasets' files. files a system writes beside yours by itself, as finder's `.DS_Store` and `._` files or windows' `Thumbs.db` and `desktop.ini`, are no difference and in no list. what a system's folder holds, as a disk's trash or a `__MACOSX` folder, is extra, since it may be yours |
 | `unneeded` | a file fetchloom placed that no dataset needs now and nobody changed, as one of a dataset gone from data.toml: the next sync removes it, and its line says so |
 | `not_unpacked` | this machine has no list of an archive's files, as in a fresh clone, so they are not checked: `Unchecked data/dataset/dataset.zip · this machine has no list of the files it holds, so they are not checked`. the files fetchloom placed from it, and in a copy of the project every file in the folder it unpacks to, are neither extra nor unneeded until a sync reads the list |
 

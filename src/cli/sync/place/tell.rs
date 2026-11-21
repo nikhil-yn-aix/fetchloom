@@ -924,7 +924,8 @@ pub(super) fn set_aside(output: &Output, manifest: &Manifest, aside: &BTreeMap<S
 
 /// a warning for each folder no dataset uses now that still holds files fetchloom did not place,
 /// such as a person's work or a changed copy sync kept, which are the person's alone from then
-/// on. `-v` names each file.
+/// on: git sees them once the folder's .gitignore goes, but an output's old folder keeps its own
+/// while they stay, so status lists them. `-v` names each file.
 fn warn_retired(output: &Output, placement: &Placement) {
     for retired in &placement.retired {
         let folder = &retired.folder;
@@ -935,7 +936,7 @@ fn warn_retired(output: &Output, placement: &Placement) {
                     "{folder} held {name} until its folder moved to {at}, and still holds {only}, a file its pin does not hold, so the folder stays"
                 ),
                 format!(
-                    "it is yours, and fetchloom no longer looks at it; delete {folder} once you no longer need it"
+                    "it is yours, and the folder's .gitignore still hides it from git: move it out to keep it, or delete {folder} once you no longer need it"
                 ),
             ),
             (Some((name, at)), [first, ..]) => (
@@ -944,7 +945,7 @@ fn warn_retired(output: &Output, placement: &Placement) {
                     retired.unplaced.len()
                 ),
                 format!(
-                    "they are yours, and fetchloom no longer looks at them; delete {folder} once you no longer need them"
+                    "they are yours, and the folder's .gitignore still hides them from git: move them out to keep them, or delete {folder} once you no longer need them"
                 ),
             ),
             (None, [only]) => (

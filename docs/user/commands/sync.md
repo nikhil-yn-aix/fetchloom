@@ -108,8 +108,10 @@ sync deletes only unchanged files it placed, and only inside the data folder. wh
 
 ```text
 warning: data/pets still holds data/pets/own.txt, a file fetchloom did not place, so the folder stays
-  help: `fetchloom status` lists it as extra; delete it when you no longer need it
+  help: it is yours, and fetchloom no longer looks at it
 ```
+
+the folder's .gitignore goes with the dataset's last file, so git sees what stays there, and status no longer lists it.
 
 when `data_dir` changes, sync places the files in the new data folder and deletes nothing in the old one. it names the old folder once, since it then stops recording those files, as `warning: data still holds 2 files fetchloom placed before data_dir changed to inputs/raw, such as data/iris/iris.csv. fetchloom leaves them there`, with the help `delete data when you no longer need what it holds`. when the old folder also holds files fetchloom did not place, the warning names up to three, and its help says to move them out first. stderr from a real run after `data_dir` changed to `inputs`, with four such files in data:
 
@@ -131,7 +133,7 @@ warning: put back data/pets/images/dog_010_corrupt.png, which was deleted or mov
 
 [`fetchloom exclude`](exclude.md) writes a pattern into data.toml, so every clone leaves the file out too. the help names exclude only where it works: the only file of a dataset goes with the dataset, through `fetchloom remove`. a folder deleted whole inside a dataset is named once, as `put back 60 files that were deleted or moved, since data.lock pins them: the 30 in data/many/part03/, the 30 in data/many/part04/`, with the `fetchloom exclude` of that folder.
 
-a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere in the data folder stays, and status lists it as extra. a dry run warns the same way, as `a sync would put back`.
+a dataset's own folder, or the whole data folder, deleted to start afresh is no mistake, so sync places it again with no warning and says why, as `Placed data/many · 120 files linked to the cache · the folder was missing`. a copy you moved elsewhere stays: status lists it as extra while it is in a dataset's folder, whose .gitignore hides it from git, and never once it is outside them, where git sees it. a dry run warns the same way, as `a sync would put back`.
 
 without `--force`, edited files and untracked files at pinned paths stay in place, and JSON lists them in `result.placement.kept`; other extra files are not listed there, and [status](status.md) finds them. the warning about each names the `fetchloom sync --force` that replaces it. a sync that placed files ends with where a script finds the dataset, as `` next: `fetchloom path cows` tells your scripts where cows is``.
 

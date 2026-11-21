@@ -373,16 +373,16 @@ fn a_copy_keeps_the_marker_of_a_folder_it_cannot_list() -> Result {
         .env("FETCHLOOM_CACHE", &cache)
         .output()?;
     let document = json(&status)?;
-    assert_eq!(
-        document["result"]["yours"],
-        serde_json::json!([]),
+    let extra = document["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        !extra.iter().any(|path| path == "data/dataset/.gitignore"),
         "{document}"
     );
     Ok(())
 }
 
 /// with no list of the zip's files, status calls neither the zip missing nor its files extra, and
-/// writes nothing; a file of the person's own beside them is theirs, kept, and keeps them from
+/// writes nothing; a file of the person's own beside them is extra, kept, and keeps them from
 /// proving the list data.lock pins, which status says a sync downloads. the list is missing for a
 /// second person sharing the folder, whose cache never held the zip. a copy would not do: the
 /// files its state names would prove the list, the person's file aside.
@@ -416,7 +416,7 @@ fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it()
         serde_json::json!(["data/dataset/dataset.zip"])
     );
     assert_eq!(
-        (&result["yours"], &result["missing"]),
+        (&result["extra"], &result["missing"]),
         (
             &serde_json::json!(["data/dataset/notes.txt"]),
             &serde_json::json!([])
@@ -426,7 +426,7 @@ fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it()
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
         text(&output.stdout)?,
-        "  Unchecked data/dataset/dataset.zip · the files in data/dataset cannot prove the list of files data.lock pins for it, so a sync downloads it\n"
+        "      Extra data/dataset/notes.txt\n  Unchecked data/dataset/dataset.zip · the files in data/dataset cannot prove the list of files data.lock pins for it, so a sync downloads it\n"
     );
     assert_eq!(fs::read(two.join(".fetchloom").join("state"))?, state);
     Ok(())
@@ -434,8 +434,8 @@ fn status_of_a_zip_the_cache_never_held_says_why_its_files_cannot_stand_for_it()
 
 /// in a copy no file has a record, so a file of the zip's whose bytes changed keeps its folder
 /// from proving the list data.lock pins, and with no list nothing tells the zip's files from the
-/// person's own beside them: status calls none of them the person's, and says a sync downloads
-/// the zip. a file outside every dataset's folder is none of status's business.
+/// person's own beside them: status calls none of them extra, and says a sync downloads the zip.
+/// a file outside every dataset's folder is none of status's business.
 #[test]
 fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra() -> Result {
     let sandbox = Sandbox::new()?;
@@ -465,7 +465,6 @@ fn status_of_a_copy_whose_cache_never_held_the_zip_calls_none_of_its_files_extra
         ),
         "{document}"
     );
-    assert_eq!(result["yours"], serde_json::json!([]), "{document}");
     let output = status(&["status"])?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     assert_eq!(
@@ -888,9 +887,9 @@ fn a_first_sync_of_a_copy_cut_short_keeps_its_markers_its_own() -> Result {
     let synced = sandbox.command_in(&two, &["sync", "--offline"]).output()?;
     assert_eq!(synced.status.code(), Some(0), "{}", text(&synced.stderr)?);
     let document = json(&sandbox.command_in(&two, &["--json", "status"]).output()?)?;
-    assert_eq!(
-        document["result"]["yours"],
-        serde_json::json!([]),
+    let extra = document["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        !extra.iter().any(|path| path == "inputs/iris/.gitignore"),
         "{document}"
     );
     let state: serde_json::Value =
@@ -1201,7 +1200,7 @@ fn a_copied_zip_folder_beside_what_a_system_or_tool_leaves_is_checked_in_place()
 
 /// a copy's state names the files placing put in its zip's folder, so the person's own file
 /// beside them, as notes or an index, keeps the folder from proving nothing: the files the state
-/// names are tried alone, and hashed. status calls the person's file theirs, a sync downloads
+/// names are tried alone, and hashed. status lists the person's file as extra, a sync downloads
 /// nothing and leaves that file as it is, and offline, `fetchloom path` answers.
 #[test]
 fn a_copied_zip_folder_beside_a_persons_file_is_checked_by_the_files_its_state_names() -> Result {
@@ -1220,7 +1219,7 @@ fn a_copied_zip_folder_beside_a_persons_file_is_checked_by_the_files_its_state_n
     assert_eq!(
         (
             &document["result"]["not_unpacked"],
-            &document["result"]["yours"]
+            &document["result"]["extra"]
         ),
         (
             &serde_json::json!([]),

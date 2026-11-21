@@ -1537,7 +1537,8 @@ fn every_command_that_places_files_keeps_the_dataset_folder_out_of_git() -> Resu
 
 /// each row goes to stdout, where a pipe gets it, and the closing line and hints to stderr, so
 /// `fetchloom status | grep Missing` finds what is missing. a file of the person's own in a
-/// dataset's folder is no difference, and a plain status says nothing of it; json names it.
+/// dataset's folder, which git never sees, is extra, a row and a difference like any other, and
+/// a hint says why.
 #[test]
 fn status_lists_what_differs() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1555,10 +1556,13 @@ fn status_lists_what_differs() -> Result {
     fs::write(folder.join("iris.csv"), "mine")?;
     fs::write(folder.join("notes.txt"), "mine")?;
     let edited = sandbox.run(&["status"])?;
-    assert_eq!(text(&edited.stdout)?, "     Edited data/iris/iris.csv\n");
+    assert_eq!(
+        text(&edited.stdout)?,
+        "     Edited data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
+    );
     let stderr = text(&edited.stderr)?;
     assert!(
-        stderr.starts_with("      Found 1 difference from data.lock\n  hint: "),
+        stderr.starts_with("      Found 2 differences from data.lock\n  hint: "),
         "{stderr}"
     );
     assert!(!stderr.contains("data/iris/iris.csv"), "{stderr}");
@@ -1574,14 +1578,17 @@ fn status_lists_what_differs() -> Result {
     // the rows are the answer -q keeps; the closing line and hints are what it drops
     let quiet = sandbox.run(&["-q", "status"])?;
     assert_eq!(quiet.status.code(), Some(0));
-    assert_eq!(text(&quiet.stdout)?, "    Missing data/iris/iris.csv\n");
+    assert_eq!(
+        text(&quiet.stdout)?,
+        "    Missing data/iris/iris.csv\n      Extra data/iris/notes.txt\n"
+    );
     assert_eq!(
         crate::support::without_copy_warning(&text(&quiet.stderr)?),
         ""
     );
     let document = json(&sandbox.run(&["--json", "status"])?)?;
     assert_eq!(document["result"]["missing"][0], "data/iris/iris.csv");
-    assert_eq!(document["result"]["yours"][0], "data/iris/notes.txt");
+    assert_eq!(document["result"]["extra"][0], "data/iris/notes.txt");
     Ok(())
 }
 

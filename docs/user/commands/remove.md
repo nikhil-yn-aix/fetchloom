@@ -41,8 +41,10 @@ a dataset folder that still holds files fetchloom did not place, such as your ow
 
 ```text
 warning: data/pets still holds 2 files fetchloom did not place, such as data/pets/notes.txt, so the folder stays
-  help: `fetchloom status` lists them as extra; delete them when you no longer need them
+  help: they are yours, and fetchloom no longer looks at them
 ```
+
+the folder's .gitignore goes with the dataset, so git sees the files that stay, and status no longer lists them.
 
 a file of yours that a `sync --force` kept under a hidden name, as `.fetchloom-<hex>.old`, keeps its folder too, and remove names it with the path it had, as sync does.
 

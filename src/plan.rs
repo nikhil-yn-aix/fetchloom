@@ -86,8 +86,9 @@ pub(crate) fn subfolder<'a>(manifest: &'a Manifest, name: &'a str) -> Option<&'a
 }
 
 /// the folders fetchloom owns in a project: each dataset's, and nothing beside them. a file
-/// fetchloom did not place outside all of them is a person's own and none of its business; one
-/// in a dataset's folder is the person's too, kept, unless that folder's `extras_count`.
+/// fetchloom did not place outside all of them is a person's own, which git sees, and none of
+/// its business; one in a dataset's folder is the person's too, kept, and a difference from
+/// data.lock where the folder's .gitignore keeps it out of git.
 #[derive(Debug, Default)]
 pub(crate) struct Owned {
     /// by the folder's path in the project.
@@ -97,35 +98,70 @@ pub(crate) struct Owned {
 /// a folder fetchloom owns, and what a file it did not place there is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct OwnedFolder {
-    /// whether a file fetchloom did not place there is a difference from data.lock, as in an
-    /// output's folder, whose files are all its own; in a fetched dataset's it is a person's, kept.
+    /// whether a file fetchloom did not place there is one sync acts on, as in an output's
+    /// folder, whose files are all its own; in a fetched dataset's it is a person's, kept.
     pub(crate) extras_count: bool,
+    /// whether the person shares the folder with its datasets, as the data folder itself or one
+    /// holding another dataset's folder, whose .gitignore names the datasets' entries, so git
+    /// still sees a person's files there. a fetched dataset's other folders git keeps none of.
+    pub(crate) shared: bool,
 }
 
 impl Owned {
     /// the folder of each dataset `manifest` names.
     pub(crate) fn of(manifest: &Manifest) -> Owned {
-        let folders = manifest
+        let named: Vec<(String, bool)> = manifest
             .datasets
             .iter()
-            .map(|(name, entry)| {
+            .map(|(name, entry)| (self::folder(manifest, name), entry.is_output()))
+            .collect();
+        let all: HashSet<&str> = named.iter().map(|(folder, _)| folder.as_str()).collect();
+        let mut holding = HashSet::new();
+        for (folder, _) in &named {
+            let mut at = folder.as_str();
+            while let Some((up, _)) = at.rsplit_once('/') {
+                if all.contains(up) {
+                    holding.insert(up);
+                }
+                at = up;
+            }
+        }
+        let folders = named
+            .iter()
+            .map(|(folder, output)| {
                 let owned = OwnedFolder {
-                    extras_count: entry.is_output(),
+                    extras_count: *output,
+                    shared: *folder == manifest.data_dir || holding.contains(folder.as_str()),
                 };
-                (self::folder(manifest, name), owned)
+                (folder.clone(), owned)
             })
             .collect();
         Owned { folders }
     }
 
-    /// the folders of `folders`, each with whether its extras count.
+    /// these folders and each of `left`, an old folder of an output whose move left files there
+    /// under its .gitignore, that no dataset's folder is now: fetchloom owns it as a fetched
+    /// dataset's own while those files stay.
+    #[must_use]
+    pub(crate) fn with_left<'l>(mut self, left: impl IntoIterator<Item = &'l String>) -> Owned {
+        for folder in left {
+            self.folders.entry(folder.clone()).or_insert(OwnedFolder {
+                extras_count: false,
+                shared: false,
+            });
+        }
+        self
+    }
+
+    /// the folders of `folders`, each with whether its extras count and whether it is shared.
     #[cfg(test)]
-    pub(crate) fn from_folders(folders: &[(&str, bool)]) -> Owned {
+    pub(crate) fn from_folders(folders: &[(&str, bool, bool)]) -> Owned {
         let folders = folders
             .iter()
-            .map(|(folder, extras_count)| {
+            .map(|(folder, extras_count, shared)| {
                 let owned = OwnedFolder {
                     extras_count: *extras_count,
+                    shared: *shared,
                 };
                 ((*folder).to_owned(), owned)
             })
@@ -133,13 +169,13 @@ impl Owned {
         Owned { folders }
     }
 
-    /// the owned folder `path`, a path in the project, is in, the innermost where folders nest;
-    /// none outside every one.
-    pub(crate) fn holding(&self, path: &str) -> Option<&OwnedFolder> {
+    /// the owned folder `path`, a path in the project, is in, the innermost where folders nest,
+    /// with its path; none outside every one.
+    pub(crate) fn holding<'p>(&self, path: &'p str) -> Option<(&'p str, &OwnedFolder)> {
         let mut at = path;
         while let Some((folder, _)) = at.rsplit_once('/') {
             if let Some(owned) = self.folders.get(folder) {
-                return Some(owned);
+                return Some((folder, owned));
             }
             at = folder;
         }

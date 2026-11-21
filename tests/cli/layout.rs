@@ -82,9 +82,9 @@ fn shared_folder_removal_keeps_the_other_dataset_and_extras() -> Result {
         serde_json::json!([]),
         "{status}"
     );
-    assert_eq!(
-        status["result"]["yours"],
-        serde_json::json!(["data/splits/notes.txt"]),
+    let extra = status["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        extra.iter().any(|path| path == "data/splits/notes.txt"),
         "{status}"
     );
     Ok(())

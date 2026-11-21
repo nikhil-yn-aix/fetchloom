@@ -1571,9 +1571,9 @@ fn status_checks_a_first_follow_as_a_sync_does() -> Result {
                     .is_some_and(|line| line.contains(&refusal))),
         "{document}"
     );
-    assert_eq!(
-        document["result"]["yours"],
-        serde_json::json!(["data/flowers/.gitignore"]),
+    let extra = document["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        extra.iter().any(|path| path == "data/flowers/.gitignore"),
         "{document}"
     );
     Ok(())

@@ -129,7 +129,8 @@ fn a_compressed_file_unpacked_by_hand_points_to_decompress() -> Result {
 }
 
 /// files a person keeps in a dataset's folder stay when the dataset goes, and the warning says
-/// they are theirs now, as status no longer names them.
+/// they are theirs now, as git sees them once the folder's .gitignore goes, and status no longer
+/// lists them.
 #[test]
 fn removing_a_dataset_says_the_files_left_are_yours() -> Result {
     let sandbox = Sandbox::new()?;
@@ -145,8 +146,13 @@ fn removing_a_dataset_says_the_files_left_are_yours() -> Result {
         ],
         "{document}"
     );
+    assert!(!sandbox.work().join("data/iris/.gitignore").exists());
     let status = json(&sandbox.run(&["--json", "status"])?)?;
-    assert_eq!(status["result"]["yours"], serde_json::json!([]), "{status}");
+    let extra = status["result"]["extra"].as_array().ok_or("a list")?;
+    assert!(
+        !extra.iter().any(|path| path == "data/iris/iris.parquet"),
+        "{status}"
+    );
     assert_eq!(
         fs::read(sandbox.work().join("data/iris/iris.parquet"))?,
         b"par1"
