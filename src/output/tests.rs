@@ -703,6 +703,40 @@ fn report_rows_follow_stdout_alone() {
     json.report("Missing", "data/iris/iris.csv");
 }
 
+/// a status row once broke inside `data.lock` at an 80-column terminal, which got each row whole:
+/// at a terminal a row wraps between words under its verb, as a story line does, and a script
+/// reading a pipe still gets each row on one line.
+#[test]
+fn a_row_wraps_at_a_terminals_width_and_stays_whole_in_a_pipe() {
+    let style = |watched| Style {
+        color: false,
+        unicode: true,
+        interactive: watched,
+        watched,
+        links: false,
+        accessible: false,
+    };
+    let text = "rat · not in data.toml, so `fetchloom sync` takes it out of data.lock";
+    let rows = |output: &Output| {
+        let mut rows = Vec::new();
+        output
+            .write_rows(&mut rows, "Removed", std::iter::once(text))
+            .unwrap();
+        String::from_utf8(rows).unwrap()
+    };
+    let mut terminal = Output::new(style(true), Level::Normal, false, false);
+    terminal.bars = None;
+    terminal.report_color = false;
+    terminal.answer_columns = Some(|| Some(80));
+    assert_eq!(
+        rows(&terminal),
+        "    Removed rat · not in data.toml, so `fetchloom sync` takes it out of\n            data.lock\n"
+    );
+    let mut piped = Output::new(style(false), Level::Normal, false, false);
+    piped.report_color = false;
+    assert_eq!(rows(&piped), format!("    Removed {text}\n"));
+}
+
 /// a placement from bytes the cache held is not a skipped download, and a file a one-off
 /// `get -o` wrote to the cache, then moved out, is not said to be in it still.
 #[test]

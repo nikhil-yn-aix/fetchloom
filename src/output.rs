@@ -106,6 +106,9 @@ pub(crate) struct Output {
     /// between words, so a terminal resized during a run gets lines as wide as it is now; none for
     /// a pipe, a file or a coding agent.
     columns: Option<Width>,
+    /// reads the width of stdout where a person reads both streams at a terminal, which a report's
+    /// row wraps at between words, as a story line does; none where a script reads stdout.
+    answer_columns: Option<Width>,
     /// the words withheld from the commands rows on stdout name, so every row of the run gives
     /// one name one placeholder, said once.
     withheld: Mutex<crate::suggested::Withheld>,
@@ -404,6 +407,7 @@ impl Output {
             #[cfg(test)]
             lasted: Mutex::new(Vec::new()),
             columns: None,
+            answer_columns: style.watched.then_some(stdout_columns as Width),
             started: Instant::now(),
             joining,
         };
@@ -790,9 +794,7 @@ impl Output {
 
     /// the width of stdout when it is a terminal, or none when a script reads it.
     pub(crate) fn answer_width(&self) -> Option<usize> {
-        self.style
-            .watched
-            .then(|| usize::from(console::Term::stdout().size().1))
+        self.answer_columns.and_then(|read| read())
     }
 
     /// one match of a search: what to type, padded to `pad`, then its padded title and dim facts,
@@ -1619,8 +1621,9 @@ impl Output {
         texts: impl Iterator<Item = T>,
     ) -> std::io::Result<()> {
         let mut rows = String::new();
+        let width = self.answer_width();
         for text in texts {
-            let Some(line) = self.report_text(verb, text.as_ref()) else {
+            let Some(line) = self.report_line(verb, text.as_ref(), width) else {
                 continue;
             };
             for line in self.answered(&line) {
@@ -1636,12 +1639,19 @@ impl Output {
     }
 
     fn report_text(&self, verb: &str, text: &str) -> Option<String> {
+        self.report_line(verb, text, self.answer_width())
+    }
+
+    /// a report's row as stdout takes it: wrapped between words at `width`, the terminal's, so the
+    /// terminal never wraps one inside a word, and whole for a script.
+    fn report_line(&self, verb: &str, text: &str, width: Option<usize>) -> Option<String> {
         self.tells(Level::Quiet).then(|| {
-            shown(
-                &verb_line(verb, text, difference(verb), self.report_color),
-                self.style.unicode,
-            )
-            .into_owned()
+            let line = verb_line(verb, text, difference(verb), self.report_color);
+            let line = shown(&line, self.style.unicode);
+            match width {
+                Some(width) => fit::fit(&line, width),
+                None => line.into_owned(),
+            }
         })
     }
 }
@@ -1739,6 +1749,15 @@ fn stderr_columns() -> Option<usize> {
     console::Term::stderr()
         .size_checked()
         .map(|(_, columns)| usize::from(columns))
+}
+
+/// the width of the terminal stdout goes to now, or console's default where it gives none.
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "it reads a width as stderr's reader does"
+)]
+fn stdout_columns() -> Option<usize> {
+    Some(usize::from(console::Term::stdout().size().1))
 }
 
 /// prints help with the chosen palette and terminal width. a reader closing its pipe is no failure.
