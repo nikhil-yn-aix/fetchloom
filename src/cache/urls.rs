@@ -181,7 +181,7 @@ impl Shards {
 
     /// the shards' folder below the cache's `root`, reached without following a link, and with
     /// `make` made where it is missing. a folder of one user's own that is not theirs alone is
-    /// `NotFound`, as [`Folder::private`] says.
+    /// `NotFound`, as `Folder::private` says on unix.
     fn folder(&self, root: &Path, make: bool) -> io::Result<Folder> {
         #[cfg(unix)]
         if let Some(user) = self.user {
