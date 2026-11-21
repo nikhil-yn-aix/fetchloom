@@ -1096,6 +1096,27 @@ fn compressed_pieces_that_missed_the_pin_leave_no_warning() -> Result {
     Ok(())
 }
 
+/// a link ending in a number says the server named no file where the file takes that name, and
+/// says nothing where `-o` names it.
+#[test]
+fn only_a_file_that_takes_its_links_number_is_said_to_be_unnamed() -> Result {
+    let unnamed = "warning: the server did not name 1234";
+    for (args, warned) in [
+        (&["-d", "folder"][..], true),
+        (&["-o", "kept.bin"][..], false),
+    ] {
+        let sandbox = Sandbox::new()?;
+        let server = Server::start("/files/1234", vec![file(IRIS, "\"v1\"")])?;
+        let mut command = vec!["get", server.url.as_str()];
+        command.extend_from_slice(args);
+        let output = sandbox.run(&command)?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert_eq!(stderr.contains(unnamed), warned, "{args:?}: {stderr}");
+    }
+    Ok(())
+}
+
 /// a quoted `~` reaches fetchloom unexpanded, so get writes to a folder named ~ and warns, while
 /// `./~` says that folder is meant.
 #[test]

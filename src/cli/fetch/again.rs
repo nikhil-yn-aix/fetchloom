@@ -175,6 +175,7 @@ mod tests {
             fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
             label: "iris/data.csv".to_owned(),
             dataset: Some("iris".to_owned()),
+            named_by_caller: false,
             again: Some(Again {
                 resolved: "zenodo:3608990?access=s3cr3t".to_owned(),
                 path: "data.csv".to_owned(),
@@ -218,6 +219,7 @@ mod tests {
             fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
             label: "iris/data.csv".to_owned(),
             dataset: Some("iris".to_owned()),
+            named_by_caller: false,
             again: Some(Again {
                 resolved: "zenodo:3608990".to_owned(),
                 path: "data.csv".to_owned(),
@@ -255,6 +257,7 @@ mod tests {
             fetch: Fetch::new(url::Url::parse("https://example.org/gone.csv").unwrap()),
             label: "iris/data.csv".to_owned(),
             dataset: Some("iris".to_owned()),
+            named_by_caller: false,
             again: Some(Again {
                 resolved: resolved.to_owned(),
                 path: "data.csv".to_owned(),

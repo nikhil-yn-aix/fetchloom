@@ -850,6 +850,7 @@ async fn download(
     to: Option<&str>,
 ) -> Result<Fetched, Error> {
     let mut job = fetch::listed_job(remote, &remote.path, false);
+    job.named_by_caller = true;
     job.fetch.held = held;
     job.fetch.page = page;
     job.fetch.decompressed = to.map(str::to_owned);

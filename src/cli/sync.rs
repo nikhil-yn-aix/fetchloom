@@ -2864,6 +2864,7 @@ fn make_job(lock: &Lock, dataset: &str, file: &LockedFile, url: &Url, page: bool
         fetch: pinned_fetch(pinned, file, url, page),
         label: format!("{dataset}/{}", file.path),
         dataset: Some(dataset.to_owned()),
+        named_by_caller: false,
         again: pinned.map(|locked| Again {
             resolved: locked.resolved.clone(),
             path: file.path.clone(),
@@ -2934,6 +2935,7 @@ fn dry_job(
         fetch,
         label: format!("{dataset}/{}", file.path),
         dataset: None,
+        named_by_caller: false,
         again: None,
     })
 }

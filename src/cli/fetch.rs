@@ -36,6 +36,9 @@ pub(super) struct Job {
     pub(super) fetch: Fetch,
     pub(super) label: String,
     pub(super) dataset: Option<String>,
+    /// the caller names the file the bytes land in, as `get -o` does, so the name its server
+    /// gives, or does not, changes nothing.
+    pub(super) named_by_caller: bool,
     /// where to ask again when the file is pinned and its recorded link is dead.
     pub(super) again: Option<Again>,
 }
@@ -263,6 +266,7 @@ pub(super) fn listed_job(remote: &Remote, name: &str, extract: bool) -> Job {
         },
         label: remote.path.clone(),
         dataset: None,
+        named_by_caller: false,
         again: None,
     }
 }
@@ -1835,6 +1839,7 @@ async fn run_each(
                 watch.ended();
                 let fetched = fetched.and_then(|found| watch.checked(&cache, found));
                 if let Ok(found) = &fetched
+                    && !job.named_by_caller
                     && found
                         .name
                         .as_deref()
@@ -2548,6 +2553,7 @@ mod tests {
             fetch: Fetch::new(Url::parse(&format!("https://{host}/{index}")).unwrap()),
             label: index.to_string(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         })
         .collect();
@@ -2579,6 +2585,7 @@ mod tests {
                 fetch,
                 label: index.to_string(),
                 dataset: None,
+                named_by_caller: false,
                 again: None,
             })
         })
@@ -2629,6 +2636,7 @@ mod tests {
                     fetch: Fetch::new(Url::parse(&format!("https://example.org/{index}")).unwrap()),
                     label: index.to_string(),
                     dataset: None,
+                    named_by_caller: false,
                     again: None,
                 })
             })
@@ -2646,6 +2654,7 @@ mod tests {
                     fetch: Fetch::new(url),
                     label: index.to_string(),
                     dataset: None,
+                    named_by_caller: false,
                     again: None,
                 }
             },
@@ -2674,6 +2683,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = overall();
@@ -2747,6 +2757,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = overall();
@@ -2831,6 +2842,7 @@ mod tests {
             fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
             label: name.to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let (one, two) = (job("one.bin"), job("two.bin"));
@@ -2917,6 +2929,7 @@ mod tests {
                 fetch,
                 label: "big.bin".to_owned(),
                 dataset: None,
+                named_by_caller: false,
                 again: None,
             }
         };
@@ -2987,6 +3000,7 @@ mod tests {
             ),
             label: "file.txt".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = overall();
@@ -3030,6 +3044,7 @@ mod tests {
             fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
             label: name.to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let first = job("first.bin");
@@ -3073,6 +3088,7 @@ mod tests {
                 fetch: Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap()),
                 label: name.to_owned(),
                 dataset: None,
+                named_by_caller: false,
                 again: None,
             })
             .collect();
@@ -3127,6 +3143,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         job.fetch.expect.size = Some(crate::settings::ASK_ABOVE + 1);
@@ -3170,6 +3187,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let started = |total| Event::Started {
@@ -3198,6 +3216,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/small.bin").unwrap()),
             label: "small.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         Watch::new(&unlisted, &output, &overall, &asked, false, &held)
@@ -3231,6 +3250,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big/big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = Overall::new(&context, std::slice::from_ref(&job));
@@ -3276,6 +3296,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/titanic.csv").unwrap()),
             label: "titanic.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = Overall::new(&context, std::slice::from_ref(&job));
@@ -3316,6 +3337,7 @@ mod tests {
                 fetch,
                 label: "a/a.bin".to_owned(),
                 dataset: None,
+                named_by_caller: false,
                 again: None,
             }
         };
@@ -3379,6 +3401,7 @@ mod tests {
                 },
                 label: "gdrive-spam/download".to_owned(),
                 dataset: Some("gdrive-spam".to_owned()),
+                named_by_caller: false,
                 again: None,
             };
             let overall = Overall::new(&context, std::slice::from_ref(&job));
@@ -3410,6 +3433,7 @@ mod tests {
             },
             label: label.to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         assert_eq!(
@@ -3442,6 +3466,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big/big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let overall = Overall::new(&context, std::slice::from_ref(&job));
@@ -3469,6 +3494,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/gone.csv").unwrap()),
             label: "iris/data.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let output = Output::new(
@@ -3516,6 +3542,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/big.bin").unwrap()),
             label: "big/big.bin".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         for (resumed, said) in [
@@ -3598,6 +3625,7 @@ mod tests {
             },
             label: label.to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
@@ -3620,6 +3648,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("http://lab.example/data.csv").unwrap()),
             label: "data.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         for (bytes, refused) in [
@@ -3764,6 +3793,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("http://x$(id).example/data.csv").unwrap()),
             label: "data.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let watch = Watch::new(&job, &output, &overall, &approval, false, &held);
@@ -3855,6 +3885,7 @@ mod tests {
             },
             label: "data.csv".to_owned(),
             dataset: None,
+            named_by_caller: false,
             again: None,
         };
         let error = explain(
@@ -3877,6 +3908,7 @@ mod tests {
             fetch: Fetch::new(Url::parse("https://example.org/data.csv").unwrap()),
             label: "iris/data.csv".to_owned(),
             dataset: Some("iris".to_owned()),
+            named_by_caller: false,
             again: None,
         };
         assert_eq!(

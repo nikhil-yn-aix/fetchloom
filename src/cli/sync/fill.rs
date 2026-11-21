@@ -380,6 +380,7 @@ fn jobs(stated: &Stated, listing: &Listing, extract: bool) -> Vec<Job> {
             },
             label: format!("{name}/{}", remote.path),
             dataset: Some(name.to_owned()),
+            named_by_caller: false,
             again: Some(Again {
                 resolved: stated.pin.resolved.clone(),
                 path: remote.path.clone(),
