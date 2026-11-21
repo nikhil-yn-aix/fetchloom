@@ -10,7 +10,6 @@ import tempfile
 import unittest
 from unittest import mock
 
-from collections import Counter
 import hashlib
 
 import recheck
@@ -123,9 +122,6 @@ class MeasureTests(unittest.TestCase):
                 def measured(argv, cwd, env, logfile, timeout, *, cpus=None, leaves=leaves):
                     (placed / "data" / "d").mkdir(parents=True)
                     (placed / "data" / "d" / "file.bin").write_bytes(leaves)
-                    # fetchloom's own hidden files are no output
-                    (placed / ".fetchloom").mkdir()
-                    (placed / ".fetchloom" / "state").write_bytes(b"x")
                     done.append("run")
                     return dict(wall_seconds=1, exit_code=0, timeout=False)
 
@@ -133,8 +129,11 @@ class MeasureTests(unittest.TestCase):
                     done.append("post")
                     recheck.remove(placed)
 
-                digests = Counter([hashlib.sha256(good).hexdigest()])
-                specs = {arm: dict(argv=[arm], cwd=out, env={}, post=cleared, outputs=(placed, digests)) for arm in recheck.ARMS[:1]}
+                def outputs():
+                    done.append("check")
+                    return placed, {"data/d/file.bin": hashlib.sha256(good).hexdigest()}
+
+                specs = {arm: dict(argv=[arm], cwd=out, env={}, post=cleared, outputs=outputs) for arm in recheck.ARMS[:1]}
                 (out / "runs.jsonl").unlink(missing_ok=True)
                 with mock.patch.object(recheck.run, "measure", side_effect=measured):
                     recheck.measure("place", specs, 1, 1729, out, None, 5)
@@ -142,23 +141,39 @@ class MeasureTests(unittest.TestCase):
                 self.assertEqual({row["status"] for row in rows}, {status}, rows)
                 self.assertEqual(rows[-1]["checks"], [] if status == "passed" else
                                  [f"1 of 1 expected files are missing or wrong under {placed}"])
-            self.assertEqual(done, ["run", "post"] * 4)
+            self.assertEqual(done, ["run", "check", "post"] * 4)
 
-    def test_every_digest_must_be_there_as_often_as_expected_and_others_may_be_too(self):
+    def test_every_file_must_hold_its_own_bytes_at_its_own_path(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            for name, data in (("a", b"1"), ("b", b"1"), ("c", b"2"), ("extra", b"3")):
-                (root / "data").mkdir(exist_ok=True)
-                (root / "data" / name).write_bytes(data)
+            (root / "data/a").mkdir(parents=True)
+            (root / "data/b").mkdir()
+            (root / "data/a/a.bin").write_bytes(b"1")
+            (root / "data/b/b.bin").write_bytes(b"2")
             digest = {data: hashlib.sha256(data).hexdigest() for data in (b"1", b"2")}
-            self.assertEqual(recheck.placed(root, Counter({digest[b"1"]: 2, digest[b"2"]: 1})), [])
-            self.assertEqual(recheck.placed(root, Counter({digest[b"1"]: 3})), [f"1 of 3 expected files are missing or wrong under {root}"])
-            # a hidden copy, as fetchloom keeps its own state, never stands in for a placed file
-            (root / ".fetchloom").mkdir()
-            (root / ".fetchloom" / "copy").write_bytes(b"2")
-            self.assertEqual(recheck.placed(root, Counter({digest[b"2"]: 2})), [f"1 of 2 expected files are missing or wrong under {root}"])
-            self.assertEqual(recheck.placed(root / "gone", Counter({digest[b"2"]: 1})),
-                             [f"1 of 1 expected files are missing or wrong under {root / 'gone'}"])
+            expect = {"data/a/a.bin": digest[b"1"], "data/b/b.bin": digest[b"2"]}
+            self.assertEqual(recheck.placed(root, expect), [])
+            # the same bytes swapped between the two files are two wrong files, though all the bytes are there
+            (root / "data/a/a.bin").write_bytes(b"2")
+            (root / "data/b/b.bin").write_bytes(b"1")
+            self.assertEqual(recheck.placed(root, expect), [f"2 of 2 expected files are missing or wrong under {root}"])
+            self.assertEqual(recheck.placed(root, {"data/c/c.bin": digest[b"1"], "data/a/a.bin": None}),
+                             [f"2 of 2 expected files are missing or wrong under {root}"])
+
+    def test_each_dataset_of_a_project_expects_its_files_where_fetchloom_places_them(self):
+        sources = dict(links={"http://h/links/l00000.bin": "1" * 64, "http://h/many/m00001.bin": "2" * 64},
+                       members={"m00000.bin": "3" * 64, "m00001.bin": "4" * 64}, big="5" * 64)
+        with tempfile.TemporaryDirectory() as folder:
+            project = Path(folder)
+            self.assertEqual(recheck.layout(project, sources), {"data.toml": None})
+            (project / "data.toml").write_text('[datasets.l00000]\nref = "http://h/links/l00000.bin"\n\n'
+                                                '[datasets.second]\nref = "http://h/many/m00001.bin"\n\n'
+                                                '[datasets.members]\nref = "http://h/members.zip"\n\n'
+                                                '[datasets.stray]\nref = "http://h/links/l00009.bin"\n')
+            self.assertEqual(recheck.layout(project, sources),
+                             {"data/l00000/l00000.bin": "1" * 64, "data/second/m00001.bin": "2" * 64,
+                              "data/members/m00000.bin": "3" * 64, "data/members/m00001.bin": "4" * 64,
+                              "data/stray/l00009.bin": None})
 
 
 def build(path, program=BUILD):
@@ -197,15 +212,19 @@ class PreparationTests(unittest.TestCase):
 
     def test_a_case_that_changes_its_project_works_on_a_fresh_copy_and_clears_it_after(self):
         folder = recheck.prepare(self.root, "fetchloom", build(self.root / "fetchloom"), self.signature, "http://127.0.0.1:9")
-        digests = recheck.expected(self.root)
-        specs = recheck.cases(self.root, "fetchloom", "/bin/fetchloom", folder, "http://127.0.0.1:9", digests)
+        served = recheck.expected(self.root, "http://127.0.0.1:9")
+        # at this scale: 40,000 datasets make 4 files and 1,000 links the least, 3, as 10,000 members do
+        self.assertEqual((len(served["links"]), len(served["members"])), (7, 3))
+        specs = recheck.cases(self.root, "fetchloom", "/bin/fetchloom", folder, "http://127.0.0.1:9", served)
         self.assertEqual(sorted(specs), sorted(recheck.ROUNDS))
-        # the cases that download or place files say where and which
-        self.assertEqual({name: spec["outputs"][0].name for name, spec in specs.items() if "outputs" in spec},
-                         dict(place="place", add_links="links", zip="zip", get="get"))
-        # at this scale: 40,000 datasets make 4, 1,000 links and 10,000 members the least, 3 each
-        self.assertEqual([sum(digests[name].values()) for name in ("place", "add_links", "zip", "get")], [4, 3, 3, 1])
         work = self.root / "work/arm0"
+        # the cases that download or place files say where, and which file goes where once they ran
+        self.assertEqual({name: spec["outputs"]()[0].name for name, spec in specs.items() if "outputs" in spec},
+                         dict(place="place", add_links="links", zip="zip", get="get"))
+        specs["place"]["prep"]()
+        self.assertEqual(sorted(specs["place"]["outputs"]()[1]), [f"data/m0000{index}/m0000{index}.bin" for index in range(4)])
+        self.assertEqual(specs["get"]["outputs"]()[1], {"big.bin": served["big"]})
+        specs["place"]["post"]()
         (folder / "many/data/stray.bin").parent.mkdir(parents=True)
         (folder / "many/data/stray.bin").write_bytes(b"")
         specs["place"]["prep"]()

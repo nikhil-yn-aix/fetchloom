@@ -24,7 +24,6 @@ import subprocess
 import sys
 import threading
 import tomllib
-from collections import Counter
 import hashlib
 import zipfile
 
@@ -199,36 +198,52 @@ def fresh(target, template):
             (shutil.copytree if item.is_dir() else shutil.copyfile)(item, target / item.name)
 
 
-def expected(root):
-    """the SHA-256 of every file each case that downloads or places files must leave: the files the
-    server serves for it and the zip's members."""
+def expected(root, origin):
+    """the SHA-256 of what the server serves: each link's file, by link, each member of the zip, by
+    name, and the 1 GiB file."""
     www = root / "www"
-
-    def digests(paths):
-        return Counter(fixtures.sha256(path) for path in paths)
-
+    links = {f"{origin}/{path.relative_to(www).as_posix()}": fixtures.sha256(path)
+             for folder in ("links", "many") for path in sorted((www / folder).iterdir())}
     with zipfile.ZipFile(www / "members.zip") as archive:
-        members = Counter(hashlib.sha256(archive.read(info)).hexdigest() for info in archive.infolist())
-    return dict(place=digests(sorted((www / "many").iterdir())), add_links=digests(sorted((www / "links").iterdir())),
-                zip=members, get=digests([www / "big.bin"]))
+        members = {info.filename: hashlib.sha256(archive.read(info)).hexdigest() for info in archive.infolist()}
+    return dict(links=links, members=members, big=fixtures.sha256(www / "big.bin"))
 
 
-def placed(folder, digests):
-    """what is wrong with the files a run left under folder, against the SHA-256 it must leave, each
-    as often as given: one line counting those missing or wrong, or none. hidden files are
-    fetchloom's own, so they are left out."""
-    folder = Path(folder)
-    found = Counter(fixtures.sha256(path) for path in (folder.rglob("*") if folder.is_dir() else [])
-                    if path.is_file() and not any(part.startswith(".") for part in path.relative_to(folder).parts))
-    missing = digests - found
-    if not missing:
-        return []
-    return [f"{sum(missing.values())} of {sum(digests.values())} expected files are missing or wrong under {folder}"]
+def layout(project, sources):
+    """each file a project's datasets must leave, at the path fetchloom places it, with the SHA-256
+    its source serves: a link's file in its dataset's folder under the link's last part, and a zip's
+    members in its dataset's folder, as a sole archive's are. the datasets are the project's own, as
+    its build named them; a link the server never served expects bytes no file has."""
+    try:
+        datasets = tomllib.loads((project / "data.toml").read_text())["datasets"]
+    except (OSError, ValueError, KeyError):
+        return {"data.toml": None}
+    expect = {}
+    for name, entry in datasets.items():
+        ref = entry.get("ref", "")
+        if ref.endswith(".zip"):
+            expect.update({f"data/{name}/{member}": digest for member, digest in sources["members"].items()})
+        else:
+            expect[f"data/{name}/{ref.rsplit('/', 1)[-1]}"] = sources["links"].get(ref)
+    return expect
 
 
-def cases(root, arm, binary, folder, origin, digests):
+def placed(folder, expect):
+    """what is wrong with the files a run left under folder, against each path's SHA-256: one line
+    counting those missing or wrong, or none."""
+    wrong = 0
+    for path, digest in expect.items():
+        try:
+            wrong += digest is None or fixtures.sha256(Path(folder) / path) != digest
+        except OSError:
+            wrong += 1
+    return [f"{wrong} of {len(expect)} expected files are missing or wrong under {folder}"] if wrong else []
+
+
+def cases(root, arm, binary, folder, origin, sources):
     """each case's command, folder and environment for one arm, and for a case that downloads or
-    places files, the folder it leaves them in and their SHA-256; prep and post run outside the clock."""
+    places files, what gives the folder it leaves them in and each one's path and SHA-256 once it
+    ran, as its own data.toml names them; prep and post run outside the clock."""
     work = root / "work" / FOLDERS[arm]
     env = functools.partial(environment, root, origin=origin)
     fl = str(binary)
@@ -244,17 +259,18 @@ def cases(root, arm, binary, folder, origin, digests):
         verify=dict(argv=[fl, "--json", "status", "--verify"], cwd=folder / "large", env=env(folder / "large-cache")),
         place=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "place", env=env(folder / "many-cache"),
                    prep=lambda: fresh(work / "place", folder / "many"), post=emptied(work / "place"),
-                   outputs=(work / "place", digests["place"])),
+                   outputs=lambda: (work / "place", layout(work / "place", sources))),
         add_links=dict(argv=[fl, "-q", "--yes", "add", *(root / "src" / "links.txt").read_text().split()], cwd=work / "links",
                        env=env(work / "links-cache"), post=emptied(work / "links", work / "links-cache"),
                        prep=lambda: (work / "links").mkdir(parents=True, exist_ok=True),
-                       outputs=(work / "links", digests["add_links"])),
+                       outputs=lambda: (work / "links", layout(work / "links", sources))),
         zip=dict(argv=[fl, "-q", "--yes", "sync"], cwd=work / "zip", env=env(work / "zip-cache"),
                  prep=lambda: fresh(work / "zip", folder / "zip"), post=emptied(work / "zip", work / "zip-cache"),
-                 outputs=(work / "zip", digests["zip"])),
+                 outputs=lambda: (work / "zip", layout(work / "zip", sources))),
         get=dict(argv=[fl, "-q", "--yes", "get", f"{origin}/big.bin", "-o", str(work / "get" / "big.bin")],
                  cwd=root, env=env(work / "get-cache"), post=emptied(work / "get", work / "get-cache"),
-                 prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True), outputs=(work / "get", digests["get"])),
+                 prep=lambda: (work / "get").mkdir(parents=True, exist_ok=True),
+                 outputs=lambda: (work / "get", {"big.bin": sources["big"]})),
         merge=dict(argv=[fl, "--json", "--offline", "lock", "--dry-run"], cwd=folder / "merge",
                    env=env(folder / "merge-cache")),
         exclude=dict(argv=[fl, "--json", "--offline", "exclude", "--dry-run", *exclude_paths(folder / "exclude")],
@@ -307,7 +323,7 @@ def measure(name, specs, rounds, seed, out, cpus, timeout):
                 spec["prep"]()
             result = run.measure(spec["argv"], spec["cwd"], spec["env"], out / "logs" / f"{name}-{FOLDERS[arm]}.log",
                                  timeout, cpus=cpus)
-            checks = placed(*spec["outputs"]) if spec.get("outputs") else []
+            checks = placed(*spec["outputs"]()) if spec.get("outputs") else []
             if spec.get("post"):
                 spec["post"]()
             status = "passed" if result["exit_code"] == 0 and not result["timeout"] and not checks else "failed"
@@ -446,12 +462,12 @@ def main(argv=None):
     server = serve(root / "www", args.port)
     try:
         signature = sources(root, args.scale, args.seed, origin)
-        digests = expected(root)
+        served = expected(root, origin)
         specs = {}
         for arm, binary in binaries.items():
             print(f"preparing {arm}", file=sys.stderr, flush=True)
             folder = prepare(root, arm, binary, signature, origin)
-            for name, spec in cases(root, arm, binary, folder, origin, digests).items():
+            for name, spec in cases(root, arm, binary, folder, origin, served).items():
                 specs.setdefault(name, {})[arm] = spec
         given = dict(zip(ARMS, (args.baseline, args.candidate, args.baseline)))
         meta = dict(date=datetime.now(timezone.utc).isoformat(), seed=args.seed, scale=args.scale,
