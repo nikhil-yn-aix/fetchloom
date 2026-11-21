@@ -121,6 +121,22 @@ fn a_value_runs_refuse_is_refused_with_the_readers_message() {
     }
 }
 
+/// a refused value's help names what the key gives once it is unset, as the file's level makes it,
+/// not fetchloom's default without the level.
+#[test]
+fn a_refused_value_names_what_the_files_level_gives() {
+    let text = "jobs = 3\nresources = \"lean\"\n";
+    let (_folder, path, var) = settings("settings.toml", Some(text));
+    let error = set(&var, "jobs", &values(&["abc"]), None, FINE).unwrap_err();
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "run `fetchloom settings unset jobs` to use 2 from resources = lean, or set it to a number from 1 to 256"
+        )
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), text);
+}
+
 /// a list takes every value, each split at commas as its variable is, and they replace the list;
 /// a relative folder is taken from the current folder, and a web address or a bucket stays.
 #[test]

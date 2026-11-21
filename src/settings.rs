@@ -761,6 +761,14 @@ impl Given<'_> {
         Some((items, origin, named))
     }
 
+    /// the text the settings file itself holds for `key`, whatever a variable sets over it.
+    fn in_file_text(&self, key: &str) -> Option<String> {
+        match self.file.get(key)? {
+            Value::Text(text) => Some(text.clone()),
+            Value::List(items) => Some(items.join(",")),
+        }
+    }
+
     /// the text `key` holds as it is, never split at commas, since a folder's name may hold one,
     /// with where it came from and how to name it in a message.
     fn text(&self, key: &str) -> Option<(OsString, Origin, String)> {
@@ -880,6 +888,36 @@ fn undo(origin: Origin, key: &str) -> String {
     }
 }
 
+/// how to undo `key`'s bad value from `origin`, as [`undo`] says, and what a run then takes, in
+/// words: what the settings file holds, as `read` takes its text, when a variable set the bad one
+/// over it, else `default`, shown with where it came from, as a level gives it. a file value
+/// `read` refuses comes out too, since unsetting the variable alone would bring it back.
+fn undone(
+    given: &Given<'_>,
+    key: &str,
+    origin: Origin,
+    read: &dyn Fn(&str) -> Option<String>,
+    (default, from): (String, Origin),
+) -> String {
+    let undo = undo(origin, key);
+    let filed = given
+        .in_file_text(key)
+        .filter(|_| origin == Origin::Environment);
+    let undo = match filed {
+        Some(text) => match read(&text) {
+            Some(value) => return format!("{undo} to use {value} from the settings file"),
+            None => format!(
+                "{undo} and take the settings file's \"{text}\" out with `fetchloom settings unset {key}`"
+            ),
+        },
+        None => undo,
+    };
+    match from {
+        Origin::Resources(level) => format!("{undo} to use {default} from resources = {level}"),
+        _ => format!("{undo} to use the default of {default}"),
+    }
+}
+
 /// the whole number `key` holds, within `range`, or `default` when it is unset or empty.
 /// surrounding whitespace is accepted.
 fn count<T: FromStr + PartialOrd + fmt::Display + Copy>(
@@ -898,14 +936,26 @@ fn count<T: FromStr + PartialOrd + fmt::Display + Copy>(
         .filter(|number| range.contains(number))
         .map(|value| Set { value, origin })
         .ok_or_else(|| {
+            let read = |text: &str| {
+                text.trim()
+                    .parse::<T>()
+                    .ok()
+                    .filter(|number| range.contains(number))
+                    .map(|number| number.to_string())
+            };
             Error::new(
                 Kind::Usage,
                 format!("{named} is \"{text}\", which is not a number from {low} to {high}"),
             )
             .help(format!(
-                "{} to use the default of {}, or set it to a number from {low} to {high}",
-                undo(origin, key),
-                default.value
+                "{}, or set it to a number from {low} to {high}",
+                undone(
+                    given,
+                    key,
+                    origin,
+                    &read,
+                    (default.value.to_string(), default.origin)
+                )
             ))
         })
 }
@@ -980,10 +1030,11 @@ fn size(given: &Given<'_>, key: &str, default: Set<u64>) -> Result<Set<u64>, Err
     sized(&named, &text)
         .map(|value| Set { value, origin })
         .map_err(|message| {
+            let read = |text: &str| sized(key, text).ok().map(units::size);
+            let shown = (units::size(default.value), default.origin);
             Error::new(Kind::Usage, message).help(format!(
-                "{} to use the default of {}, or set it to a size such as 512M or 4G",
-                undo(origin, key),
-                units::size(default.value)
+                "{}, or set it to a size such as 512M or 4G",
+                undone(given, key, origin, &read, shown)
             ))
         })
 }
@@ -1403,9 +1454,21 @@ fn boolean(given: &Given<'_>, key: &str, default: bool) -> Result<Set<bool>, Err
         return Ok(Set::default(default));
     };
     let value = switched(&named, Some(text.as_ref())).map_err(|error| {
+        let read = |text: &str| {
+            switched(key, Some(text.as_ref()))
+                .ok()
+                .flatten()
+                .map(|on| on.to_string())
+        };
         error.help(format!(
-            "{} to use the default of {default}, or set it to true or false",
-            undo(origin, key)
+            "{}, or set it to true or false",
+            undone(
+                given,
+                key,
+                origin,
+                &read,
+                (default.to_string(), Origin::Default)
+            )
         ))
     })?;
     Ok(Set {
@@ -1440,10 +1503,16 @@ fn seconds(
             "{named} is \"{text}\", which is not a time from {low} s to {high} s, as 30s or 2min"
         ),
     };
+    let read = |text: &str| {
+        seconds_in(text)
+            .ok()
+            .filter(|seconds| range.contains(seconds))
+            .map(|seconds| format!("{seconds} s"))
+    };
+    let shown = (format!("{} s", default.value.as_secs()), default.origin);
     Err(Error::new(Kind::Usage, message).help(format!(
-        "{} to use the default of {} s, or set it to a time such as 30s, 2min or 1h",
-        undo(origin, key),
-        default.value.as_secs()
+        "{}, or set it to a time such as 30s, 2min or 1h",
+        undone(given, key, origin, &read, shown)
     )))
 }
 

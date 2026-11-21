@@ -9,8 +9,8 @@ use std::path::{Component, Path, PathBuf};
 use toml_edit::{DocumentMut, Item};
 
 use super::{
-    BOOLEANS, CLEARED, File, KEYS, LISTS, OTHERS, Settings, Value, located, parse, plain, split,
-    table, text_at,
+    BOOLEANS, CLEARED, File, KEYS, LISTS, Level, OTHERS, Settings, Value, located, parse, plain,
+    split, table, text_at,
 };
 use crate::error::{Error, Kind};
 use crate::machine::{Machine, Var};
@@ -79,7 +79,7 @@ pub(crate) fn set(
         held: _held,
     } = open(var, true)?;
     let mut document = document(&path, &text)?;
-    check(key, &after, &path)?;
+    check(key, &after, &path, &document)?;
     let before = document.get(key).and_then(Item::as_value).cloned();
     let mut changed = Changed {
         key: key.to_owned(),
@@ -535,11 +535,23 @@ fn document(path: &Path, text: &str) -> Result<DocumentMut, Error> {
     })
 }
 
-/// refuses `value` for `key` as a run reading it from the settings file at `path` would: the
-/// reader takes the line that would be written and reads the setting from it, naming the value as
-/// the command line gave it.
-fn check(key: &str, value: &toml_edit::Value, path: &Path) -> Result<(), Error> {
+/// refuses `value` for `key` as a run reading it from the settings file at `path`, holding
+/// `document`, would: the reader takes the line that would be written and reads the setting from
+/// it, naming the value as the command line gave it. the file's level goes with it, so a refusal
+/// names the value a level gives once the key is unset.
+fn check(
+    key: &str,
+    value: &toml_edit::Value,
+    path: &Path,
+    document: &DocumentMut,
+) -> Result<(), Error> {
     let mut line = DocumentMut::new();
+    let level = document.get("resources").and_then(Item::as_value).filter(
+        |level| matches!(read_as(level), Some(Value::Text(text)) if Level::parse(&text).is_some()),
+    );
+    if let Some(level) = level.filter(|_| key != "resources") {
+        line.insert("resources", Item::Value(level.clone()));
+    }
     line.insert(key, Item::Value(value.clone()));
     let file = File {
         path: Some(path.to_owned()),

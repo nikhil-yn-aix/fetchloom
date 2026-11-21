@@ -637,6 +637,44 @@ fn a_bad_value_is_a_usage_error_naming_the_variable_and_what_it_takes() {
     }
 }
 
+/// a bad value's help names what a run takes once it is undone: the settings file's own value for
+/// a variable set over it, and for a key, what the file's level gives, or else the default. a
+/// variable set over a file value just as bad says to take that out too.
+#[test]
+fn the_help_for_a_bad_value_names_what_undoing_it_gives() {
+    let leaned = "jobs = 3\ntimeout = \"2min\"\nresources = \"lean\"\n";
+    for (pairs, text, help) in [
+        (
+            &[("FETCHLOOM_JOBS", "0")][..],
+            leaned,
+            "unset FETCHLOOM_JOBS to use 3 from the settings file, or set it to a number from 1 to 256",
+        ),
+        (
+            &[("FETCHLOOM_TIMEOUT", "soon")],
+            leaned,
+            "unset FETCHLOOM_TIMEOUT to use 120 s from the settings file, or set it to a time such as 30s, 2min or 1h",
+        ),
+        (
+            &[],
+            "jobs = 0\nresources = \"lean\"\n",
+            "run `fetchloom settings unset jobs` to use 2 from resources = lean, or set it to a number from 1 to 256",
+        ),
+        (
+            &[("FETCHLOOM_JOBS", "0")],
+            "resources = \"lean\"\n",
+            "unset FETCHLOOM_JOBS to use 2 from resources = lean, or set it to a number from 1 to 256",
+        ),
+        (
+            &[("FETCHLOOM_JOBS", "abc")],
+            "jobs = 0\nresources = \"lean\"\n",
+            "unset FETCHLOOM_JOBS and take the settings file's \"0\" out with `fetchloom settings unset jobs` to use 2 from resources = lean, or set it to a number from 1 to 256",
+        ),
+    ] {
+        let error = Settings::read(&env(pairs), file(text).unwrap(), machine(None)).unwrap_err();
+        assert_eq!(error.help.as_deref(), Some(help), "{pairs:?} {text}");
+    }
+}
+
 #[test]
 fn lean_keeps_required_checksums_on_existing_workers() {
     for (level, processors, ceiling, expected) in [
