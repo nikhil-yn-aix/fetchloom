@@ -1372,3 +1372,40 @@ fn a_yes_to_the_size_question_does_not_answer_the_budget_one() -> Result {
     assert!(!sandbox.work().join("huge.bin").exists(), "{screen}");
     Ok(())
 }
+
+/// `path <name>` reads that dataset alone, so when it alone is too big for the room a container
+/// leaves, the refusal does not send the person back to `fetchloom path <name>`; a file of it,
+/// whose list rows path reads one by one and keeps only the file's, still answers there.
+#[test]
+fn a_dataset_too_big_for_its_container_is_refused_without_naming_path_again() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("parts")?;
+    for row in 0..20 {
+        std::fs::write(folder.join(format!("{row:02}.csv")), format!("{row}\n"))?;
+    }
+    let run = |args: &[&str], room: Option<u64>| {
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_TEST_INLINE", "0");
+        if let Some(room) = room {
+            command.env("FETCHLOOM_TEST_ROOM", room.to_string());
+        }
+        command.output()
+    };
+    let added = run(&["add", "../parts"], None)?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let base: u64 = if cfg!(target_env = "musl") {
+        20 << 20
+    } else {
+        8 << 20
+    };
+    // room for the pins of ten files, not the twenty the dataset holds
+    let room = base + 10 * 650;
+    let whole = run(&["--json", "path", "parts"], Some(room))?;
+    let document = json(&whole)?;
+    assert_eq!(whole.status.code(), Some(50), "{document}");
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(!help.contains("path <name>"), "{document}");
+    let one = run(&["--json", "path", "parts/03.csv"], Some(room))?;
+    assert_eq!(one.status.code(), Some(0), "{}", text(&one.stdout)?);
+    Ok(())
+}

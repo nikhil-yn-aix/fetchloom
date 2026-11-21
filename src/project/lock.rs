@@ -106,11 +106,19 @@ pub(crate) fn fits_manifest(bytes: u64, read: u64) -> Result<(), Error> {
     if need <= room {
         return Ok(());
     }
+    // naming one dataset reads the whole of data.toml all the same
     Err(too_big(
-        &format!("data.toml, which is {},", crate::units::size(bytes)),
+        &format!(
+            "this project's data.toml, which is {},",
+            crate::units::size(bytes)
+        ),
         need,
         room,
-    ))
+    )
+    .help(format!(
+        "raise the container's memory limit by {} or more",
+        crate::units::size(need - room)
+    )))
 }
 
 /// what data.toml's read of about `read` bytes needs of `room`: [`BASE`], which a run holds before
@@ -152,26 +160,46 @@ pub(crate) struct Budget {
     room: u64,
     /// what a lock read before and still held takes of the room, as [`Lock::read_with`] says.
     taken: u64,
+    /// the dataset read, when the read is of one alone, which naming it cannot make smaller.
+    alone: Option<String>,
 }
 
 impl Budget {
     /// the budget of the files `parsed` pins, refused as [`fits`] says when they do not fit.
     fn of<'a>(parsed: impl IntoIterator<Item = &'a Parsed>, room: u64) -> Result<Budget, Error> {
-        let files: u64 = parsed.into_iter().map(Parsed::files).sum();
-        let need = BASE.saturating_add(files.saturating_mul(PER_FILE));
-        if need > room {
-            return Err(too_big(
-                &crate::units::count(files, "file", "files"),
-                need,
-                room,
-            ));
+        let mut files: u64 = 0;
+        let mut names: Vec<&str> = Vec::new();
+        for entry in parsed {
+            files = files.saturating_add(entry.files());
+            if names.len() < 2 {
+                names.push(entry.name());
+            }
         }
-        Ok(Budget {
+        let budget = Budget {
             files,
-            need,
+            need: BASE.saturating_add(files.saturating_mul(PER_FILE)),
             room,
             taken: 0,
-        })
+            alone: match names.as_slice() {
+                [one] => Some((*one).to_owned()),
+                _ => None,
+            },
+        };
+        if budget.need > room {
+            return Err(too_big(&budget.read(), budget.need, room).help(budget.raise()));
+        }
+        Ok(budget)
+    }
+
+    /// counts a row of a list that a read keeps though [`Budget::of`] left its list out, as a file
+    /// pinned in data.lock counts.
+    pub(super) fn keep(&mut self) -> Result<(), Error> {
+        self.files = self.files.saturating_add(1);
+        self.need = self.need.saturating_add(PER_FILE);
+        if self.need <= self.room {
+            return Ok(());
+        }
+        Err(too_big(&self.read(), self.need, self.room).help(self.raise()))
     }
 
     /// takes the memory a row of `name`'s list holding `text` bytes of path and link needs past
@@ -183,13 +211,13 @@ impl Budget {
             return Ok(());
         }
         // what is not read yet would take more still
+        let (need, room) = (with_manifest(self.need), with_manifest(self.room));
+        let (need, room) = (sized(need, room), sized(room, need));
         let error = Error::new(
             Kind::LocalIo,
             format!(
-                "reading this project's {} takes at least {} of memory, more than the {} this container leaves fetchloom",
-                crate::units::count(self.files, "file", "files"),
-                crate::units::size(with_manifest(self.need)),
-                crate::units::size(with_manifest(self.room))
+                "reading {} takes at least {need} of memory, more than the {room} this container leaves fetchloom",
+                self.read()
             ),
         )
         .detail(format!(
@@ -203,7 +231,32 @@ impl Budget {
                 crate::units::size(self.taken)
             ))
         };
-        Err(beside_manifest(error).help(raise(self.need - self.room)))
+        Err(beside_manifest(error).help(self.raise()))
+    }
+
+    /// what the read is of, as its refusal names it.
+    fn read(&self) -> String {
+        let files = crate::units::count(self.files, "file", "files");
+        match &self.alone {
+            Some(name) => format!("the {files} of {name}"),
+            None => format!("this project's {files}"),
+        }
+    }
+
+    /// how to give the read the memory it takes: a container with more, or, for a read of more
+    /// than one dataset, a read of one.
+    fn raise(&self) -> String {
+        let more = format!(
+            "raise the container's memory limit by {} or more",
+            crate::units::size(self.need.saturating_sub(self.room))
+        );
+        if self.alone.is_some() {
+            return more;
+        }
+        format!(
+            "{more}, or name one dataset, as in `{}`, which reads only its files",
+            crate::suggested::command("path <name>")
+        )
     }
 }
 
@@ -216,10 +269,12 @@ fn fits_text(what: &str, bytes: u64, room: u64) -> Result<(), Error> {
         return Ok(());
     }
     // naming one dataset reads the whole text all the same
-    Err(too_big(what, need, room).help(format!(
-        "raise the container's memory limit by {} or more",
-        crate::units::size(need - room)
-    )))
+    Err(
+        too_big(&format!("this project's {what}"), need, room).help(format!(
+            "raise the container's memory limit by {} or more",
+            crate::units::size(need - room)
+        )),
+    )
 }
 
 /// refuses, before it is read, a data.lock of `bytes` too big for the room a container leaves, as
@@ -232,18 +287,18 @@ pub(crate) fn fits_file(bytes: u64) -> Result<(), Error> {
     )
 }
 
-/// the error for reading `what` of the project, which takes about `need` bytes of memory, more
-/// than the `room` its container leaves.
+/// the error for reading `what`, which takes about `need` bytes of memory, more than the `room`
+/// its container leaves.
 fn too_big(what: &str, need: u64, room: u64) -> Error {
+    let (need, room) = (with_manifest(need), with_manifest(room));
     beside_manifest(Error::new(
         Kind::LocalIo,
         format!(
-            "reading this project's {what} takes about {} of memory, more than the {} this container leaves fetchloom",
-            crate::units::size(with_manifest(need)),
-            crate::units::size(with_manifest(room))
+            "reading {what} takes about {} of memory, more than the {} this container leaves fetchloom",
+            sized(need, room),
+            sized(room, need)
         ),
     ))
-    .help(raise(need - room))
 }
 
 /// `bytes`, a need or a room that [`room`] counted without what data.toml's manifest holds, with
@@ -252,13 +307,14 @@ fn with_manifest(bytes: u64) -> u64 {
     bytes.saturating_add(HELD.load(Ordering::Relaxed))
 }
 
-/// how to give a read that is `short` bytes short the memory it takes.
-fn raise(short: u64) -> String {
-    format!(
-        "raise the container's memory limit by {} or more, or name one dataset, as in `{}`, which reads only its files",
-        crate::units::size(short),
-        crate::suggested::command("path <name>")
-    )
+/// `size` in words, exact to the byte when `other` would read the same once rounded, so a need
+/// just past the room never reads as the room itself.
+fn sized(size: u64, other: u64) -> String {
+    if crate::units::size(size) == crate::units::size(other) {
+        crate::units::count(size, "byte", "bytes")
+    } else {
+        crate::units::size(size)
+    }
 }
 
 /// what to do about a data.lock holding a field or a value this fetchloom does not know.
@@ -1015,7 +1071,11 @@ impl Lock {
         {
             return None;
         }
-        let mut budget = Budget::of(&parsed, memory).ok()?;
+        // of `name`'s list only the rows at the file are held, each counted as it is kept
+        let counted = parsed
+            .iter()
+            .filter(|entry| entry.name() != name || entry.listed().is_none());
+        let mut budget = Budget::of(counted, memory).ok()?;
         let mut lock = Lock::default();
         for entry in parsed {
             match entry {

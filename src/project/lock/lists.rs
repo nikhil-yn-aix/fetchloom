@@ -543,6 +543,7 @@ pub(crate) fn read_some(
                 .take(name, (row.path.len() + row.url.len()) as u64)
                 .ok()?;
             if keep(&row.path) {
+                budget.keep().ok()?;
                 rows.push(LockedFile::parse_row(text)?);
             } else if crate::name::escapes(&row.path).is_some() || row.url.contains(['@', '?', '#'])
             {
