@@ -48,4 +48,4 @@ openneuro lists a snapshot folder by folder, up to `host_jobs` folders at once, 
 
 ## access and limits
 
-a private dataset, which openneuro shows only to the people its owners let in, is refused with `auth.required`, exit 40: fetchloom does not sign in to openneuro, and no key goes to it. a snapshot its owners deprecated is read with a warning that gives their reason. [search](../commands/search.md) asks openneuro's own search and leaves out the private datasets it finds, and ones with no snapshot yet.
+a private dataset, which openneuro shows only to the people its owners let in, is refused with `auth.required`, exit 40: fetchloom does not sign in to openneuro, and no key goes to it. a snapshot its owners deprecated is read with a warning that gives their reason. [search](../commands/search.md) asks openneuro's own search for public datasets alone, so a private one takes no match's place and the same words find the same matches, and leaves out ones with no snapshot yet.

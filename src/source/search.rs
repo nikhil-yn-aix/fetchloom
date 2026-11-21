@@ -1096,7 +1096,9 @@ async fn dandi(api: &impl Api, words: &str, limit: usize) -> Result<Vec<Candidat
 }
 
 /// what openneuro's search asks of each dataset it finds.
-const DATASETS: &str = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
+// public datasets alone: private ones held places in the ranking, which openneuro answers with an
+// error, and which of them came back near the end of a short list changed from search to search
+const DATASETS: &str = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words,publicOnly:true},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
 
 /// the words and the count of a search, sent apart from the query so no word can change it.
 #[derive(Serialize)]

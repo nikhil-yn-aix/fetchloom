@@ -50,7 +50,7 @@ const NO_S2_PAPERS: &[u8] = br#"{"total":0,"offset":0,"data":[]}"#;
 
 /// openneuro's search for `words`, a GraphQL query sent by GET with the words as a variable.
 fn openneuro(words: &str, first: usize) -> String {
-    let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
+    let query = "query($words:[String!],$first:Int){advancedSearch(query:{keywords:$words,publicOnly:true},first:$first){edges{node{id latestSnapshot{size summary{totalFiles} description{Name}} analytics{downloads}}}}}";
     let variables = format!(
         r#"{{"words":[{}],"first":{first}}}"#,
         serde_json::to_string(words).unwrap()
@@ -1034,6 +1034,27 @@ fn dandi_leaves_out_embargoed_and_empty_dandisets_and_reads_a_draft() {
     );
     let counted: Vec<_> = result.candidates.iter().map(|item| item.files).collect();
     assert_eq!(counted, [Some(8), Some(152)]);
+}
+
+/// two runs of `add mnist` once listed other openneuro matches: its ranking holds private datasets,
+/// whose order near the end of a short list changed between answers, so the search asks openneuro
+/// for public datasets alone.
+#[test]
+fn openneuro_is_asked_for_public_datasets_alone() {
+    let api = Recorded::default().otherwise(200);
+    let _ = block_on(search(&api, "mnist", &[Catalog::OpenNeuro], Some(LIMIT)));
+    let asked = api.asked();
+    let link = asked[0].split(' ').next().unwrap_or_default();
+    let query = Url::parse(link)
+        .unwrap()
+        .query_pairs()
+        .find(|(name, _)| name == "query")
+        .map(|(_, query)| query.into_owned())
+        .unwrap_or_default();
+    assert!(
+        query.contains("advancedSearch(query:{keywords:$words,publicOnly:true}"),
+        "{query}"
+    );
 }
 
 /// openneuro answers a GET query only with the header guarding it against other sites; errors with
