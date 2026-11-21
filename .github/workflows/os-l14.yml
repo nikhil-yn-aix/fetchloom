@@ -1,0 +1,48 @@
+name: os-l14
+
+# scratch only: lead 14's test on windows, green on three images, then red (main's look at the
+# name) and break (a look through the link) on windows-2025, where it must fail
+on:
+  push:
+    branches: ['scratch-os-*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: os-l14-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_BUILD_JOBS: 4
+  RUST_TEST_THREADS: 4
+
+jobs:
+  put:
+    name: ${{ matrix.mode }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-2025, mode: green}
+          - {os: windows-2022, mode: green}
+          - {os: windows-11-arm, mode: green}
+          - {os: windows-2025, mode: red}
+          - {os: windows-2025, mode: break}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: the ${{ matrix.mode }} tree
+        run: python .github/l14.py ${{ matrix.mode }}
+      - name: put's tests
+        env:
+          FETCHLOOM_TEST_REQUIRE: symlinks
+        run: cargo test --locked --lib -- cli::sync::place::put::tests
