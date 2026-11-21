@@ -2,15 +2,15 @@
 source: tests/cli/basics.rs
 expression: help
 ---
-fetch something once, without a project
+download a dataset once, without a project
 
 usage: fetchloom get [options] <link>...
 
 examples:
   fetchloom get iris
   fetchloom get https://example.org/iris.csv -o iris.csv
+  fetchloom get geo:GSE60450 --select "matrix/*"
   fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
-  fetchloom get -i links.txt
 
 arguments:
   <link>...  what to download: a link, a DOI, an id such as zenodo:3608990, or

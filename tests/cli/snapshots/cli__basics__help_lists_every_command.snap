@@ -6,12 +6,13 @@ usage: fetchloom [options] <command>
 
 examples:
   fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add geo:GSE60450    # a GEO series, by its accession
   fetchloom add ../measurements    # files on this machine, no network needed
   fetchloom sync    # in a clone, put the files data.lock lists in data/
 
 commands:
   add          add a dataset to the project and download it into the data folder
-  remove       remove a dataset and the files fetchloom manages, not an output's
+  remove       remove a dataset and the files fetchloom placed for it
   exclude      leave files out of their dataset for good, such as bad samples
   drop         free a dataset's space here, keeping it in data.lock
   sync         put the files data.lock lists into the data folder
@@ -25,8 +26,8 @@ commands:
   path         print where a dataset or a file in it is, syncing it if needed
   cache        show the cache, free what no project needs, or verify it
   settings     show each setting, or change one in the settings file
-  get          fetch something once, without a project
-  search       find datasets on hugging face, kaggle, zenodo and other sites
+  get          download a dataset once, without a project
+  search       find datasets on hugging face, kaggle, zenodo, GEO and more
   auth         sign in for private data, or data with terms to accept
   completions  print a script that completes fetchloom's commands in a shell
   help         explain the ideas behind fetchloom, or one command
@@ -50,5 +51,6 @@ global options:
 
 help topics: `fetchloom help concepts`, `environment` or `exit-codes`
 for agents and scripts: `fetchloom help agents`, what --json and exit codes say
+R and python helpers: https://nikhil-yn-aix.github.io/fetchloom/user/reference/
 docs: https://nikhil-yn-aix.github.io/fetchloom/
 report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues

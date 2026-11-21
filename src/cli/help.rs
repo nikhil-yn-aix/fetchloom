@@ -505,32 +505,100 @@ fn unknown(topic: &[String]) -> Error {
     }
 }
 
-/// the commands `-h` shows of fetchloom's own, the ones used most. `--help` lists them all.
+/// the commands `-h` shows of fetchloom's own, the ones a newcomer uses first, in that order.
+/// `--help` lists them all.
 const COMMON_COMMANDS: [&str; 8] = [
-    "add", "remove", "sync", "status", "list", "path", "get", "search",
+    "add", "get", "search", "sync", "status", "path", "list", "remove",
 ];
 
-/// the options `-h` shows of fetchloom's own, by their ids. a command's `-h` shows only the
-/// options of its own, so none every command takes.
-const COMMON_OPTIONS: [&str; 7] = [
-    "quiet",
-    "verbose",
-    "json",
-    "offline",
-    "yes",
-    "directory",
-    "version",
+/// the arguments a command's `-h` shows, each with a short line of what it does, for the commands
+/// a newcomer meets first whose every option would not fit a screen. `--help` shows each of them,
+/// and every other option, with all it says.
+const SHORT_ARGUMENTS: [(&str, &[(&str, &str)]); 4] = [
+    (
+        "add",
+        &[
+            (
+                "links",
+                "search words, a link, a DOI, an id, or a path on this machine",
+            ),
+            ("name", "the name for data.toml and for the folder in data/"),
+            (
+                "select",
+                "keep only files matching this pattern, such as \"*.csv\"",
+            ),
+            (
+                "dry_run",
+                "show what would change on disk without changing it",
+            ),
+        ],
+    ),
+    (
+        "get",
+        &[
+            (
+                "links",
+                "what to download: a link, a DOI, an id or search words",
+            ),
+            ("output", "write the one file downloaded to <file>"),
+            ("dir", "put the download in <folder>"),
+            (
+                "select",
+                "keep only files matching this pattern, such as \"*.csv\"",
+            ),
+            (
+                "dry_run",
+                "show what would change on disk without changing it",
+            ),
+        ],
+    ),
+    (
+        "sync",
+        &[
+            (
+                "names",
+                "the datasets to sync; all of them when none is named",
+            ),
+            ("force", "replace files that were edited or are in the way"),
+            (
+                "locked",
+                "fail when data.lock is out of date with data.toml, for ci",
+            ),
+            (
+                "verify",
+                "check each placed file's SHA-256, not only its size and time",
+            ),
+            (
+                "dry_run",
+                "show what would change on disk without changing it",
+            ),
+        ],
+    ),
+    (
+        "search",
+        &[
+            ("words", "dataset names or keywords, with or without quotes"),
+            (
+                "source",
+                "search only this site, such as geo; repeat it or use commas for more",
+            ),
+            (
+                "limit",
+                "keep up to this many matches from each site, 1 to 20",
+            ),
+        ],
+    ),
 ];
 
-/// what `-h` shows: the commands and options used most, or a command's usage, examples and own
-/// options, then where `--help` shows the rest. none when `topic` names no command.
+/// what `-h` shows: the commands a newcomer uses most and where the R and python helpers are, or
+/// a command's usage, examples and most used options, then where `--help` shows the rest. none
+/// when `topic` names no command.
 pub(super) fn short(topic: &[String]) -> Option<String> {
     let mut root = args::command();
     let global: Vec<String> = root
         .get_arguments()
         .filter(|arg| arg.is_global_set() || arg.get_id() == "version")
         .map(|arg| arg.get_id().to_string())
-        .filter(|id| !(topic.is_empty() && COMMON_OPTIONS.contains(&id.as_str())))
         .collect();
     for id in &global {
         root = root.mut_arg(id, |arg| arg.hide(true));
@@ -544,8 +612,14 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
         for name in &rare {
             root = root.mut_subcommand(name, |command| command.hide(true));
         }
+        for (order, name) in COMMON_COMMANDS.iter().enumerate() {
+            root = root.mut_subcommand(name, |command| command.display_order(order));
+        }
         root = root.after_help(args::TOP_EXAMPLES);
-        "`fetchloom --help` shows every command and option".to_owned()
+        format!(
+            "{}\n`fetchloom --help` shows every command and option",
+            args::helpers()
+        )
     } else {
         // the examples, without what the command leaves on disk or its page
         root = mut_command(root, topic, &|command| {
@@ -560,10 +634,13 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
                 .to_owned();
             command.after_help(examples)
         });
-        format!(
-            "`fetchloom {} --help` also lists the global options",
-            topic.join(" ")
-        )
+        if let Some((_, shown)) = SHORT_ARGUMENTS
+            .iter()
+            .find(|(name, _)| topic.len() == 1 && topic[0] == *name)
+        {
+            root = mut_command(root, topic, &|command| shortened(command, shown));
+        }
+        format!("`fetchloom {} --help` lists every option", topic.join(" "))
     };
     let line = std::iter::once("fetchloom")
         .chain(topic.iter().map(String::as_str))
@@ -575,6 +652,23 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// `command` with the arguments of `shown` told in their short lines, and its other arguments of
+/// its own hidden, as its `-h` shows them.
+fn shortened(mut command: clap::Command, shown: &[(&str, &'static str)]) -> clap::Command {
+    let own: Vec<String> = command
+        .get_arguments()
+        .filter(|arg| !arg.is_global_set())
+        .map(|arg| arg.get_id().to_string())
+        .collect();
+    for id in own {
+        command = match shown.iter().find(|(name, _)| *name == id) {
+            Some((_, text)) => command.mut_arg(&id, |arg| arg.help(*text)),
+            None => command.mut_arg(&id, |arg| arg.hide(true)),
+        };
+    }
+    command
 }
 
 /// `root` with `change` made to the command the names in `path` lead to, as `cache gc`.

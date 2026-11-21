@@ -14,9 +14,9 @@ const TEMPLATE: &str = "{about}\n\nusage: {usage}\n\n{all-args}{after-help}";
 mod examples {
     pub(super) const ADD: &str = "examples:
   fetchloom add iris    # at a terminal, pick one from a list
-  fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run
+  fetchloom add geo:GSE60450 --select \"matrix/*\" --dry-run
   fetchloom add ./flowers    # files on this machine, copied into the cache
-  fetchloom add -i links.txt    # a dataset for each link in a list
+  fetchloom add -i links.txt    # one dataset of the files a list links to
 
 on disk: writes data.toml and data.lock, and places the dataset's files in data/<name>, where fetchloom manages them, with a .gitignore that keeps them out of git. files on this machine are only read, and a folder of the project is kept where it is instead, as an output, whose files stay yours. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
 
@@ -105,8 +105,8 @@ on disk: copies the files data.lock lists from the cache into the mirror, which 
 in a bucket: each file goes up once, checked by S3 against its SHA-256 and signed with the AWS keys fetchloom finds, as for s3_buckets. a key S3 refuses is named, with what the bucket's policy must grant it";
 
     pub(super) const PATH: &str = "examples:
-  fetchloom path iris
-  fetchloom path iris/Iris.csv
+  fetchloom path iris    # in python, fetchloom.path(\"iris\")
+  fetchloom path iris/Iris.csv    # in R, fetchloom::path(\"iris/Iris.csv\")
   fetchloom path iris -q
   fetchloom path iris --locked
 
@@ -157,8 +157,8 @@ on disk: notes changed cached files, which are downloaded again when next needed
     pub(super) const GET: &str = "examples:
   fetchloom get iris
   fetchloom get https://example.org/iris.csv -o iris.csv
+  fetchloom get geo:GSE60450 --select \"matrix/*\"
   fetchloom get zenodo:3608990 figshare:34744689@1 --dir downloads
-  fetchloom get -i links.txt
 
 on disk: writes one folder for each link, or with -o the one file it names, through the cache. does not create data.toml or data.lock";
 
@@ -216,8 +216,14 @@ pub(crate) const ABOUT: &str =
 /// the commands a newcomer starts with, which `-h` and `--help` show first.
 pub(super) const TOP_EXAMPLES: &str = "examples:
   fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add geo:GSE60450    # a GEO series, by its accession
   fetchloom add ../measurements    # files on this machine, no network needed
   fetchloom sync    # in a clone, put the files data.lock lists in data/";
+
+/// where the R package and the python helper are, which run fetchloom from R and python.
+pub(super) fn helpers() -> String {
+    format!("R and python helpers: {SITE}user/reference/")
+}
 
 /// what the welcome says fetchloom is for, below its name.
 pub(crate) const PURPOSE: &str = "exact research data for every project, on every machine";
@@ -472,7 +478,8 @@ fn linked(root: clap::Command) -> clap::Command {
         format!(
             "help topics: `fetchloom help concepts`, `environment` or `exit-codes`\n\
              for agents and scripts: `fetchloom help agents`, what --json and exit codes say\n\
-             docs: {SITE}\nreport a bug: {}",
+             {}\ndocs: {SITE}\nreport a bug: {}",
+            helpers(),
             crate::error::ISSUES
         ),
     );
@@ -575,7 +582,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom add [options] <link>...\n       fetchloom add [options] <path>\n       fetchloom add [options] -i <file>", help_template = TEMPLATE, after_help = examples::ADD)]
     Add(Add),
 
-    /// remove a dataset and the files fetchloom manages, not an output's
+    /// remove a dataset and the files fetchloom placed for it
     #[command(override_usage = "fetchloom remove [options] <name>...", help_template = TEMPLATE, mut_arg("dry_run", |arg| arg.help(LOCAL_DRY_RUN)), after_help = examples::REMOVE)]
     Remove(Remove),
 
@@ -631,11 +638,11 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom settings [options] [command]", help_template = TEMPLATE, subcommand_help_heading = "commands", subcommand_value_name = "command", after_help = examples::SETTINGS)]
     Settings(Settings),
 
-    /// fetch something once, without a project
+    /// download a dataset once, without a project
     #[command(override_usage = "fetchloom get [options] <link>...", help_template = TEMPLATE, after_help = examples::GET)]
     Get(Get),
 
-    /// find datasets on hugging face, kaggle, zenodo and other sites
+    /// find datasets on hugging face, kaggle, zenodo, GEO and more
     #[command(override_usage = "fetchloom search [options] <words>...", help_template = TEMPLATE, after_help = examples::SEARCH)]
     Search(Search),
 
@@ -973,7 +980,7 @@ pub(crate) struct Add {
     pub(crate) dry: DryRun,
 }
 
-/// remove a dataset and the files fetchloom manages, not an output's
+/// remove a dataset and the files fetchloom placed for it
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Remove {
     /// the datasets' names in data.toml
@@ -1276,7 +1283,7 @@ pub(crate) struct Path {
     pub(crate) locked: bool,
 }
 
-/// fetch something once, without a project
+/// download a dataset once, without a project
 #[derive(Clone, Debug, clap::Args)]
 #[expect(
     clippy::struct_excessive_bools,

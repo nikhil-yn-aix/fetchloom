@@ -50,8 +50,10 @@ fn help_lists_every_command() -> Result {
     Ok(())
 }
 
-/// `-h` shows the commands and options used most, or a command's own options and examples, and
-/// when a line has both `-h` and `--help`, the first one decides.
+/// `-h` shows the commands a newcomer uses first, a GEO example and where the R and python helpers
+/// are, or a command's examples and most used options, in one screen of 24 rows with the line
+/// typed and the next prompt; `--help` keeps every option. when a line has both `-h` and
+/// `--help`, the first one decides.
 #[test]
 fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     let sandbox = Sandbox::new()?;
@@ -63,18 +65,52 @@ fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     );
     for shown in [
         "\nexamples:\n  fetchloom add iris ",
+        "\n  fetchloom add geo:GSE60450 ",
         "\n  add ",
+        "\n  get ",
         "\n  sync ",
-        "--offline",
-        "-C <dir>",
+        "\nR and python helpers: https://nikhil-yn-aix.github.io/fetchloom/user/reference/\n",
     ] {
         assert!(short.contains(shown), "{shown}: {short}");
+        assert!(long.contains(shown), "{shown}: {long}");
     }
-    for left in ["\n  completions ", "--mirror", "--no-config"] {
+    for left in ["\n  completions ", "--mirror", "--no-config", "--offline"] {
         assert!(
             !short.contains(left) && long.contains(left),
             "{left}: {short}"
         );
+    }
+    for command in [
+        "", "add", "get", "sync", "status", "path", "list", "remove", "search",
+    ] {
+        let line: Vec<&str> = [command, "-h"]
+            .into_iter()
+            .filter(|word| !word.is_empty())
+            .collect();
+        let help = text(&sandbox.run(&line)?.stdout)?;
+        assert!(help.lines().count() <= 22, "{command} -h:\n{help}");
+    }
+    for (command, rare) in [
+        (
+            "add",
+            &[
+                "--no-sync",
+                "--web-page",
+                "--decompress",
+                "-i, --input-file",
+            ][..],
+        ),
+        ("get", &["--sha256", "--force", "--web-page"]),
+        ("sync", &["--strict"]),
+    ] {
+        let short = text(&sandbox.run(&[command, "-h"])?.stdout)?;
+        let long = text(&sandbox.run(&[command, "--help"])?.stdout)?;
+        for option in rare {
+            assert!(
+                !short.contains(&format!("  {option} ")) && long.contains(&format!("  {option} ")),
+                "{command} {option}: {short}"
+            );
+        }
     }
     assert!(
         short
@@ -97,7 +133,7 @@ fn short_help_shows_the_common_part_and_points_to_the_rest() -> Result {
     }
     assert!(
         add.trim_end()
-            .ends_with("`fetchloom add --help` also lists the global options"),
+            .ends_with("`fetchloom add --help` lists every option"),
         "{add}"
     );
     assert_eq!(text(&sandbox.run(&["add", "--help", "-h"])?.stdout)?, full);

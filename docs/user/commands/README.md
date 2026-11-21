@@ -10,7 +10,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`list`](list.md) | show dataset references, locked sizes and folders | inspect the project manifest and lock |
 | [`export`](export.md) | write the SHA-256 of placed files, or the links of downloaded ones | check files with `sha256sum`, or download them with another tool |
 | [`push`](push.md) | copy the pinned files from the cache into a folder mirror | share a project's data through a lab disk or a usb drive |
-| [`search`](search.md) | find datasets on hugging face, kaggle, zenodo and other sites | choose a reference from plain words |
+| [`search`](search.md) | find datasets on hugging face, kaggle, zenodo, GEO and other sites | choose a reference from plain words |
 | [`status`](status.md) | list missing, edited and extra files; `--check` fails while the data is not ready | check local inputs without downloads |
 | [`audit`](audit.md) | ask the sources whether they still serve each pinned file, list a newer version or changed a license | check in CI that a project's data can still be had |
 | [`path`](path.md) | return an absolute dataset or file path | locate an input from a script or notebook |

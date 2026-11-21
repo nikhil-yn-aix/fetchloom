@@ -63,6 +63,7 @@ print the version
 .SH EXTRA
 examples:
   fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add geo:GSE60450    # a GEO series, by its accession
   fetchloom add ../measurements    # files on this machine, no network needed
   fetchloom sync    # in a clone, put the files data.lock lists in data/
 .SH COMMANDS
@@ -71,7 +72,7 @@ examples:
 add a dataset to the project and download it into the data folder
 .TP
 \fBremove\fR
-remove a dataset and the files fetchloom manages, not an output's
+remove a dataset and the files fetchloom placed for it
 .TP
 \fBexclude\fR
 leave files out of their dataset for good, such as bad samples
@@ -113,10 +114,10 @@ show the cache, free what no project needs, or verify it
 show each setting, or change one in the settings file
 .TP
 \fBget\fR
-fetch something once, without a project
+download a dataset once, without a project
 .TP
 \fBsearch\fR
-find datasets on hugging face, kaggle, zenodo and other sites
+find datasets on hugging face, kaggle, zenodo, GEO and more
 .TP
 \fBauth\fR
 sign in for private data, or data with terms to accept

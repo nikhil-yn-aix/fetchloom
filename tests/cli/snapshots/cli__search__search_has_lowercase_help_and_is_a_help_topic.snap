@@ -2,7 +2,7 @@
 source: tests/cli/search.rs
 expression: help
 ---
-find datasets on hugging face, kaggle, zenodo and other sites
+find datasets on hugging face, kaggle, zenodo, GEO and more
 
 usage: fetchloom search [options] <words>...
 
