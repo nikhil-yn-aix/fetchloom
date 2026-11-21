@@ -209,6 +209,60 @@ fn bash_loads_the_script() -> Result {
     Ok(())
 }
 
+/// fish completes the top's `--color` with its values, as it does a command's, and the key of
+/// `settings set` and `unset` with the keys, as bash and zsh do, never with file names; a value
+/// after the key is offered no key. skipped where fish is not installed.
+#[cfg(unix)]
+#[test]
+fn fish_completes_color_values_and_setting_keys() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = sandbox.folder("fish-home")?;
+    let script = sandbox.folder("scripts")?.join("fetchloom.fish");
+    std::fs::write(&script, sandbox.run(&["completions", "fish"])?.stdout)?;
+    std::fs::write(sandbox.work().join("data.toml"), "")?;
+    let offered = |line: &str| -> Result<Option<Vec<String>>> {
+        let ran = std::process::Command::new("fish")
+            .args(["--no-config", "-c"])
+            .arg(format!(
+                "source '{}'; complete -C '{line}'",
+                script.display()
+            ))
+            .current_dir(sandbox.work())
+            .env("HOME", &home)
+            .env("XDG_CONFIG_HOME", home.join("config"))
+            .env("XDG_DATA_HOME", home.join("data"))
+            .output();
+        let output = match ran {
+            Ok(output) => output,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(err) => return Err(err.into()),
+        };
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        let mut offered: Vec<String> = text(&output.stdout)?
+            .lines()
+            .map(|line| line.split('\t').next().unwrap_or_default().to_owned())
+            .collect();
+        offered.sort();
+        Ok(Some(offered))
+    };
+    let Some(colors) = offered("fetchloom --color ")? else {
+        return crate::support::skipped("fish", "no fish, so no fish completion to load");
+    };
+    assert_eq!(colors, ["always", "auto", "never"]);
+    for line in ["fetchloom settings set ", "fetchloom settings unset "] {
+        let keys = offered(line)?.unwrap_or_default();
+        assert!(
+            keys.iter().any(|key| key == "jobs")
+                && keys.iter().any(|key| key == "push_to")
+                && !keys.iter().any(|key| key == "data.toml"),
+            "{line}: {keys:?}"
+        );
+    }
+    let values = offered("fetchloom settings set jobs ")?.unwrap_or_default();
+    assert!(!values.iter().any(|key| key == "push_to"), "{values:?}");
+    Ok(())
+}
+
 /// names come from data.toml alone, in the project or through -C, past a broken settings file;
 /// the rest completes as the static script does. skipped where bash is not installed.
 #[cfg(unix)]

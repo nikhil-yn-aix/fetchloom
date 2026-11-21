@@ -398,6 +398,17 @@ fn with_names(shell: Shell, script: &str) -> String {
                      __fetchloom_names' -l {long} -r -f -a '$__fetchloom_found'"
                 );
             }
+            glue.push_str(&FISH_KEYS.replace(
+                "KEYS",
+                &crate::settings::keys().collect::<Vec<_>>().join(" "),
+            ));
+            // an option still waiting for its value, as `--color ` is, fails argparse, and the line
+            // has no command yet, so the top's entries, that option's values among them, still hold
+            let script = script.replacen(
+                "-- $cmd 2>/dev/null\n    or return\n",
+                "-- $cmd 2>/dev/null\n    or return 0\n",
+                1,
+            );
             format!("{script}{glue}")
         }
         Shell::Elvish => format!(
@@ -484,6 +495,16 @@ const FISH_NAMES: &str = r#"function __fetchloom_names
     set -g __fetchloom_found ($words[1] completions fish --names="$current" -- $words[2..-1] 2>/dev/null)
 end
 complete -c fetchloom -n '__fish_seen_subcommand_from COMMANDS; and __fetchloom_names' -f -a '$__fetchloom_found'
+"#;
+
+/// fish: the keys `settings set` and `settings unset` take, as the key alone, which clap's fish
+/// script leaves to file names.
+const FISH_KEYS: &str = r#"function __fetchloom_settings_key
+    set -l words (commandline -opc)
+    set -l at (contains -i -- set $words; or contains -i -- unset $words)
+    test -n "$at"; and test (count $words) -eq $at
+end
+complete -c fetchloom -n '__fish_fetchloom_using_subcommand settings; and __fetchloom_settings_key' -f -a 'KEYS'
 "#;
 
 /// elvish: the names, else the static completer.

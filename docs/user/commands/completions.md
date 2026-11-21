@@ -73,7 +73,7 @@ zsh keeps the commands each script completes in `~/.zcompdump` and reads them ag
 
 ## what it completes
 
-the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, and paths after options such as `-C`, `-o` and `--dir`. these come from fetchloom's command line as it was when the script was written.
+the scripts complete command and subcommand names, options, the fixed values of `--color` and of `completions` itself, the keys `settings set` and `settings unset` take, and paths after options such as `-C`, `-o` and `--dir`. these come from fetchloom's command line as it was when the script was written.
 
 after a command that takes a dataset's name, they also complete the names data.toml has: after `path`, `sync`, `remove`, `list`, `export` and `push`, and after `lock --upgrade`, `--ours` and `--theirs`. for those words the script asks fetchloom, which reads the data.toml of the project the current folder is in, or of the one `-C` names on the line you are completing, `~` included. it reads nothing else and writes nothing: no network, no settings, no data.lock. a name fetchloom would refuse is never offered, so a cloned data.toml cannot put text such as `$(…)` on your command line. each script also takes the names it gets as plain words: none is expanded while you complete, and one that holds a character your shell would read as code goes on the line quoted. outside a project, or for a word that is no name, such as an option or the file in `iris/train.csv`, the script completes as it would without names. `add --as` names a new dataset, so it gets no names, and references are never completed.
 
