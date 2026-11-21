@@ -623,8 +623,10 @@ fn middle(name: &str, width: usize) -> String {
     format!("{head}~{tail}")
 }
 
-/// the counters: elapsed time until a settled rate gives a time left, `no data` once `quiet`, which
-/// local work leaves none, passes [`STALL`], the disk once every byte is in, and `stopping` alone.
+/// the counters: the rate once it settles and the time left once it holds, `no data` once `quiet`,
+/// which local work leaves none, passes [`STALL`], the disk once every byte is in, and `stopping`
+/// alone. a wait with nothing counted says how long it has lasted; a transfer shows its bytes,
+/// rate and time left instead.
 fn measure(
     done: u64,
     total: Option<u64>,
@@ -668,7 +670,7 @@ fn measure(
             parts.push(format!("{} left", units::seconds(whole_up(left))));
         }
     }
-    if elapsed >= MOMENT && !foreseen && !still {
+    if done == 0 && elapsed >= MOMENT && !still {
         parts.push(units::seconds(elapsed));
     }
     parts.join(" · ")
@@ -1717,6 +1719,8 @@ mod tests {
         assert_eq!(fraction(9 * 1024, 136 * mib), "0.01/136.0 MiB");
     }
 
+    /// a wait with nothing counted says how long it has lasted, while a transfer once showed
+    /// `1.1/4.2 MiB · 2 s`, its time so far read as time left: a transfer shows no bare time.
     #[test]
     fn a_bar_shows_how_long_it_has_waited_past_two_seconds() {
         let second = Duration::from_secs(1);
@@ -1727,7 +1731,7 @@ mod tests {
         );
         assert_eq!(
             measure(1024, None, 512.0, 12 * second, Duration::ZERO, busy, false),
-            "1.0 KiB · 512 B/s · 12 s"
+            "1.0 KiB · 512 B/s"
         );
         assert_eq!(
             measure(0, Some(4096), 0.0, 12 * second, Duration::ZERO, busy, false),
@@ -2029,7 +2033,7 @@ mod tests {
                 busy,
                 false
             ),
-            "0.01/136.0 MiB · 2.9 KiB/s · 3 s",
+            "0.01/136.0 MiB · 2.9 KiB/s",
             "three seconds at the start of a slow link cannot tell thirteen hours"
         );
         assert_eq!(
