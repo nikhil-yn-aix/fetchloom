@@ -460,6 +460,17 @@ enum Instead {
     Relink(Box<dyn super::Relink>),
 }
 
+/// what an answer for the first byte of a file its record names by date alone says of it.
+#[derive(Clone, Copy)]
+enum Dated {
+    /// the date and the size are the recorded ones.
+    Unchanged,
+    /// it states another date or size.
+    Changed,
+    /// no answer told both, or the record names no date it reads.
+    Unknown,
+}
+
 /// what a revalidating request sent before its download is claimed came back with.
 enum Unclaimed {
     /// the file is the one its record names.
@@ -853,8 +864,21 @@ impl Net {
         on: Listener<'_>,
     ) -> Result<Fetched, Error> {
         let pinned = fetch.expect.sha256;
-        // a 304 on a date alone stands only once the link's size is checked, which the claimed
-        // download does
+        // a date alone stands only with the link's size, which an answer for the first byte states
+        // beside the date: one request asks both, where a 304 on the date needs a second
+        let mut known = known;
+        let dated = match &known {
+            Some(record) if record.validators.etag.is_none() => self.dated(fetch, record).await?,
+            _ => Dated::Unknown,
+        };
+        match (dated, &mut known) {
+            (Dated::Unchanged, Some(record)) => {
+                return recalled(record.clone(), Origin::NotModified, on);
+            }
+            // its bytes changed, so a condition would only bring a 304 to look past
+            (Dated::Changed, Some(record)) => record.validators = Validators::default(),
+            _ => {}
+        }
         let mut sent = match &known {
             Some(record) if record.validators.etag.is_some() => {
                 match self.unclaimed(fetch, &record.validators).await? {
@@ -909,6 +933,41 @@ impl Net {
             .await;
         unfinished.done = done.is_ok();
         done
+    }
+
+    /// whether the file `record` names by its date alone is still what the cache holds, asked
+    /// before the download is claimed, as [`Net::unclaimed`] asks one an `ETag` names: an answer
+    /// for its first byte states the date and the size, which a 304 on the date would need a
+    /// second request to learn, as NCBI's file server dates every GEO file.
+    ///
+    /// # Errors
+    ///
+    /// a stop.
+    async fn dated(&self, fetch: &Fetch, record: &UrlRecord) -> Result<Dated, Error> {
+        let Some(recorded) = record
+            .validators
+            .last_modified
+            .as_deref()
+            .and_then(|date| httpdate::parse_http_date(date).ok())
+        else {
+            return Ok(Dated::Unknown);
+        };
+        Ok(match self.probe(fetch).await? {
+            Probed::File {
+                total: Some(total),
+                modified: Some(modified),
+                page,
+                ..
+            } if total == record.size && modified == recorded && page == record.page => {
+                Dated::Unchanged
+            }
+            Probed::File {
+                total: Some(_),
+                modified: Some(_),
+                ..
+            } => Dated::Changed,
+            _ => Dated::Unknown,
+        })
     }
 
     /// asks for a revalidated file as its record names it before the download is claimed, since

@@ -1803,6 +1803,60 @@ fn bytes_kept_before_a_revalidation_are_asked_for_from_their_end() {
     assert!(last.contains("range: bytes=4-"), "{last}");
 }
 
+/// a file its server dates and names by no `ETag`, as NCBI's file server dates every GEO file,
+/// takes one request to check when the cache holds what it served: an answer for its first byte
+/// states the date and the size, where a 304 on the date alone needs a second request for the
+/// size. a file of another date downloads whole, asked without a condition.
+#[test]
+fn a_dated_file_the_cache_holds_takes_one_request_to_check() {
+    let dated = |modified: &'static str| {
+        [
+            ("Last-Modified", modified),
+            ("Date", "Tue, 10 Nov 2026 10:00:00 GMT"),
+        ]
+    };
+    let first_byte = |modified: &'static str| {
+        let mut headers = vec![("Content-Range", "bytes 0-0/8")];
+        headers.extend(dated(modified));
+        reply("206 Partial Content", &headers, b"a")
+    };
+    let (url, asked) = serve(vec![
+        reply(
+            "200 OK",
+            &dated("Sun, 01 Nov 2026 10:00:00 GMT"),
+            b"abcdefgh",
+        ),
+        first_byte("Sun, 01 Nov 2026 10:00:00 GMT"),
+        first_byte("Mon, 02 Nov 2026 10:00:00 GMT"),
+        reply(
+            "200 OK",
+            &dated("Mon, 02 Nov 2026 10:00:00 GMT"),
+            b"ijklmnop",
+        ),
+    ]);
+    let folder = tempfile::tempdir().unwrap();
+    let cache = Cache::open(folder.path().join("cache")).unwrap();
+    let asking = net(&url);
+    let fetch = Fetch {
+        revalidate: true,
+        ..Fetch::new(url.clone())
+    };
+    block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    let same = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(same.origin, Origin::NotModified);
+    assert_eq!(same.digest, crate::digest::sha256(b"abcdefgh"));
+    let changed = block_on(asking.download(&fetch, &cache, &|_| Ok(()))).unwrap();
+    assert_eq!(changed.digest, crate::digest::sha256(b"ijklmnop"));
+    let heads = asked.lock().unwrap();
+    assert_eq!(heads.len(), 4, "{heads:?}");
+    for checked in &heads[1..3] {
+        assert!(checked.contains("range: bytes=0-0"), "{checked}");
+        assert!(!checked.contains("if-modified-since"), "{checked}");
+    }
+    assert!(!heads[3].contains("if-modified-since"), "{}", heads[3]);
+    assert!(!heads[3].contains("range:"), "{}", heads[3]);
+}
+
 /// a revalidation whose server hangs up before answering the request asked before the claim asks
 /// again from the download's own try.
 #[test]
