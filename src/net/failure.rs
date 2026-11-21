@@ -755,13 +755,7 @@ pub(super) fn classify(
         // a certificate the system does not trust fails the same way on every try. matched by
         // type: the text of the outer error holds the link, which may well say "certificate"
         if let Some(tls) = untrusted(current) {
-            return Failure::Final(
-                Error::new(
-                    Kind::NetworkUnreachable,
-                    format!("{} sent a certificate this machine does not trust: {tls}", host(url)),
-                )
-                .help("check the link and this machine's clock. behind a company proxy that inspects https, its certificate belongs in the system's certificate store"),
-            );
+            return Failure::Final(distrusted(url, tls));
         }
         cause = current.source();
     }
@@ -785,6 +779,87 @@ pub(super) fn classify(
             deepest(err)
         ))
     }
+}
+
+/// what to do about a certificate no authority this machine trusts signed.
+const UNSIGNED_HELP: &str = "check the link. if you trust that server, add its certificate to this machine's certificate store; behind a company proxy that inspects https, the proxy's certificate belongs there";
+
+/// what to do about a certificate whose dates exclude now.
+const CLOCK_HELP: &str = "check this machine's clock. if it is right, the server's certificate is out of date, and only whoever runs the server can renew it";
+
+/// the refusal of the certificate `url`'s host sent, saying in plain words what rustls found
+/// wrong with it, and what to check.
+fn distrusted(url: &Url, tls: &rustls::Error) -> Error {
+    use rustls::CertificateError as Bad;
+    let host = host(url);
+    let day = |time: &rustls::pki_types::UnixTime| {
+        let time = std::time::UNIX_EPOCH + Duration::from_secs(time.as_secs());
+        units::timestamp(time)
+            .get(..10)
+            .unwrap_or_default()
+            .to_owned()
+    };
+    let (why, help) = match tls {
+        rustls::Error::InvalidCertificate(bad) => match bad {
+            Bad::UnknownIssuer => (
+                "no authority this machine trusts signed it, as with one a server signs itself"
+                    .to_owned(),
+                UNSIGNED_HELP,
+            ),
+            // webpki's reason for a certificate a server signed itself as its own authority,
+            // as openssl's own makes one, which rustls passes on only as text
+            Bad::Other(other) if other.0.to_string().contains("CaUsedAsEndEntity") => (
+                "it is a certificate authority's own, as one a server signs itself often is"
+                    .to_owned(),
+                UNSIGNED_HELP,
+            ),
+            Bad::ExpiredContext { not_after, .. } => {
+                (format!("it expired on {}", day(not_after)), CLOCK_HELP)
+            }
+            Bad::Expired => ("it expired".to_owned(), CLOCK_HELP),
+            Bad::NotValidYetContext { not_before, .. } => (
+                format!("it is not valid until {}", day(not_before)),
+                CLOCK_HELP,
+            ),
+            Bad::NotValidYet => ("it is not valid yet".to_owned(), CLOCK_HELP),
+            Bad::NotValidForNameContext { presented, .. } => (
+                format!(
+                    "it is for {}, not {host}",
+                    units::listed(
+                        &presented
+                            .iter()
+                            .map(|name| presented_name(name))
+                            .collect::<Vec<_>>(),
+                        "or"
+                    )
+                ),
+                "check the link's host. if it is right, the server sends another site's certificate, and only whoever runs it can fix that",
+            ),
+            Bad::NotValidForName => (
+                format!("it is for another host than {host}"),
+                "check the link's host. if it is right, the server sends another site's certificate, and only whoever runs it can fix that",
+            ),
+            Bad::Revoked => (
+                "the authority that signed it revoked it".to_owned(),
+                "only whoever runs the server can replace its certificate",
+            ),
+            _ => (tls.to_string(), UNSIGNED_HELP),
+        },
+        _ => (tls.to_string(), UNSIGNED_HELP),
+    };
+    Error::new(
+        Kind::NetworkUnreachable,
+        format!("{host} sent a certificate this machine does not trust: {why}"),
+    )
+    .help(help)
+}
+
+/// a name a certificate states, as webpki words it, `DnsName("example.org")`, made plain.
+fn presented_name(name: &str) -> String {
+    name.split_once('(')
+        .and_then(|(_, inner)| inner.strip_suffix(')'))
+        .map_or(name, |inner| inner.trim_matches('"'))
+        .to_owned()
 }
 
 /// whether the server hung up once the request went, before its answer: it closed or reset the
@@ -1793,19 +1868,59 @@ mod tests {
             panic!("an untrusted certificate would be tried again: {err:?}");
         };
         assert_eq!(error.kind, Kind::NetworkUnreachable);
-        assert!(
-            error
-                .message
-                .starts_with("127.0.0.1 sent a certificate this machine does not trust: "),
-            "{}",
-            error.message
-        );
         assert_eq!(
-            error.help.as_deref(),
-            Some(
-                "check the link and this machine's clock. behind a company proxy that inspects https, its certificate belongs in the system's certificate store"
-            )
+            error.message,
+            "127.0.0.1 sent a certificate this machine does not trust: no authority this machine trusts signed it, as with one a server signs itself"
         );
+        assert_eq!(error.help.as_deref(), Some(UNSIGNED_HELP));
+    }
+
+    /// what rustls finds wrong with a certificate is said in plain words, with a date where it
+    /// matters, never as rustls's own names for its reasons.
+    #[test]
+    fn a_refused_certificate_says_what_is_wrong_with_it_plainly() {
+        use rustls::CertificateError as Bad;
+        #[derive(Debug)]
+        struct Webpki;
+        impl std::fmt::Display for Webpki {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("CaUsedAsEndEntity")
+            }
+        }
+        impl std::error::Error for Webpki {}
+        let url = Url::parse("https://127.0.0.1:8443/data.csv").unwrap();
+        let day = |secs| rustls::pki_types::UnixTime::since_unix_epoch(Duration::from_secs(secs));
+        let cases = [
+            (
+                Bad::ExpiredContext {
+                    time: day(1_795_206_835),
+                    not_after: day(1_795_120_434),
+                },
+                "it expired on 2026-11-19",
+                CLOCK_HELP,
+            ),
+            (
+                Bad::NotValidForNameContext {
+                    expected: rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap(),
+                    presented: vec!["DnsName(\"other.example\")".to_owned()],
+                },
+                "it is for other.example, not 127.0.0.1",
+                "check the link's host. if it is right, the server sends another site's certificate, and only whoever runs it can fix that",
+            ),
+            (
+                Bad::Other(rustls::OtherError(std::sync::Arc::new(Webpki))),
+                "it is a certificate authority's own, as one a server signs itself often is",
+                UNSIGNED_HELP,
+            ),
+        ];
+        for (bad, why, help) in cases {
+            let error = distrusted(&url, &rustls::Error::InvalidCertificate(bad));
+            assert_eq!(
+                error.message,
+                format!("127.0.0.1 sent a certificate this machine does not trust: {why}")
+            );
+            assert_eq!(error.help.as_deref(), Some(help), "{why}");
+        }
     }
 
     /// the error gives no retry advice, and a proxy from the system's settings comes with the
