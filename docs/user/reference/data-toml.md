@@ -31,12 +31,19 @@ path = "measurements"
 | `members` | tables that keep or leave out files inside each archive; see [files inside archives](#files-inside-archives) | none |
 | `copy` | request writable placement by reflink or copy, never hardlink | `false` |
 | `path` | folder relative to `data_dir`, or `"."` for the data folder itself | the dataset name |
+| `at` | an [output](#outputs)'s folder, from the project's top, where its pipeline writes it; only with `ref = "local"` | none |
 
 ## imported files
 
 `fetchloom add ./flowers` writes `ref = "local"` for files it imports from a folder or a file on this machine. the entry names no path: a path would mean nothing on a teammate's machine and would say where your files are. data.lock pins each file by its path below the folder, its size and its SHA-256, and the cache holds the bytes. `select`, `exclude` and `extract` apply to the imported files as they do to a source's listing.
 
 no source can list an import again, so a changed `select` or `exclude`, or `ref = "local"` written by hand for a dataset data.lock does not pin, is refused with `reference.unresolved`, exit 10, before any request. so is an import [renamed](#dataset-names) in data.toml: every import's table reads the same, so its pin cannot tell a renamed import from a new one. the error's help gives both ways on: give the table back its old name, or import the files again under the new one with `fetchloom add <folder> --as <new name>`. to pin other files, run `fetchloom remove <name>`, then `fetchloom add <folder> --as <name>`. a changed `extract` keeps the pinned files. [add](../commands/add.md#files-on-this-machine) says how a clone without the files gets them.
+
+## outputs
+
+`fetchloom add data/processed`, or another folder inside the project, pins the files a pipeline wrote there where they are, as an output: the entry is `ref = "local"` with `at = "data/processed"`, the folder from the project's top. the files stay yours, writable, and nothing is placed in the data folder for them. data.lock pins each file by its path below the folder, its size and its SHA-256, and the cache keeps a copy, as for an [import](#imported-files). a `.gitignore` of fetchloom's in the folder keeps it out of git.
+
+an output takes no `path`, `extract`, `decompress`, `copy`, `web_page` or `members`, and `at` with any `ref` but `"local"` is refused, since `path` chooses where a fetched dataset lands. a teammate's sync places writable copies at `at` from a cache or a mirror that holds them, so [push](../commands/push.md) the files to a mirror for a clone. a folder that changed since it was pinned is left whole by sync, with an `output.changed` warning whose help pins what it holds now, `fetchloom add <folder> --as <name>`, or puts back the pinned files, `fetchloom sync --force <name>`.
 
 ## lists of files
 

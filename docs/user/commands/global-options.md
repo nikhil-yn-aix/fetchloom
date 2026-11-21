@@ -35,7 +35,7 @@ fetchloom help --json
 |---|---|---|
 | `help concepts` | explain data.toml, data.lock, the cache and sync, with an analogy, then mirrors and how to edit a dataset's files | learn the [project model](../concepts/README.md) |
 | `help environment`, `help exit-codes` | summarize settings, or explain what each exit code means | the [environment](../reference/environment.md) and [exit code](../reference/exit-codes.md) pages have the details |
-| `help agents` | sum up what a script or an AI agent relies on: the JSON document, the kind each exit code means, which `fix` is safe to run, when nothing asks a question, and which commands change nothing | the [AI agents](../guides/ai-agents.md) guide and [JSON output](../reference/json-output.md) have the details |
+| `help agents` | sum up what a script or an AI agent relies on: the JSON document, the kind each exit code means, which `fix` is safe to run, when nothing asks a question, and which commands change nothing | the [AI agents](../guides/ai-agents.md) and [scripting](../guides/scripts.md) guides, and [JSON output](../reference/json-output.md), have the details |
 | `help <command>` | show a command's help | check syntax at the terminal |
 
 ## project discovery

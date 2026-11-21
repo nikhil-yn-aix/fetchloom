@@ -40,13 +40,13 @@ where no project is found, a folder up to three below that holds a `data.toml` i
 | `command` | subcommand name, without arguments or credentials |
 | `folder` | the project folder as that system reads it: its number, its creation time, the system's name and its path, so a record a copy or a clone carries is told from one written here |
 
-the record lets windows and WSL, which cannot see each other's locks, keep out of each other's way. a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``. a record a killed command on this system left is taken over once its lock is free, and one no fetchloom writes, or one written for another folder, as a clone or a copy carries, is removed with a warning. a record another system wrote for this same folder, as windows and WSL both name a folder on a windows drive, makes the command wait, since that process may run on this machine, and the waiting line gives the exact `owner` path: delete it only once that process has ended. a record another system wrote for a folder this system cannot match with its own, as a project copied from windows to a linux disk carries, holds the project for no process on this machine, and one on another machine this one cannot check, so the command stops at once with `project.invalid`, exit 50, naming the record's command, system and process id, and the record stays: delete it once no fetchloom runs in the project on that system.
+the record lets windows and WSL, which cannot see each other's locks, keep out of each other's way. a command that finds the project held waits, naming the command and process id the record holds, as in ``Waiting for `fetchloom add` (pid 4242) working in this project``. a record a killed command on this system left is taken over once its lock is free, and one no fetchloom writes, or one written for another folder, as a clone or a copy carries, is removed with a warning. a record another system wrote for this same folder, as windows and WSL both name a folder on a windows drive, makes the command wait, since that process may run on this machine, and so does an empty one, which a command on another system may be writing still; the waiting line gives the exact `owner` path: delete it only once that process has ended. a record another system wrote for a folder this system cannot match with its own, as a project copied from windows to a linux disk carries, holds the project for no process on this machine, and one on another machine this one cannot check, so the command stops at once with `project.invalid`, exit 50, naming the record's command, system and process id, and the record stays: delete it once no fetchloom runs in the project on that system.
 
 ## placement state
 
 | field | value |
 |---|---|
-| `version` | integer `2`; a state of any other version counts as empty |
+| `version` | integer `3`; a state of any other version counts as empty |
 | `at` | the byte offset where `files` ends, padded with spaces to 20 characters |
 | `files` | object keyed by project-relative path, using `/` |
 | `files[path].dataset` | dataset name |
@@ -57,9 +57,20 @@ the record lets windows and WSL, which cannot see each other's locks, keep out o
 | `files[path].writable` | `true` when the file was placed or adopted writable |
 | `files[path].checked` | start of the scan used to place, adopt or vouch for the file, in nanoseconds since 1970; marks written during that run still put the file in doubt |
 | `files[path].adopted` | `true` when the file was already at its place with the pinned bytes before sync took it as placed, so a removal says so; absent otherwise |
+| `files[path].output` | `true` when the file is an output's: the author's own, pinned where their pipeline wrote it, or a writable copy a sync placed there; absent otherwise |
+| `files[path].unlinkable` | `true` when a sync found that this copy of its own cannot be linked to the cache's copy, as when it holds other bytes or the disk refused the link, so no later sync tries again; absent otherwise |
 | `synced` | absent until a `sync` records it. `manifest` and `lock` hold the SHA-256 of `data.toml` and `data.lock` as that sync left them, in hex, and `complete` is `true` when every file they ask for ended up in place; [the settled-sync shortcut](../../dev/architecture/sync-loop.md#settled-sync-shortcut) uses it to skip planning |
 | `dropped` | the datasets [`drop`](../commands/drop.md) left out on this machine, which a plain sync leaves out |
 | `freeing` | those of `dropped` whose drop was cut short before it freed what the cache holds of them, which the same drop finishes |
+| `folder` | the project folder the state was written for: its file number, `inode`, its creation time in nanoseconds since 1970, `created`, the system that read them, `os`, and its resolved path, `path`, each where the system tells it. a state a clone, a copy or git brought along matches none, so its records are not used |
+| `aside` | the files `sync --force` moved out of the way, by the hidden name each is kept under, with the path it had, written before any moves |
+| `replacing` | the files fetchloom placed that a sync removes to place the pinned ones, written before it removes any |
+| `uncached` | that a sync found the cache at `cache` holding none of the objects of this project's own copies of cached files, with `copies`, a sum of their SHA-256 in path order, and `newest`, the newest change of the folders their objects would be in, in nanoseconds since 1970, so a settled sync need not look again while neither changed |
+| `markers` | the dataset folders fetchloom put a `.gitignore` of its own in, by path in the project, each with the SHA-256 of what it last wrote there |
+| `left` | the folders an output's move left holding files, whose markers stay while they hold any |
+| `followed` | the folder each data folder link led to when fetchloom first followed it, resolved, by the link's path in the project |
+| `told` | what runs told a person once, each as its kind and its subject, as `refill:data/iris`, so a later run says it again only of a new subject |
+| `id` | the project's id, which each `.gitignore` of fetchloom's in a dataset folder names |
 | `blocks` | `files` cut into blocks of about 64 KiB, each as its first path and its byte range, start and end, in the file. a `path` or `sync` that names datasets reads only the blocks their folders need |
 
 missing, unreadable or malformed state counts as empty, and files already holding the pinned bytes are then adopted again. a state whose `at` or `blocks` do not match its records is read whole. one written for another folder, as a clone or a copy of the project brings it, counts as empty too, and none of its records is read. a file changed too soon after the state was written to tell by its time is hashed before its look is trusted.

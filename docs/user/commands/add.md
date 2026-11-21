@@ -131,6 +131,10 @@ paths and sizes are compared before anything is copied, so a dry run is refused 
 
 no source can list an import again. `fetchloom lock --upgrade <name>` refuses it, plain `lock --upgrade` skips it and says so, and a changed `select` or `exclude` in data.toml is refused with `reference.unresolved`, exit 10. to pin other files, run `fetchloom remove <name>`, then add them again. a switch of `extract` keeps the pinned files and asks no source, but once a cached archive is unpacked its own bytes leave the cache, so a switch to `extract = false` then needs them supplied again.
 
+### a folder of the project
+
+a folder inside the project, typed as a path, as `data/processed`, `./results` or `results/`, is pinned where it is, as an [output](../reference/data-toml.md#outputs): its files stay yours, writable, and data.toml gets `at` with the folder instead of a place in the data folder. a bare word that names a folder here, such as `results`, may be search words too, so it needs `--as`, as in `fetchloom add results --as results`.
+
 ### a clone without the files
 
 a teammate's clone has data.toml and data.lock but not the files, which only your cache holds. sync then stops before any download, exit 10, offline too, since going online cannot supply them, naming up to ten of the files it lacks. with `--json`, `fix` is null, since sync fails again until the files are there:

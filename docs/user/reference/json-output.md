@@ -91,6 +91,8 @@ status arrays, each a list of project-relative paths or dataset names, as [statu
 | `not_downloaded` | datasets data.lock pins by the sizes and checksums their sources state, as `add --no-sync` leaves them, whose files no sync downloaded yet |
 | `dropped` | datasets [`drop`](../commands/drop.md) freed on this machine, which a plain sync leaves out; no difference |
 
+every array empty but `adoptable` and `dropped` means status found no differences.
+
 JSON lists every difference, as rows in a pipe do, while a terminal shows 20 rows of each kind of file.
 
 ### download totals
