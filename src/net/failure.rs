@@ -2705,7 +2705,7 @@ mod tests {
 
     /// a connection a proxy carries opens to the proxy alone, so a route it lacks is the proxy's.
     #[test]
-    fn no_route_on_a_proxied_request_is_the_proxys() {
+    fn no_route_on_a_proxied_request_lies_with_the_proxy() {
         use std::io::ErrorKind;
         assert_eq!(
             cut_by(ErrorKind::NetworkUnreachable, false),
