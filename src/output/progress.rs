@@ -184,8 +184,36 @@ impl Moved {
     }
 
     fn now(&self) {
-        let millis = u64::try_from(self.born.elapsed().as_millis()).unwrap_or(u64::MAX);
-        self.at.store(millis, Ordering::Relaxed);
+        self.heard_at(Instant::now());
+    }
+
+    /// marks `at` as when the last bytes or answer came.
+    fn heard_at(&self, at: Instant) {
+        let millis = at.saturating_duration_since(self.born).as_millis();
+        self.at
+            .store(u64::try_from(millis).unwrap_or(u64::MAX), Ordering::Relaxed);
+    }
+
+    /// when the last bytes or answer came.
+    fn last(&self) -> Instant {
+        self.born + Duration::from_millis(self.at.load(Ordering::Relaxed))
+    }
+
+    /// the rate and the time left of a transfer `length` bytes long with `moved` bytes moved, by
+    /// `now`: the rate up to the last bytes, which a link sending them in bursts leaves steady
+    /// between them, and the time left from then, so it only counts down until more come.
+    fn pace(&self, moved: u64, length: Option<u64>, now: Instant) -> (f64, Duration) {
+        let last = self.last().min(now);
+        let rate = self.rate(moved, last);
+        // a transfer under way never reads `0 s left`, however long since its last bytes
+        let left = length
+            .filter(|_| rate > 0.0)
+            .map_or(Duration::ZERO, |length| {
+                time_left(length.saturating_sub(moved), rate)
+                    .saturating_sub(now.saturating_duration_since(last))
+                    .max(Duration::from_nanos(1))
+            });
+        (rate, left)
     }
 
     /// how long since the bar last moved.
@@ -513,13 +541,7 @@ fn style(
                     .filter(|_| !stopping)
                     .unwrap_or_else(|| {
                         // this run's bytes over its own time, as the time left is
-                        let rate = moved.rate(state.pos(), Instant::now());
-                        let left = state
-                            .len()
-                            .filter(|_| rate > 0.0)
-                            .map_or(Duration::ZERO, |length| {
-                                time_left(length.saturating_sub(state.pos()), rate)
-                            });
+                        let (rate, left) = moved.pace(state.pos(), state.len(), Instant::now());
                         measure(done, total, rate, state.elapsed(), left, quiet, stopping)
                     });
                 let width = usize::from(console::Term::stderr().size().1);
@@ -1820,6 +1842,34 @@ mod tests {
             ),
             "1.0/4.0 KiB · 512 B/s · 6 s left",
             "a gap of a moment is ordinary"
+        );
+    }
+
+    /// a link sending its bytes in bursts once had its time left climb between them, 17 s to 20 s
+    /// in 0.3 s: the rate runs up to the last bytes, and the time left counts down from them.
+    #[test]
+    fn a_bursty_links_time_left_only_counts_down() {
+        let moved = Moved::new(Arc::default());
+        let begun = Instant::now();
+        moved.restart(begun);
+        let second = Duration::from_secs(1);
+        moved.mark(begun + second, 0);
+        let length = Some(20 * 1024 * 1024);
+        let mut lefts = Vec::new();
+        // 400 KiB every 0.4 s from a second in, looked at every 0.1 s
+        for burst in 1..=10_u32 {
+            let arrived = begun + second + burst * Duration::from_millis(400);
+            moved.heard_at(arrived);
+            for look in 0..4 {
+                let now = arrived + look * Duration::from_millis(100);
+                let (_, left) = moved.pace(u64::from(burst) * 400 * 1024, length, now);
+                lefts.push(left);
+            }
+        }
+        assert!(lefts.windows(2).all(|pair| pair[1] <= pair[0]), "{lefts:?}");
+        assert!(
+            lefts[0] > Duration::from_secs(19) && lefts[39] > Duration::from_secs(15),
+            "{lefts:?}"
         );
     }
 
