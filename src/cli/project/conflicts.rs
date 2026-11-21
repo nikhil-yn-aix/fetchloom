@@ -36,12 +36,15 @@ impl Conflicted {
             .any(|sides| sides.stashed)
     }
 
-    /// the files that hold conflict lines, as a message names them.
-    fn files(&self) -> &'static str {
-        match (&self.manifest_sides, &self.lock_sides) {
-            (Some(_), Some(_)) => "data.toml and data.lock",
-            (Some(_), None) => "data.toml",
-            (None, _) => "data.lock",
+    /// the files a merge settles, as a message names them: those that hold conflict lines, and
+    /// those `merged` writes anew, as data.toml for a side chosen that brings back a dataset the
+    /// other removed; `lock_changed` when it writes data.lock.
+    fn files(&self, merged: &Merged, lock_changed: bool) -> &'static str {
+        let manifest = self.manifest_sides.is_some() || merged.manifest != self.manifest;
+        match (manifest, self.lock_sides.is_some() || lock_changed) {
+            (true, true) => "data.toml and data.lock",
+            (true, false) => "data.toml",
+            (false, _) => "data.lock",
         }
     }
 }
@@ -115,7 +118,7 @@ pub(super) fn merge(
         context,
         project,
         &merged,
-        conflicted.files(),
+        conflicted.files(&merged, lock_changed),
         args.dry.dry_run,
         operation,
     );

@@ -518,7 +518,8 @@ fn metadata(sandbox: &Sandbox) -> Result<(String, String)> {
 
 /// branch kept changes only the pin of `name`, through `change`, and branch removed removes it,
 /// so git stops in data.lock alone. at each of `meetings`, `fetchloom lock` must ask, then write
-/// the kept side whole or neither, as a person names. none without git.
+/// the kept side whole or neither, as a person names, and say which files it writes. none
+/// without git.
 fn removal_meets_a_new_pin(
     sandbox: &Sandbox,
     name: &str,
@@ -593,6 +594,7 @@ fn removal_meets_a_new_pin(
             conflicted,
             "{meeting:?}: nothing is written"
         );
+        choices_name_their_files(sandbox, name, (kept_side, removal_side), meeting)?;
 
         let chosen = run(
             sandbox,
@@ -625,6 +627,25 @@ fn removal_meets_a_new_pin(
         abandon(sandbox)?;
     }
     Ok(Some(()))
+}
+
+/// the dry run of each choice for `name` names the files it would write: the kept side brings
+/// its entry back into data.toml, which the removal side leaves as git merged it.
+fn choices_name_their_files(
+    sandbox: &Sandbox,
+    name: &str,
+    (kept, removal): (&str, &str),
+    meeting: &[&str],
+) -> Result {
+    for (side, files) in [(kept, "data.toml and data.lock"), (removal, "data.lock")] {
+        let would = run(sandbox, &["lock", "--dry-run", &format!("--{side}"), name])?;
+        let stderr = text(&would.stderr)?;
+        assert!(
+            stderr.contains(&format!("Would merge {files} \u{b7} ")),
+            "{meeting:?} --{side}: {stderr}"
+        );
+    }
+    Ok(())
 }
 
 /// the re-import is remove then add, as add's docs say, which leaves data.toml as it was; the new
