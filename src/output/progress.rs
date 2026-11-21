@@ -1222,15 +1222,23 @@ impl Ticker {
 
     /// tells `verb` and `what` through `say` once the batch lasts `moment`, its known sizes adding
     /// up to `total`, with `unknown` more files whose downloads have yet to tell theirs. `planned`
-    /// says the run told a download batch's plan, which then said it began.
+    /// says the run told a download batch's plan, which then said it began; otherwise a batch
+    /// whose sizes are all known says it began itself, with `time` when there are grounds.
     pub(super) fn start(
         verb: &'static str,
         what: String,
         (total, unknown): (u64, usize),
-        (moment, planned): (Duration, bool),
+        (moment, planned, time): (Duration, bool, Option<String>),
         say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
-        Ticker::paced(verb, what, (total, unknown), (moment, EVERY), planned, say)
+        Ticker::paced(
+            verb,
+            what,
+            (total, unknown),
+            (moment, EVERY),
+            (planned, time),
+            say,
+        )
     }
 
     fn paced(
@@ -1238,7 +1246,7 @@ impl Ticker {
         what: String,
         (total, unknown): (u64, usize),
         pace: (Duration, Duration),
-        planned: bool,
+        (planned, time): (bool, Option<String>),
         say: impl Fn(&str, &str) + Send + Sync + 'static,
     ) -> Ticker {
         let shared = Arc::new(Shared {
@@ -1258,7 +1266,7 @@ impl Ticker {
         // the run told its plan, which --json hides
         let sized = shared.first == First::Sized && unknown == 0;
         if shared.first == First::Now || (sized && !planned) {
-            shared.begin(None);
+            shared.begin(time.as_deref());
         } else if sized {
             shared.begun.store(true, Ordering::Relaxed);
         }
@@ -1879,7 +1887,7 @@ mod tests {
             "3 files".to_owned(),
             (300, 0),
             pace,
-            true,
+            (true, None),
             say,
         ));
         assert!(heard.lock().unwrap().is_empty());
@@ -1890,7 +1898,7 @@ mod tests {
             "3 files".to_owned(),
             (300, 0),
             pace,
-            false,
+            (false, None),
             say,
         ));
         assert_eq!(*heard.lock().unwrap(), ["Downloading 3 files · 300 B"]);
@@ -1900,7 +1908,7 @@ mod tests {
             "iris.csv".to_owned(),
             (0, 1),
             pace,
-            true,
+            (true, None),
             say,
         );
         assert!(heard.lock().unwrap().is_empty());
@@ -1914,7 +1922,7 @@ mod tests {
             "iris.csv".to_owned(),
             (0, 1),
             pace,
-            true,
+            (true, None),
             say,
         );
         ticker.sized(0, None);
@@ -1927,7 +1935,7 @@ mod tests {
                 "iris".to_owned(),
                 (0, 1),
                 pace,
-                true,
+                (true, None),
                 say,
             ));
             assert_eq!(*heard.lock().unwrap(), [format!("{verb} iris")]);
@@ -1939,7 +1947,14 @@ mod tests {
     fn a_download_batch_says_its_time_once_its_sizes_are_known() {
         let pace = (Duration::from_mins(1), Duration::from_mins(2));
         let (heard, _reported, say) = ear();
-        let ticker = Ticker::paced("Downloading", "2 files".to_owned(), (0, 2), pace, true, say);
+        let ticker = Ticker::paced(
+            "Downloading",
+            "2 files".to_owned(),
+            (0, 2),
+            pace,
+            (true, None),
+            say,
+        );
         ticker.sized(32, None);
         assert!(heard.lock().unwrap().is_empty());
         ticker.sized(64, Some("under 10 s"));
@@ -1998,7 +2013,7 @@ mod tests {
             "3 files".to_owned(),
             (300, 0),
             pace,
-            true,
+            (true, None),
             say,
         ));
         assert!(heard.lock().unwrap().is_empty());
@@ -2013,7 +2028,7 @@ mod tests {
             "3 files".to_owned(),
             (200, 1),
             pace,
-            true,
+            (true, None),
             say,
         );
         ticker.sized(100, None);
@@ -2519,7 +2534,14 @@ mod tests {
     fn a_wait_without_bytes_says_what_it_waits_for() {
         let (heard, reported, say) = ear();
         let pace = (Duration::from_millis(30), Duration::from_millis(90));
-        let ticker = Ticker::paced("Resolving", "zenodo:1".to_owned(), (0, 1), pace, true, say);
+        let ticker = Ticker::paced(
+            "Resolving",
+            "zenodo:1".to_owned(),
+            (0, 1),
+            pace,
+            (true, None),
+            say,
+        );
         for _ in 0..2 {
             reported.recv_timeout(Duration::from_mins(1)).unwrap();
         }

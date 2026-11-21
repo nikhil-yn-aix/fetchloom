@@ -403,12 +403,14 @@ impl Overall {
         }
     }
 
-    /// starts the plain lines, when the first download of the batch starts, as `label` now.
+    /// starts the plain lines, when the first download of the batch starts, as `label` now. a
+    /// batch whose sizes are all known says about how long it takes where the run told no plan.
     fn begin(&self, output: &Output, label: &str) {
         let (total, unknown) = self.sizes;
         self.ticker.get_or_init(|| {
             let sizes = std::iter::once(Some(total)).chain(std::iter::repeat_n(None, unknown));
-            output.ticker("Downloading", self.told_as(label), sizes)
+            let time = (unknown == 0).then(|| self.time()).flatten();
+            output.ticker_foreseen("Downloading", self.told_as(label), sizes, time)
         });
     }
 

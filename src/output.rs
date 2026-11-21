@@ -1094,6 +1094,18 @@ impl Output {
         what: String,
         sizes: impl IntoIterator<Item = Option<u64>>,
     ) -> Ticker {
+        self.ticker_foreseen(verb, what, sizes, None)
+    }
+
+    /// [`Output::ticker`] for a download batch whose sizes are all known and which takes about
+    /// `time`, which its first line says where the run told no plan, as under `--json`.
+    pub(crate) fn ticker_foreseen(
+        &self,
+        verb: &'static str,
+        what: String,
+        sizes: impl IntoIterator<Item = Option<u64>>,
+        time: Option<String>,
+    ) -> Ticker {
         let told = self.level >= Level::Normal && (!self.json || self.progress);
         let Some(moment) = self.moment.filter(|_| self.bars.is_none() && told) else {
             return Ticker::quiet();
@@ -1110,20 +1122,26 @@ impl Output {
         let held = Arc::clone(&self.held);
         // a download batch's plan is a step, which --json hides
         let planned = self.tells(Level::Normal);
-        Ticker::start(verb, what, known, (moment, planned), move |verb, text| {
-            let line = verb_line(verb, text, Tone::Work, color);
-            let line = shown(&line, unicode);
-            let line = match columns.and_then(|read| read()) {
-                Some(columns) => fit::fit(&line, columns),
-                None => line.into_owned(),
-            };
-            // a question holds the lines told meanwhile, as [`Output::asking`] says
-            let mut waiting = held.lock().unwrap_or_else(PoisonError::into_inner);
-            match waiting.as_mut() {
-                Some(lines) => lines.push(line),
-                None => write_line(color, &line),
-            }
-        })
+        Ticker::start(
+            verb,
+            what,
+            known,
+            (moment, planned, time),
+            move |verb, text| {
+                let line = verb_line(verb, text, Tone::Work, color);
+                let line = shown(&line, unicode);
+                let line = match columns.and_then(|read| read()) {
+                    Some(columns) => fit::fit(&line, columns),
+                    None => line.into_owned(),
+                };
+                // a question holds the lines told meanwhile, as [`Output::asking`] says
+                let mut waiting = held.lock().unwrap_or_else(PoisonError::into_inner);
+                match waiting.as_mut() {
+                    Some(lines) => lines.push(line),
+                    None => write_line(color, &line),
+                }
+            },
+        )
     }
 
     /// how long downloads `took`, as their closing line tells it: where a test turned off what

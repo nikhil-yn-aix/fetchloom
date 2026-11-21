@@ -37,6 +37,8 @@ Downloading big.bin · 1.9 MiB
 Downloading 1.4 MiB of 1.9 MiB · 10 s
 ```
 
+once fetchloom has downloaded from a host, the first line also says about how long the download takes, as `Downloading big.bin · 1.9 MiB · under 10 s`.
+
 [JSON output](../reference/json-output.md) defines every result and counter.
 
 ## checking and syncing

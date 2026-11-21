@@ -178,6 +178,40 @@ fn a_locked_sync_tells_its_downloads_beside_json() -> Result {
     Ok(())
 }
 
+/// a notebook running `--json --progress` once read `Downloading … · 19.5 MiB` where a log read
+/// `· about 20 s` too, since the line saying so is the plan's, which `--json` hides: a download
+/// whose size is known says about how long it takes when this machine remembers its host's speed.
+#[test]
+fn progress_beside_json_says_how_long_a_download_takes() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(
+        "/files/iris.csv",
+        vec![crate::support::file(IRIS, "\"v1\""), slow_iris()],
+    )?;
+    crate::project::added(&sandbox, &server)?;
+    let clone = crate::project::clone(&sandbox, "clone")?;
+    let speeds = sandbox.speeds();
+    std::fs::create_dir_all(speeds.parent().ok_or("no folder")?)?;
+    std::fs::write(
+        &speeds,
+        r#"{"hosts":{"127.0.0.1":{"rate":1048576.0,"overhead":0.1,"heard":1}}}"#,
+    )?;
+    let cold = sandbox.folder("cold-cache")?;
+    let output = sandbox
+        .command_in(&clone, &["--json", "--progress", "sync", "--locked"])
+        .env("FETCHLOOM_CACHE", &cold)
+        .env("FETCHLOOM_TEST_TICKER", "on")
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(
+        stderr.lines().next(),
+        Some("Downloading iris/iris.csv · 32 B · under 10 s"),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// the lines a terminal `columns` wide shows once it has drawn `text`, as from `script`: each
 /// `\n` starts a line, and a character past the last column moves to the next line first.
 #[cfg(target_os = "linux")]
