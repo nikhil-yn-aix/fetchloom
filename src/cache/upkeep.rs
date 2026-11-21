@@ -1659,6 +1659,45 @@ mod tests {
         assert!(fs::metadata(&path).unwrap().permissions().readonly());
     }
 
+    /// a project at a path past linux's 4096 bytes, as windows allows, registers and is read back.
+    #[test]
+    fn a_project_at_a_long_path_registers() {
+        let (dir, cache) = cache();
+        let root = dir
+            .path()
+            .join(std::iter::repeat_n("folder", 600).collect::<PathBuf>());
+        cache.register(&root).unwrap();
+        assert_eq!(cache.projects(), vec![root]);
+    }
+
+    /// a project registers the disk it is on: deleted from that disk, which is there, it is gone,
+    /// while its record read where the nearest folder is on a memory disk, which has no number of
+    /// its own, as when the project's drive is not connected, is out of reach.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_project_registers_the_disk_it_is_on() {
+        use std::os::unix::fs::MetadataExt;
+        let (dir, cache) = cache();
+        if rustix::fs::major(fs::metadata(dir.path()).unwrap().dev()) == 0 {
+            return crate::test_skips::skip("disk-numbers", "this folder's disk has no number");
+        }
+        let root = dir.path().join("thesis");
+        fs::create_dir(&root).unwrap();
+        cache.register(&root).unwrap();
+        fs::remove_dir(&root).unwrap();
+        assert!(
+            !cache.out_of_reach(&root),
+            "deleted from a disk that is there"
+        );
+        let memory = Path::new("/dev/shm");
+        if !fs::metadata(memory).is_ok_and(|disk| rustix::fs::major(disk.dev()) == 0) {
+            return crate::test_skips::skip("memory-disk", "/dev/shm is not a memory disk here");
+        }
+        let unplugged = memory.join(dir.path().file_name().unwrap()).join("thesis");
+        fs::copy(cache.registration(&root), cache.registration(&unplugged)).unwrap();
+        assert!(cache.out_of_reach(&unplugged), "on a disk not there");
+    }
+
     /// a record someone put among the projects' records of a cache they share, a link, a fifo or
     /// a file larger than any record, is refused at once rather than followed, waited on or read
     /// to its end, as a fifo or a link to /dev/zero would hang gc.
