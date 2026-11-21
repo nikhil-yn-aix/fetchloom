@@ -1608,8 +1608,9 @@ fn private_origins<'r>(
 
 /// the last lines of an add: a warning for each `private` origin the settings do not list, since
 /// typing its link trusted it for this run alone, then what to commit, the `list` in the project
-/// the add read among it, and what a clone runs.
-fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>) {
+/// the add read among it, and what a clone runs. the files of `imported`, a dataset of files from
+/// this machine, reach a clone only through a mirror, so the line names the push that fills one.
+fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>, imported: Option<&str>) {
     let context = work.context;
     let unlisted: Vec<&url::Origin> = private
         .iter()
@@ -1654,6 +1655,18 @@ fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>) {
         ),
         None => committed(work.project).to_owned(),
     };
+    if let Some(name) = imported {
+        let to = if context.settings.push_to.value.is_some() {
+            ""
+        } else {
+            " --to <folder>"
+        };
+        context.output.next(&format!(
+            "commit {committed}; the files of {name} are in this machine's cache only, so to share them, push them to a mirror with `{}`",
+            super::project::command(&format!("push {name}{to}"))
+        ));
+        return;
+    }
     // a clone is never told to paste a command that lets a link-local or metadata address in
     let pasted: Vec<&url::Origin> = private
         .iter()
@@ -1930,7 +1943,11 @@ fn tell_added(
             &format!("{name}, its archives contain no regular files"),
         );
     }
-    close(work, private, list);
+    let imported = manifest
+        .datasets
+        .get(name)
+        .is_some_and(manifest::Entry::is_import);
+    close(work, private, list, imported.then_some(name));
 }
 
 /// `path`, relative to the project's folder, as it reads from `here`, a folder inside it.

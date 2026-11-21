@@ -91,7 +91,13 @@ the files are copied into the cache and hashed as they are copied, as many at on
   hint: scripts can find it with `fetchloom path flowers`
 ```
 
-the folder stays where it was. inside a git repository, where `git add .` would commit the raw data, maybe to a public remote, the import warns, `git.import_in_tree` in `--json`, unless .gitignore leaves the folder out already:
+the folder stays where it was. the files are in this machine's cache only, so a clone's sync cannot get them until you push them to a [mirror](../guides/mirrors.md) the clone reads. at a terminal, the closing line says so and names the push, without `--to` when the `push_to` setting names the mirror:
+
+```text
+  next: commit data.toml and data.lock; the files of flowers are in this machine's cache only, so to share them, push them to a mirror with `fetchloom push flowers --to <folder>`
+```
+
+inside a git repository, where `git add .` would commit the raw data, maybe to a public remote, the import warns, `git.import_in_tree` in `--json`, unless .gitignore leaves the folder out already:
 
 ```text
 warning: ./flowers is still in the project, and git will take it
@@ -131,7 +137,7 @@ a teammate's clone has data.toml and data.lock but not the files, which only you
 error: flowers was imported from files, and this machine's cache does not hold them
   flowers/petals/red.csv
   flowers/sepals.csv
-  help: copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
+  help: a folder mirror that holds them brings them back, as `fetchloom sync flowers --mirror <folder>`; else copy them to data/flowers by hand, then run `fetchloom sync`, or run `fetchloom add <folder> --as flowers` where they are
 ```
 
 a [mirror](../guides/mirrors.md) that `fetchloom push` filled gives them instead; when the mirrors asked lack them or hold damaged copies, the error says `neither this machine's cache nor a mirror holds them`, and whoever keeps the mirror can push them again. files copied to `data/flowers` by hand are taken when they hold the pinned bytes.

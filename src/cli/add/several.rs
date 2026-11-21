@@ -399,7 +399,7 @@ fn tell_several(
             crate::cli::project::command("path <name>")
         )),
     }
-    close(work, private, None);
+    close(work, private, None, None);
 }
 
 #[cfg(test)]

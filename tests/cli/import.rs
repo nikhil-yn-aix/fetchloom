@@ -110,6 +110,51 @@ fn clone_of(sandbox: &Sandbox) -> Result<std::path::PathBuf> {
     Ok(clone)
 }
 
+/// the files of an import are in this machine's cache alone, so the closing line names the push
+/// that shares them rather than a plain sync, and a clone syncs them from the mirror it fills.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_import_names_the_push_a_clone_needs() -> Result {
+    let sandbox = Sandbox::new()?;
+    flowers(&sandbox)?;
+    let Some(screen) = sandbox.on_a_terminal(&["add", "../flowers"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("\n  next: commit data.toml and data.lock; the files of flowers are in this machine's cache only, so to share them, push them to a mirror with `fetchloom push flowers --to <folder>`\n"),
+        "{screen}"
+    );
+    assert!(!screen.contains("anyone who clones"), "{screen}");
+    let mirror = sandbox.folder("mirror")?;
+    let mirror = mirror.to_str().ok_or("the mirror's path is not text")?;
+    ok(&sandbox.run(&["push", "flowers", "--to", mirror, "--yes"])?)?;
+    let clone = clone_of(&sandbox)?;
+    let synced = sandbox
+        .command_in(&clone, &["sync", "--mirror", mirror])
+        .env("FETCHLOOM_CACHE", sandbox.folder("another-cache")?)
+        .output()?;
+    ok(&synced)?;
+    assert_eq!(
+        fs::read(clone.join("data/flowers/sepals.csv"))?,
+        b"length,width\n5.1,3.5\n"
+    );
+    // with a mirror to push to set, the push needs no folder
+    let set = sandbox.folder("set")?;
+    let set = set.to_str().ok_or("the folder's path is not text")?;
+    let mut command = sandbox.command(&["-C", set, "add", "../flowers"]);
+    command.env("FETCHLOOM_PUSH_TO", mirror);
+    let Some(screen) = sandbox.on_a_terminal_running(&command)? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(&format!(
+            "push them to a mirror with `fetchloom -C {set} push flowers`\n"
+        )),
+        "{screen}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_clone_without_the_bytes_recovers_by_copying_them() -> Result {
     let sandbox = Sandbox::new()?;
