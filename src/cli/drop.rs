@@ -93,11 +93,12 @@ struct Lacks {
     lost: Vec<String>,
     /// those no clear answer came for, as lines, each with the error a download of it would meet.
     unchecked: Vec<(String, Error)>,
-    /// how many a web or bucket mirror or source serves at their size alone, which does not show
-    /// their bytes, while their source states no checksum data.lock records for them.
-    sized: u64,
-    /// how many their source serves without saying their size, which shows still less of them.
-    no_size: u64,
+    /// those a web or bucket mirror or source serves at their size alone, which does not show
+    /// their bytes, while their source states no checksum data.lock records for them, each by its
+    /// label with its pinned size.
+    sized: Vec<(String, u64)>,
+    /// those their source serves without saying their size, which shows still less of them.
+    no_size: Vec<(String, u64)>,
 }
 
 impl Checked {
@@ -105,14 +106,37 @@ impl Checked {
     /// was checked by its size alone or served without a size.
     fn keeps(&self, name: &str, yes: bool) -> bool {
         self.lacks.get(name).is_some_and(|lacks| {
-            !lacks.lost.is_empty()
-                || !lacks.unchecked.is_empty()
-                || (!yes && lacks.sized + lacks.no_size > 0)
+            !lacks.lost.is_empty() || !lacks.unchecked.is_empty() || (!yes && lacks.by_size())
         })
     }
 
     fn lacks(&mut self, name: &str) -> &mut Lacks {
         self.lacks.entry(name.to_owned()).or_default()
+    }
+}
+
+impl Lacks {
+    /// whether a file was served at its size alone or without one.
+    fn by_size(&self) -> bool {
+        !(self.sized.is_empty() && self.no_size.is_empty())
+    }
+
+    /// a line for each file served at its size alone or without one, by its label.
+    fn by_size_lines<'l>(lacks: &[&'l Lacks]) -> Vec<String> {
+        let mut found: Vec<(&'l str, u64, &str)> = Vec::new();
+        for lacks in lacks {
+            for (label, size) in &lacks.sized {
+                found.push((label, *size, "served at that size alone"));
+            }
+            for (label, size) in &lacks.no_size {
+                found.push((label, *size, "served without its size"));
+            }
+        }
+        found.sort_unstable();
+        found
+            .iter()
+            .map(|(label, size, how)| format!("{label} · {}, {how}", units::size(*size)))
+            .collect()
     }
 }
 
@@ -395,7 +419,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
         let lacks = checked.lacks(pinned.dataset);
         let why = match answer {
             Found::Mirror { .. } | Found::Source { .. } => {
-                lacks.sized += 1;
+                lacks.sized.push((pinned.label(), pinned.size));
                 let at_source = matches!(answer, Found::Source { .. });
                 by_size.push(BySize {
                     at,
@@ -406,7 +430,7 @@ async fn unfound(context: &Context, named: &[Named<'_>]) -> Result<Checked, Erro
             }
             // its source answered with the file, and asking again gets that answer again
             Found::Nowhere(Lack::Unsized(_)) => {
-                lacks.no_size += 1;
+                lacks.no_size.push((pinned.label(), pinned.size));
                 by_size.push(BySize {
                     at,
                     without_size: true,
@@ -438,7 +462,7 @@ struct BySize {
     at_source: bool,
 }
 
-/// takes off the counts in `checked` each file of `by_size`, by its place in `locked`, whose
+/// takes off the lists in `checked` each file of `by_size`, by its place in `locked`, whose
 /// source states at the version data.lock pins a checksum data.lock records for it: its SHA-256,
 /// or an MD5 data.lock keeps, as zenodo states one. a file its source served while stating another
 /// such checksum is lost instead, since the source no longer has the pinned bytes. each dataset's
@@ -495,10 +519,10 @@ async fn stated(
         else {
             continue;
         };
+        let pinned = Pinned::locked(named.name, file, named.page);
         let lost = match probe::stated(listing, &file.url, Some(file.sha256), file.md5) {
             probe::Stated::Agrees => None,
             probe::Stated::Contradicts(_) if served.at_source => {
-                let pinned = Pinned::locked(named.name, file, named.page);
                 let size = (!served.without_size).then_some(file.size);
                 pinned.restated(listing, size).map(|lack| {
                     let outcome = lack.outcome();
@@ -508,12 +532,14 @@ async fn stated(
             }
             _ => continue,
         };
+        let label = pinned.label();
         let lacks = checked.lacks(named.name);
-        if served.without_size {
-            lacks.no_size = lacks.no_size.saturating_sub(1);
+        let counted = if served.without_size {
+            &mut lacks.no_size
         } else {
-            lacks.sized = lacks.sized.saturating_sub(1);
-        }
+            &mut lacks.sized
+        };
+        counted.retain(|(counted, _)| *counted != label);
         lacks.lost.extend(lost);
     }
     Ok(())
@@ -694,8 +720,9 @@ fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
             .help(error.help.as_deref().unwrap_or(probe::AGAIN)),
         );
     }
-    let sized: u64 = lacks.iter().map(|lacks| lacks.sized).sum();
-    let no_size: u64 = lacks.iter().map(|lacks| lacks.no_size).sum();
+    let sized: u64 = lacks.iter().map(|lacks| lacks.sized.len() as u64).sum();
+    let no_size: u64 = lacks.iter().map(|lacks| lacks.no_size.len() as u64).sum();
+    let lines = Lacks::by_size_lines(&lacks);
     let were = |count: u64| if count == 1 { "was" } else { "were" };
     let (checked, alone) = match (sized, no_size) {
         (_, 0) => (
@@ -731,6 +758,7 @@ fn refused(checked: &Checked, asked: &[String], yes: bool) -> Option<Error> {
                 "{said} on this machine, since {checked}, which does not show the bytes are the same"
             ),
         )
+        .details_up_to(&lines, NAMED)
         .help(format!(
             "{push}; or `{}` frees {it} {alone}",
             super::project::command(&format!("drop {names} --yes"))

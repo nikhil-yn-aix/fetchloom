@@ -36,6 +36,10 @@ fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
         "iris stays on this machine, since 1 of its files was checked elsewhere by size alone, which does not show the bytes are the same"
     );
     assert_eq!(
+        error["details"],
+        json!(["iris/iris.csv · 48 B, served at that size alone"])
+    );
+    assert_eq!(
         error["help"],
         "`fetchloom push iris --verify --to <folder>` keeps a checked copy on a folder mirror, replacing a damaged one, then `fetchloom drop iris --mirror <folder>` frees it; or `fetchloom drop iris --yes` frees it on the sizes alone"
     );
@@ -366,6 +370,10 @@ fn a_source_that_states_no_size_needs_a_yes() -> Result {
     assert_eq!(
         error["message"],
         "iris stays on this machine, since 1 of its files was served without a size, which does not show the bytes are the same"
+    );
+    assert_eq!(
+        error["details"],
+        json!(["iris/iris.csv · 48 B, served without its size"])
     );
     assert_eq!(
         error["help"],
