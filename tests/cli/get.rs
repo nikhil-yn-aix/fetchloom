@@ -1012,6 +1012,90 @@ fn bytes_a_server_compressed_on_their_way_are_kept_with_a_warning() -> Result {
     Ok(())
 }
 
+/// a gzip answer that broke and gave way to a start over without the encoding leaves a file that
+/// is not compressed, so no warning says it is.
+#[test]
+fn a_start_over_without_the_encoding_warns_of_none() -> Result {
+    let sandbox = Sandbox::new()?;
+    let packed = b"\x1f\x8b\x08\x00 gzip as the server sent it, cut short";
+    let plain = b"the same file, sent plainly this time";
+    let length = packed.len().to_string();
+    let head = [
+        ("Content-Length", length.as_str()),
+        ("Content-Encoding", "gzip"),
+        ("ETag", "\"v1\""),
+        ("Accept-Ranges", "bytes"),
+    ];
+    let server = Server::start(
+        "/iris.csv",
+        vec![
+            reply("200 OK", &head, &packed[..10]),
+            reply("416 Range Not Satisfiable", &[("Content-Length", "0")], b""),
+            reply(
+                "200 OK",
+                &[
+                    ("Content-Length", &plain.len().to_string()),
+                    ("ETag", "\"v2\""),
+                ],
+                plain,
+            ),
+        ],
+    )?;
+    let output = sandbox.run(&["get", &server.url, "-o", "kept"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("kept"))?, plain);
+    assert!(!stderr.contains("came compressed"), "{stderr}");
+    Ok(())
+}
+
+/// compressed pieces that missed the pin gave way to a start over sent plainly, so the file kept
+/// is plain and no warning says it came compressed.
+#[test]
+fn compressed_pieces_that_missed_the_pin_leave_no_warning() -> Result {
+    let body: Vec<u8> = (0..100_000u32).flat_map(u32::to_le_bytes).collect();
+    let cut = 150_000;
+    let length = body.len().to_string();
+    let mut spoiled = body.clone();
+    spoiled[cut + 10] ^= 0xff;
+    let rest = (body.len() - cut).to_string();
+    let range = format!("bytes {cut}-{}/{length}", body.len() - 1);
+    let tagged = [("Content-Length", length.as_str()), ("ETag", "\"v1\"")];
+    let packed = [
+        ("Content-Length", length.as_str()),
+        ("ETag", "\"v1\""),
+        ("Content-Encoding", "gzip"),
+    ];
+    let part = [
+        ("Content-Length", rest.as_str()),
+        ("Content-Range", range.as_str()),
+        ("ETag", "\"v1\""),
+        ("Content-Encoding", "gzip"),
+    ];
+    let server = Server::start(
+        "/big.bin",
+        vec![
+            reply("200 OK", &tagged, &body),
+            reply("200 OK", &packed, &body[..cut]),
+            reply("206 Partial Content", &part, &spoiled[cut..]),
+            reply("200 OK", &tagged, &body),
+        ],
+    )?;
+    let sandbox = Sandbox::new()?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "big"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    delete_folder(&sandbox.cache())?;
+    delete_folder(&sandbox.work().join("data"))?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains(" Restarting big/big.bin"), "{stderr}");
+    assert!(!stderr.contains("came compressed"), "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("data/big/big.bin"))?, body);
+    Ok(())
+}
+
 /// a quoted `~` reaches fetchloom unexpanded, so get writes to a folder named ~ and warns, while
 /// `./~` says that folder is meant.
 #[test]

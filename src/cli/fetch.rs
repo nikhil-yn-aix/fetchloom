@@ -667,6 +667,11 @@ struct Watch<'a> {
     waiting: std::sync::Mutex<Option<Ticker>>,
     /// whether the warning about bytes the server compressed on their way was told.
     encoded: AtomicBool,
+    /// how the server compressed the answer that told it last, until that answer's bytes start.
+    encoding: Mutex<Option<String>>,
+    /// how the server compressed the bytes the download holds, which the warning names once the
+    /// download is done, so an answer a start over replaced warns of nothing.
+    kept_encoding: Mutex<Option<String>>,
     /// whether every byte is in and the disk keeps the file, as the run's stop counts it.
     arrived: AtomicBool,
     /// nanoseconds the download waited for a person to say whether it may go on.
@@ -718,6 +723,8 @@ impl<'a> Watch<'a> {
             counted: AtomicU64::new(0),
             waiting: std::sync::Mutex::new(None),
             encoded: AtomicBool::new(false),
+            encoding: Mutex::new(None),
+            kept_encoding: Mutex::new(None),
             arrived: AtomicBool::new(false),
             asked: AtomicU64::new(0),
             named: Mutex::new(None),
@@ -810,22 +817,26 @@ impl<'a> Watch<'a> {
 
     /// `fetched` as [`Watch::answered`] tells it, unless it came as a web page where the link's
     /// name promised a data file and its first bytes in `cache` read as one: a server that calls a
-    /// csv a web page sends the csv.
+    /// csv a web page sends the csv. a file kept warns that it came compressed, if it did.
     fn checked(&self, cache: &Cache, fetched: Fetched) -> Result<Fetched, Error> {
         let fetched = self.answered(fetched);
-        if !self.page.load(Ordering::Relaxed) {
-            return Ok(fetched);
+        if self.page.load(Ordering::Relaxed) {
+            let mut head = Vec::with_capacity(HEAD);
+            if let Some(path) = cache.find(&fetched.digest, Some(fetched.size))
+                && let Ok(file) = crate::volume::read_unfollowed(&path)
+            {
+                let _ = std::io::Read::read_to_end(
+                    &mut std::io::Read::take(file, HEAD as u64),
+                    &mut head,
+                );
+            }
+            if reads_as_html(&head) {
+                return Err(self.page_refused(true, false));
+            }
         }
-        let mut head = Vec::with_capacity(HEAD);
-        if let Some(path) = cache.find(&fetched.digest, Some(fetched.size))
-            && let Ok(file) = crate::volume::read_unfollowed(&path)
-        {
-            let _ =
-                std::io::Read::read_to_end(&mut std::io::Read::take(file, HEAD as u64), &mut head);
-        }
-        if reads_as_html(&head) {
-            return Err(self.page_refused(true, false));
-        }
+        // told only once the bytes kept passed their checks: pieces that missed the hash gave way
+        // to a try that may have come plain
+        self.warn_encoded();
         Ok(fetched)
     }
 
@@ -899,6 +910,42 @@ impl<'a> Watch<'a> {
         }
         self.held.keep(0, Resumable::Maybe);
         self.earlier.store(0, Ordering::Relaxed);
+    }
+
+    /// keeps the encoding of the answer whose bytes start at `resumed`: one from the first byte
+    /// replaces what an earlier answer left, and one going on from kept bytes keeps theirs unless
+    /// it names its own.
+    fn keep_encoding(&self, resumed: u64) {
+        let encoding = self
+            .encoding
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if resumed == 0 || encoding.is_some() {
+            *self
+                .kept_encoding
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner) = encoding;
+        }
+    }
+
+    /// warns once that the bytes the download keeps came compressed as the server sent them,
+    /// unless the file's name already says so.
+    fn warn_encoded(&self) {
+        let kept = self
+            .kept_encoding
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        let label = &self.job.label;
+        if let Some(encoding) = kept
+            && !compressed_by_name(label, &encoding)
+            && !self.encoded.swap(true, Ordering::Relaxed)
+        {
+            let (said, help) = encoded(label, &encoding);
+            self.output
+                .warn_with(Warning::DownloadEncoded, &said, &help);
+        }
     }
 
     /// stops a download of no stated size once `received` passes the room it may take, before
@@ -1026,6 +1073,7 @@ impl<'a> Watch<'a> {
     /// first where its size calls for it, then shows its bar from there.
     fn started(&self, total: Option<u64>, resumed: u64, resumable: Resumable) -> Result<(), Error> {
         self.waited().take();
+        self.keep_encoding(resumed);
         // a try that starts over after every byte was in receives again
         if self.arrived.swap(false, Ordering::SeqCst) {
             self.overall.stop.arrived(true);
@@ -1229,13 +1277,8 @@ impl<'a> Watch<'a> {
             }
             Event::Named(ref given) => self.renamed(given),
             Event::Encoded(ref encoding) => {
-                if !compressed_by_name(label, encoding)
-                    && !self.encoded.swap(true, Ordering::Relaxed)
-                {
-                    let (said, help) = encoded(label, encoding);
-                    self.output
-                        .warn_with(Warning::DownloadEncoded, &said, &help);
-                }
+                *self.encoding.lock().unwrap_or_else(PoisonError::into_inner) =
+                    Some(encoding.clone());
             }
             Event::Arrived => {
                 if !self.arrived.swap(true, Ordering::SeqCst) {
