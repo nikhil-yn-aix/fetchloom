@@ -479,9 +479,9 @@ fn a_data_toml_too_big_for_its_container_is_refused_before_it_is_read() -> Resul
         std::fs::write(&toml, text)
     };
     let base: u64 = if cfg!(target_env = "musl") {
-        20 << 20
+        28 << 20
     } else {
-        8 << 20
+        16 << 20
     };
     let list = |room: u64| {
         sandbox
@@ -1394,9 +1394,9 @@ fn a_dataset_too_big_for_its_container_is_refused_without_naming_path_again() ->
     let added = run(&["add", "../parts"], None)?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let base: u64 = if cfg!(target_env = "musl") {
-        20 << 20
+        28 << 20
     } else {
-        8 << 20
+        16 << 20
     };
     // room for the pins of ten files, not the twenty the dataset holds
     let room = base + 10 * 650;
