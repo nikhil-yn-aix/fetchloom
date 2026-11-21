@@ -18,6 +18,9 @@ use crate::net::{Api, Extra, Response};
 
 const FILES: &str = "https://ftp.ncbi.nlm.nih.gov/geo";
 
+/// NCBI's search of GEO, which tells an accession GEO keeps from one it never had.
+const SEARCH: &str = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi";
+
 /// the most folders one listing reads: the accession's own and those inside it, as a series
 /// keeps `matrix/`, `miniml/`, `soft/` and `suppl/`.
 const MOST_FOLDERS: usize = 64;
@@ -127,8 +130,10 @@ impl Accession {
         if files.is_empty() {
             return Err(if refused.is_empty() {
                 self.missing()
-            } else {
+            } else if self.searched(api).await? {
                 self.unlisted()
+            } else {
+                self.unknown()
             });
         }
         let warnings = if refused.is_empty() {
@@ -314,6 +319,43 @@ impl Accession {
         }
     }
 
+    /// whether NCBI's search of GEO finds the accession, asked once its file server refused to
+    /// list its folder and served none of the files GEO names alike for every accession, as it
+    /// answers for one that never existed: false when the search finds none, and true when it
+    /// finds it or cannot tell, which leaves the refusal NCBI's own.
+    async fn searched(&self, api: &impl Api) -> Result<bool, Error> {
+        #[derive(serde::Deserialize)]
+        struct Found {
+            esearchresult: Count,
+        }
+        #[derive(serde::Deserialize)]
+        struct Count {
+            count: String,
+        }
+        let term = format!("{}[ACCN]", self.id);
+        let url = Url::parse_with_params(
+            SEARCH,
+            [
+                ("db", "gds"),
+                ("term", term.as_str()),
+                ("retmax", "0"),
+                ("retmode", "json"),
+                ("tool", "fetchloom"),
+            ],
+        )
+        .map_err(|_| invalid(self, "the search's URL is invalid"))?;
+        let response = match api.get(&url).await {
+            Ok(response) => response,
+            Err(error) if error.kind == Kind::Interrupted => return Err(error),
+            Err(_) => return Ok(true),
+        };
+        let found = (200..=299)
+            .contains(&response.status)
+            .then(|| response.json::<Found>().ok())
+            .flatten();
+        Ok(found.is_none_or(|found| found.esearchresult.count.trim() != "0"))
+    }
+
     /// the text of an index of GEO's file server. the accession's own folder is missing for an
     /// accession GEO keeps no files for.
     fn index(&self, response: &Response, own: bool) -> Result<String, Error> {
@@ -379,6 +421,18 @@ impl Accession {
         .help(format!(
             "check https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc={}: the accession may not exist or not be public yet, and a sample's own table is on that page rather than in a file GEO keeps",
             self.id
+        ))
+    }
+
+    /// an accession NCBI's search of GEO does not find, as a typo is.
+    fn unknown(&self) -> Error {
+        Error::new(
+            Kind::ReferenceUnresolved,
+            format!("GEO has no {} {}", self.noun(), self.id),
+        )
+        .help(format!(
+            "check the accession for a typo: GEO's search finds no {0} of that name, and a {0} not yet public is not found either",
+            self.noun()
         ))
     }
 

@@ -50,6 +50,18 @@ fn refused_series() -> Recorded {
         .fixture(&format!("{SERIES}suppl/filelist.txt"), "geo/filelist.txt")
 }
 
+/// NCBI's search of GEO for the accession `id`, as [`Accession::resolve`] asks it.
+fn search(id: &str) -> String {
+    format!(
+        "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?db=gds&term={id}%5BACCN%5D&retmax=0&retmode=json&tool=fetchloom"
+    )
+}
+
+/// what NCBI's search answers when it finds `count` records.
+fn found(count: u64) -> Vec<u8> {
+    format!(r#"{{"header":{{"type":"esearch","version":"0.3"}},"esearchresult":{{"count":"{count}","retmax":"0","retstart":"0","idlist":[],"translationset":[],"querytranslation":"x[ACCN]"}}}}"#).into_bytes()
+}
+
 /// a request for `path`'s first byte alone, as the recorded network writes it down.
 fn first_byte(path: &str) -> String {
     format!("{SERIES}{path} range: bytes=0-0")
@@ -217,8 +229,12 @@ fn a_refused_folder_alone_is_listed_by_name() {
 #[test]
 fn a_refused_listing_with_nothing_named_says_to_try_again_later() {
     let sample = "https://ftp.ncbi.nlm.nih.gov/geo/samples/GSM2666nnn/GSM2666939/";
-    let refused = Recorded::default().on(sample, 403, forbidden());
+    let refused =
+        Recorded::default()
+            .on(sample, 403, forbidden())
+            .on(&search("GSM2666939"), 200, found(4));
     let nothing = refused_series()
+        .on(&search("GSE1000"), 200, found(16))
         .on(
             &format!("{SERIES}matrix/GSE1000_series_matrix.txt.gz"),
             403,
@@ -251,6 +267,51 @@ fn a_refused_listing_with_nothing_named_says_to_try_again_later() {
         );
         assert!(error.need.is_none(), "{id}: no sign-in lifts it");
     }
+}
+
+/// NCBI's file server answers 403 for every folder and file of an accession that never existed,
+/// as it refuses a listing at times: its search, which finds no such accession, tells a typo
+/// apart, and a search that cannot answer leaves the refusal NCBI's own.
+#[test]
+fn a_refused_accession_the_search_does_not_find_is_not_found() {
+    let typo = "https://ftp.ncbi.nlm.nih.gov/geo/series/GSE604nnn/GSE604500/";
+    let refused = |search: Recorded| {
+        search
+            .on(typo, 403, forbidden())
+            .on(
+                &format!("{typo}matrix/GSE604500_series_matrix.txt.gz"),
+                403,
+                forbidden(),
+            )
+            .on(
+                &format!("{typo}miniml/GSE604500_family.xml.tgz"),
+                403,
+                forbidden(),
+            )
+            .on(
+                &format!("{typo}soft/GSE604500_family.soft.gz"),
+                403,
+                forbidden(),
+            )
+            .on(&format!("{typo}suppl/filelist.txt"), 403, forbidden())
+    };
+    let unknown = refused(Recorded::default().on(&search("GSE604500"), 200, found(0)));
+    let error = block_on(accession("GSE604500").resolve(&unknown)).unwrap_err();
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
+    assert_eq!(error.message, "GEO has no series GSE604500");
+    assert_eq!(
+        error.help.as_deref(),
+        Some(
+            "check the accession for a typo: GEO's search finds no series of that name, and a series not yet public is not found either"
+        )
+    );
+    let silent = refused(Recorded::default().on(&search("GSE604500"), 503, b"busy".to_vec()));
+    let error = block_on(accession("GSE604500").resolve(&silent)).unwrap_err();
+    assert_eq!(error.kind, Kind::NetworkStatus);
+    assert_eq!(
+        error.message,
+        "ftp.ncbi.nlm.nih.gov refused to list the files of geo:GSE604500"
+    );
 }
 
 /// a filelist names the tars GEO keeps beside it by its rows of archives, in the form GEO writes;
