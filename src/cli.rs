@@ -1088,7 +1088,14 @@ fn execute(context: Context, command: Option<args::Command>, started: Instant) -
                 }
             }
             Some((Ok(false), _)) => {}
-            Some((Err(error), _)) => context.output.error(&error),
+            Some((Err(error), _)) => {
+                let error = stop_named(error, context.output.stopped_by());
+                context.output.error(&error);
+                // a stop at the offer exits as every stop does; a no keeps the refusal's own code
+                if error.kind == Kind::Interrupted {
+                    outcome = ExitCode::from(error.kind.exit_code());
+                }
+            }
             None if refusal.told => {}
             None => context.output.error(&refusal.error),
         }

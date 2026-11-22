@@ -835,6 +835,35 @@ fn a_site_key_not_saved_still_serves_the_run_it_was_asked_for() -> Result {
     Ok(())
 }
 
+/// ctrl-c at the picker a refusal brings is a cancel, as at any question: one line says so, and
+/// the run exits 130, as every stop does, not with the refusal's own code.
+#[cfg(target_os = "linux")]
+#[test]
+fn ctrl_c_at_the_sign_in_picker_exits_as_a_stop() -> Result {
+    let sandbox = Sandbox::new()?;
+    let gated = Server::start(
+        "/data.csv",
+        vec![reply("403 Forbidden", &[("Content-Length", "0")], b"")],
+    )?;
+    let host = gated.url.trim_start_matches("http://");
+    let host = host.split_once('/').map_or(host, |(host, _)| host);
+    let get = sandbox.command(&["get", &gated.url, "-o", "data.csv"]);
+    let asked = format!("how do you sign in to {host}?");
+    // -isig lets ctrl-c reach the picker as the key it reads, whenever it is typed
+    let Some((code, screen)) =
+        crate::support::typed(&sandbox.work(), &get, "-isig", &asked, "\u{3}")?
+    else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(130), "{screen}");
+    assert!(
+        screen.contains(&format!("  Cancelled signing in to {host}")),
+        "{screen}"
+    );
+    assert!(!screen.contains("error:"), "{screen}");
+    Ok(())
+}
+
 /// a website's sign-in at a terminal asks before it saves in fetchloom's own file and before it
 /// replaces what is saved: a no keeps what was there, a yes saves, and --yes answers both unasked.
 #[cfg(target_os = "linux")]
