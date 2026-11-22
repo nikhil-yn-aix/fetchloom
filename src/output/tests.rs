@@ -1541,8 +1541,9 @@ fn a_match_without_room_for_its_title_puts_it_under() {
         "arxiv:1706.03762",
         "Attention Is All You Need",
         "no open-access pdf",
+        false,
     );
-    output.candidate_under("arxiv:1810.04805", "BERT", "");
+    output.candidate_under("arxiv:1810.04805", "BERT", "", false);
     let lines = output.held.lock().unwrap().take().unwrap();
     assert_eq!(
         lines,
@@ -1552,6 +1553,22 @@ fn a_match_without_room_for_its_title_puts_it_under() {
             "            no open-access pdf",
             "            arxiv:1810.04805",
             "            BERT",
+        ]
+    );
+    // on a list too narrow for some id past the verb column, every id starts near the edge,
+    // and a size padded for its column sits under the title, not past it
+    *output.held.lock().unwrap() = Some(Vec::new());
+    output.candidate_under("kaggle:uciml/iris", "Iris Species", "  3.6 KiB", true);
+    output.candidate_under("hf:datasets/scikit-learn/iris", "", " 18.1 KiB", true);
+    let lines = output.held.lock().unwrap().take().unwrap();
+    assert_eq!(
+        lines,
+        [
+            "  kaggle:uciml/iris",
+            "    Iris Species",
+            "    3.6 KiB",
+            "  hf:datasets/scikit-learn/iris",
+            "    18.1 KiB",
         ]
     );
 }

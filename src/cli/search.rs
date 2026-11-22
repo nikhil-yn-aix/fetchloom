@@ -34,11 +34,19 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
     }
     // without an interactive terminal, as under CI, the references on stdout are the list
     if output.watched_story() && !piped {
-        let table = parts(output, &report.candidates, output.width(), LIST_LEAD);
+        let width = output.width();
+        let table = parts(output, &report.candidates, width, LIST_LEAD);
         let pad = table.column;
+        // an id too wide for the verb column moves every id of a narrow list to the edge alike
+        let narrow = width.is_some_and(|width| {
+            table
+                .rows
+                .iter()
+                .any(|shown| shown.title_below && units::columns(&shown.reference) + 12 > width)
+        });
         for shown in &table.rows {
             if shown.title_below {
-                output.candidate_under(&shown.reference, &shown.title, &shown.facts);
+                output.candidate_under(&shown.reference, &shown.title, &shown.facts, narrow);
             } else {
                 output.candidate(
                     &shown.reference,

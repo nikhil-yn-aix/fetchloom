@@ -859,16 +859,28 @@ impl Output {
     }
 
     /// one match of a search whose title has no room beside what to type, as a paper's on a
-    /// narrow terminal: the title on a line of its own under it, then its dim facts.
-    pub(crate) fn candidate_under(&self, typed: &str, title: &str, facts: &str) {
+    /// narrow terminal: the title on a line of its own under it, then its dim facts, without the
+    /// spaces that line sizes up in a column. `narrow` says some match's id has no room past the
+    /// verb column, so every match's id starts near the edge and what is under it just past.
+    pub(crate) fn candidate_under(&self, typed: &str, title: &str, facts: &str, narrow: bool) {
         if !self.tells(Level::Normal) {
             return;
         }
-        self.candidate(typed, 0, "", ("", false));
-        self.line(&format!("{:>11} {}", "", plain(title)));
+        let under = if narrow {
+            let accent = paint(self.style.color, accent());
+            self.line(&format!("  {accent}{}{accent:#}", plain(typed)));
+            "    ".to_owned()
+        } else {
+            self.candidate(typed, 0, "", ("", false));
+            format!("{:>11} ", "")
+        };
+        if !title.is_empty() {
+            self.line(&format!("{under}{}", plain(title)));
+        }
+        let facts = facts.trim_start();
         if !facts.is_empty() {
             let dim = paint(self.style.color, Paint::new().dimmed());
-            self.line(&format!("{:>11} {dim}{}{dim:#}", "", plain(facts)));
+            self.line(&format!("{under}{dim}{}{dim:#}", plain(facts)));
         }
     }
 
