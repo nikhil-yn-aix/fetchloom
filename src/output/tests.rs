@@ -1927,3 +1927,86 @@ fn a_backtick_in_a_folder_never_splits_a_command_of_its_help() {
         }
     }
 }
+
+/// the help for an output's folder with line ends git changed, `name` "figs" at `at`, with
+/// `file` the one file git tracks there: its fix, then the ways on from the rest.
+fn line_ends_help(at: &str, file: &str) -> String {
+    use crate::source::local::{LineEnds, Reach, Since, ways_on};
+    let ends = LineEnds {
+        crlf: vec![file.to_owned()],
+        ..LineEnds::default()
+    };
+    let rest = Since::Changed {
+        yes: false,
+        reach: Reach::Reachable,
+    };
+    let pattern = format!("{at}/**");
+    let since = Since::LineEnds {
+        pattern: &pattern,
+        ends: &ends,
+        rest: Some(&rest),
+    };
+    crate::suggested::withheld(&ways_on("figs", at, since))
+        .0
+        .into_owned()
+}
+
+/// whether `text`, told as a help line, keeps `command` on one line at every width from 60 to
+/// 200 columns.
+fn keeps_whole(label: &str, text: &str, command: &str) -> Result<(), String> {
+    let line = format!("  {label}: {text}");
+    for width in 60..=200 {
+        let fitted = super::fit::fit(&line, width);
+        if !fitted.lines().any(|shown| shown.contains(command)) {
+            return Err(format!("{width}\n{fitted}"));
+        }
+    }
+    Ok(())
+}
+
+/// a backtick a name from data brings into the prose of a line never ends a command early: a
+/// command opens at a backtick before a program's name whatever came before it, so each stays
+/// on one line at every width, with a file ``a`b.csv`` git tracks, a folder ``fi`gs`` named in
+/// .gitattributes' pattern, or a data folder ``da`ta`` named before the command.
+#[test]
+fn a_backtick_in_a_name_never_opens_a_command_early() {
+    let force = "`fetchloom sync --force figs`";
+    for (at, file) in [
+        ("results/figs", "results/figs/a`b.csv"),
+        ("results/fi`gs", "results/fi`gs/a.csv"),
+    ] {
+        let help = line_ends_help(at, file);
+        keeps_whole("help", &help, force).unwrap();
+    }
+    let hint = "`fetchloom sync` puts the pinned files in da`ta/; `fetchloom status` lists them";
+    keeps_whole("hint", hint, "`fetchloom status`").unwrap();
+    let files = ["results/figs/a`b.csv".to_owned()];
+    let since = crate::source::local::Since::Tracked {
+        files: &files,
+        yes: false,
+    };
+    let help = crate::source::local::ways_on("figs", "results/figs", since);
+    let (help, _) = crate::suggested::withheld(&help);
+    let start = help.find("`fetchloom add").unwrap();
+    let end = start + 1 + help[start + 1..].find('`').unwrap();
+    keeps_whole("help", &help, &help[start..=end]).unwrap();
+}
+
+/// stray backticks at any place in the prose of the line-ends help, one, two or one before a
+/// program's name, never split its `sync --force` command at any width.
+#[test]
+fn stray_backticks_anywhere_in_prose_never_split_a_command() {
+    let force = "`fetchloom sync --force figs`";
+    let help = line_ends_help("results/figs", "results/figs/ab.csv");
+    // where each command in the help starts and ends, which no stray backtick goes inside
+    let ticks: Vec<usize> = help.match_indices('`').map(|(at, _)| at).collect();
+    let inside = |at: usize| ticks.chunks(2).any(|pair| pair[0] < at && at <= pair[1]);
+    for at in (0..=help.len()).filter(|&at| help.is_char_boundary(at) && !inside(at)) {
+        for stray in ["`", "``", "x`fetchloom y"] {
+            let text = format!("{}{stray}{}", &help[..at], &help[at..]);
+            keeps_whole("help", &text, force).unwrap_or_else(|failed| {
+                panic!("{stray:?} at {at}: {failed}");
+            });
+        }
+    }
+}

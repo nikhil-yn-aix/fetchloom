@@ -136,23 +136,132 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
     breaks
 }
 
-/// whether each of `shown` belongs to a command in backticks, the backticks with it, and the
-/// punctuation right after its closing one, as in `` `fetchloom sync`, ``, which goes with it.
-fn ticked(shown: &[(usize, char)]) -> Vec<bool> {
+/// the first words of the commands fetchloom suggests. a backtick before one and a space opens
+/// a command whatever backticks came before it on the line, as one in a file's name may.
+const PROGRAMS: &[&str] = &[
+    "fetchloom",
+    "fl",
+    "git",
+    "sudo",
+    "chmod",
+    "chown",
+    "mkdir",
+    "cd",
+    "cp",
+    "mv",
+    "rm",
+    "az",
+    "gcloud",
+    "aws",
+    "hf",
+    "kaggle",
+    "winget",
+    "unzip",
+    "umask",
+    "xz",
+    "zstd",
+    "tar",
+    "sha256sum",
+    "rsync",
+    "echo",
+    "ulimit",
+    "export",
+    "setx",
+    "set",
+    "id",
+    "curl",
+    "copy",
+    "move",
+    "unrar",
+    "unar",
+    "zip",
+    "gzip",
+    "Expand-Archive",
+    "brew",
+    "kill",
+    "docker",
+    "uname",
+    "security",
+    "md5",
+    "add",
+    "remove",
+    "exclude",
+    "drop",
+    "sync",
+    "lock",
+    "status",
+    "audit",
+    "diff",
+    "list",
+    "path",
+    "push",
+    "cache",
+    "settings",
+    "get",
+    "search",
+    "auth",
+    "completions",
+    "help",
+];
+
+/// whether each of `shown` belongs to a command in backticks, the backticks with it: between two
+/// backticks paired in order, or from a backtick a program's name and a space follow, as in
+/// `` `fetchloom sync` ``, to the next backtick or the end of the line. a backtick that came with
+/// a name, as in a file ``a`b.csv``, can only make more of a line a command, never end one early.
+fn spans(shown: &[(usize, char)]) -> Vec<bool> {
     let mut inside = false;
-    let mut closed = false;
-    shown
+    let mut spans: Vec<bool> = shown
         .iter()
         .map(|&(_, c)| {
             if c == '`' {
                 inside = !inside;
-                closed = !inside;
                 return true;
             }
-            closed &= c.is_ascii_punctuation();
-            inside || closed
+            inside
         })
-        .collect()
+        .collect();
+    for (at, &(_, c)) in shown.iter().enumerate() {
+        if c == '`' && opens(&shown[at + 1..]) {
+            let end = shown[at + 1..]
+                .iter()
+                .position(|&(_, c)| c == '`')
+                .map_or(shown.len() - 1, |next| at + 1 + next);
+            spans[at..=end].fill(true);
+        }
+    }
+    spans
+}
+
+/// whether `rest`, what follows a backtick, starts with a program's name and a space, or with
+/// `$env:`, as a powershell command does.
+fn opens(rest: &[(usize, char)]) -> bool {
+    let word: String = rest
+        .iter()
+        .map(|&(_, c)| c)
+        .take_while(|&c| c != ' ' && c != '`')
+        .collect();
+    word.starts_with("$env:")
+        || (PROGRAMS.contains(&word.as_str())
+            && rest
+                .get(word.chars().count())
+                .is_some_and(|&(_, c)| c == ' '))
+}
+
+/// [`spans`], with the punctuation right after a command's closing backtick, as in
+/// `` `fetchloom sync`, ``, which goes with it.
+fn ticked(shown: &[(usize, char)]) -> Vec<bool> {
+    let mut ticked = spans(shown);
+    let mut closed = false;
+    for at in 0..shown.len() {
+        let c = shown[at].1;
+        if c == '`' && ticked[at] {
+            closed = !ticked.get(at + 1).copied().unwrap_or_default();
+            continue;
+        }
+        closed &= c.is_ascii_punctuation();
+        ticked[at] |= closed;
+    }
+    ticked
 }
 
 /// [`breakable`], with the spaces inside a name in double quotes too wide for `room`, the columns
@@ -166,13 +275,13 @@ fn spanning(shown: &[(usize, char)], indent: usize, room: usize) -> Vec<bool> {
         .map(|(_, c)| console::measure_text_width(c.encode_utf8(&mut [0; 4])))
         .sum::<usize>();
     let mut wide = first > room;
-    let (mut ticked, mut quoted) = (false, false);
+    let ticked = spans(shown);
+    let mut quoted = false;
     for (at, &(_, c)) in shown.iter().enumerate() {
         match c {
-            '`' => ticked = !ticked,
-            '"' if !ticked => quoted = !quoted,
+            '"' if !ticked[at] => quoted = !quoted,
             ' ' if breakable[at] => wide = after[at] > room,
-            ' ' if wide && quoted && !ticked && at > 0 && shown[at - 1].1 != ' ' => {
+            ' ' if wide && quoted && !ticked[at] && at > 0 && shown[at - 1].1 != ' ' => {
                 breakable[at] = true;
             }
             _ => {}
@@ -187,16 +296,16 @@ fn spanning(shown: &[(usize, char)], indent: usize, room: usize) -> Vec<bool> {
 fn breakable(shown: &[(usize, char)], indent: usize) -> Vec<bool> {
     let mut breakable = vec![false; shown.len()];
     let mut column = 0;
-    let (mut ticked, mut quoted) = (false, false);
+    let ticked = spans(shown);
+    let mut quoted = false;
     // whether the word before this character is a number, such as the 2.0 of 2.0 MiB
     let mut number = false;
     for (at, &(_, c)) in shown.iter().enumerate() {
         match c {
-            '`' => ticked = !ticked,
-            '"' if !ticked => quoted = !quoted,
+            '"' if !ticked[at] => quoted = !quoted,
             // the space that ends a label or a verb too, so a command too wide to follow it
             // there goes on the next line rather than past the edge
-            ' ' if !ticked
+            ' ' if !ticked[at]
                 && !quoted
                 && !number
                 && column + 1 >= indent
