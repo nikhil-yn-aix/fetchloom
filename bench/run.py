@@ -355,7 +355,7 @@ def repo_head():
 
 
 def native_versions(packages=("nginx", "aria2", "curl", "git-annex", "git", "iproute2",
-                              "python3", "xfsprogs", "e2fsprogs", "unzip", "openssl", "time")):
+                              "python3", "xfsprogs", "e2fsprogs", "unzip", "openssl", "time", "rsync", "coreutils")):
     """each package with its installed debian version or not installed; a note when dpkg cannot
     answer."""
     try:
