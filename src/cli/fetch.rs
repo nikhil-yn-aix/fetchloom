@@ -10,6 +10,7 @@ pub(super) mod reuse;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::time::{Duration, Instant};
 
 use tokio::task::JoinSet;
 use url::Url;
@@ -341,6 +342,8 @@ struct Overall {
     /// how many downloads the batch counts, and how many of them are done.
     downloads: usize,
     done: AtomicUsize,
+    /// when the batch began, which the time its done files took is counted from.
+    began: Instant,
     /// the line saying what the batch downloads, told once its first download goes ahead, so a
     /// batch another fetchloom brought while this one waited says it downloaded nothing.
     plan: std::sync::Mutex<Option<String>>,
@@ -459,6 +462,13 @@ impl Overall {
             let done = self.done.fetch_add(1, Ordering::Relaxed) + 1;
             if let Some(bar) = &self.bar {
                 bar.message("Downloading", batch(done, self.downloads));
+                // with a size still unknown, the files done are all the batch has to go by
+                let unknown = self.length.lock().unwrap_or_else(PoisonError::into_inner).1;
+                if unknown > 0
+                    && let Some(left) = files_left(self.began.elapsed(), done, self.downloads)
+                {
+                    bar.files_left(left);
+                }
             }
         }
     }
@@ -517,6 +527,7 @@ impl Overall {
             told: std::sync::Mutex::new(HashSet::new()),
             downloads,
             done: AtomicUsize::new(0),
+            began: Instant::now(),
         }
     }
 
@@ -664,6 +675,17 @@ fn room_needed(total: Option<u64>, resumed: u64, unpacks: bool) -> u64 {
             left
         }
     })
+}
+
+/// about how long the rest of a batch of `downloads` takes, at the pace its `done` files took
+/// `elapsed`; none before a file is done or once every one is.
+fn files_left(elapsed: Duration, done: usize, downloads: usize) -> Option<Duration> {
+    let left = u32::try_from(downloads.checked_sub(done)?).ok()?;
+    let done = u32::try_from(done).ok()?;
+    (done > 0 && left > 0)
+        .then(|| elapsed.checked_mul(left))
+        .flatten()
+        .map(|time| time / done)
 }
 
 /// `sizes` added up, and how many of them are not known.
@@ -2795,6 +2817,7 @@ mod tests {
             told: std::sync::Mutex::default(),
             downloads: 0,
             done: AtomicUsize::new(0),
+            began: Instant::now(),
         }
     }
 
@@ -4179,6 +4202,16 @@ mod tests {
             }
             assert_eq!(bar.told(), Some(batch(2, 2)));
         }
+    }
+
+    /// a batch whose sizes are unknown foretells the rest from its files done: 6 files, 2 done
+    /// in 10 s, leave about 20 s; none before a file is done or once all are.
+    #[test]
+    fn a_batch_of_unknown_sizes_tells_its_time_left_from_its_files_done() {
+        let ten = Duration::from_secs(10);
+        assert_eq!(files_left(ten, 2, 6), Some(Duration::from_secs(20)));
+        assert_eq!(files_left(ten, 0, 6), None);
+        assert_eq!(files_left(ten, 6, 6), None);
     }
 
     /// a download's bar names the host it waits for until its server answers, and then the file;

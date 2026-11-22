@@ -103,6 +103,9 @@ struct Moved {
     /// about how long the transfer takes, as fetchloom foresaw it from the speeds it remembers,
     /// which the bar shows until it can tell its own time left.
     foreseen: Mutex<Option<String>>,
+    /// how long the rest of a batch whose sizes are unknown takes, as the files done foretell
+    /// it, and when they did.
+    by_files: Mutex<Option<(Instant, Duration)>>,
     /// the most room the bar's counters took so far, which they keep.
     room: Mutex<Room>,
     /// whether a line above already says what the bar's work does, so the bar tells only its
@@ -136,6 +139,7 @@ impl Moved {
             marks: Mutex::new([(Instant::now(), 0); 2]),
             untimed: AtomicBool::new(false),
             foreseen: Mutex::new(None),
+            by_files: Mutex::new(None),
             room: Mutex::new(Room::default()),
             told: Arc::default(),
         }
@@ -244,9 +248,16 @@ impl Moved {
                     .clone()
             })
             .flatten();
+        let by_files = self
+            .by_files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .map(|(at, left)| left.saturating_sub(at.elapsed()))
+            .filter(|left| !left.is_zero());
         Timed {
             left: (!self.untimed.load(Ordering::Relaxed)).then_some(left),
             foreseen,
+            by_files,
         }
     }
 
@@ -396,6 +407,16 @@ impl Bar {
             .foreseen
             .lock()
             .unwrap_or_else(PoisonError::into_inner) = Some(time);
+    }
+
+    /// says the rest of the batch takes about `left` from now, as the files it has done foretell
+    /// while their sizes are unknown.
+    pub(crate) fn files_left(&self, left: Duration) {
+        *self
+            .moved
+            .by_files
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some((Instant::now(), left));
     }
 
     /// a transfer of `total` bytes that goes on from `resumed`, which it does not rate.
@@ -977,6 +998,8 @@ fn middle(name: &str, width: usize) -> String {
 struct Timed {
     left: Option<Duration>,
     foreseen: Option<String>,
+    /// the time left the files done foretell, for a batch whose sizes are unknown.
+    by_files: Option<Duration>,
 }
 
 /// the counters of a bar that got `done` of `total`: the rate once it settles and the time left
@@ -1024,12 +1047,18 @@ fn measure(
         .foreseen
         .filter(|_| timed.left.is_some() && total.is_some() && !still)
         .map(|foreseen| format!("{foreseen} left"));
+    // a batch whose sizes are unknown has its files done to go by
+    let by_files = timed
+        .by_files
+        .filter(|_| total.is_none() && !still)
+        .map(|left| format!("about {} left", units::seconds(whole_up(left))));
     let (then, timed) = match left {
         Some(left) => (
             Some(format!("{} left", units::seconds(whole_up(left)))),
             true,
         ),
         None if foreseen.is_some() => (foreseen, true),
+        None if by_files.is_some() => (by_files, true),
         None if done == 0 && elapsed >= MOMENT && !still => (Some(units::seconds(elapsed)), false),
         None => (None, false),
     };
@@ -1618,6 +1647,7 @@ mod tests {
         let timed = Timed {
             left: Some(left),
             foreseen: None,
+            by_files: None,
         };
         measure((done, total), rate, elapsed, timed, quiet, stopping).said()
     }
@@ -1687,12 +1717,34 @@ mod tests {
         let timed = Timed {
             left: None,
             foreseen: None,
+            by_files: None,
         };
         let mut counters = measure((0, None), 0.0, six, timed, None, false);
         parted("Connecting", &mut counters);
         assert_eq!(
             render("to 192.0.2.1", "Connecting", None, &counters, 80, false),
             "Connecting to 192.0.2.1 · 6 s"
+        );
+    }
+
+    /// a batch with no total says the time left its files done foretell, as an estimate; one with
+    /// a total keeps to its own.
+    #[test]
+    fn a_batch_without_a_total_tells_the_time_its_files_foretell() {
+        let timed = |by_files| Timed {
+            left: None,
+            foreseen: None,
+            by_files,
+        };
+        let second = Duration::from_secs(1);
+        let twenty = Some(Duration::from_secs(20));
+        assert_eq!(
+            measure((10, None), 0.0, second, timed(twenty), None, false).said(),
+            "10 B · about 20 s left"
+        );
+        assert_eq!(
+            measure((10, Some(100)), 0.0, second, timed(twenty), None, false).said(),
+            "10/100 B"
         );
     }
 
@@ -2512,6 +2564,7 @@ mod tests {
             let timed = Timed {
                 left,
                 foreseen: Some("about 20 s".to_owned()),
+                by_files: None,
             };
             measure(
                 (8 * mib, Some(34 * mib)),
@@ -2541,6 +2594,7 @@ mod tests {
         let lengthless = Timed {
             left: Some(Duration::ZERO),
             foreseen: Some("about 20 s".to_owned()),
+            by_files: None,
         };
         let busy = Some(Duration::ZERO);
         assert_eq!(
