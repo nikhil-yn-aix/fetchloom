@@ -1713,6 +1713,14 @@ fn finish<T: Serialize>(
 /// `error`, when it is a stop a SIGTERM asked, saying so rather than that a person asked, as in
 /// `stopped by a SIGTERM while talking to zenodo.org`. any other error stays as it is.
 fn stop_named(mut error: Error, by: Option<Interrupt>) -> Error {
+    // a SIGTERM at a question ends it, though no person chose to cancel, so the stop says so
+    if error.kind == Kind::Interrupted
+        && by == Some(Interrupt::Terminate)
+        && let Some(what) = error.cancelled.take()
+    {
+        error.message = format!("stopped by a SIGTERM, which cancelled {what}");
+        return error;
+    }
     if error.kind == Kind::Interrupted
         && by == Some(Interrupt::Terminate)
         && let Some(rest) = error
@@ -2243,6 +2251,29 @@ mod tests {
             );
             assert_eq!(stop_named(stopped(), Some(Interrupt::CtrlC)).message, said);
         }
+    }
+
+    /// a SIGTERM at a question names itself, as the docs say, where a ctrl-c there is a cancel the
+    /// person chose.
+    #[test]
+    fn a_sigterm_at_a_question_names_itself() {
+        let asked = || {
+            Error::new(Kind::Interrupted, "stopped at your request")
+                .cancelled("the removal of measurements")
+        };
+        let named = stop_named(asked(), Some(Interrupt::Terminate));
+        assert_eq!(
+            (named.message.as_str(), named.cancelled.as_deref()),
+            (
+                "stopped by a SIGTERM, which cancelled the removal of measurements",
+                None
+            )
+        );
+        let pressed = stop_named(asked(), Some(Interrupt::CtrlC));
+        assert_eq!(
+            pressed.cancelled.as_deref(),
+            Some("the removal of measurements")
+        );
     }
 
     /// a test that waited for `Stopping` once found the work done anyway. a run past its mark is
