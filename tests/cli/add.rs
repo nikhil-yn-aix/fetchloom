@@ -1651,6 +1651,58 @@ fn a_private_link_is_told_before_the_closing_line() -> Result {
     Ok(())
 }
 
+/// a link-local or cloud metadata address, where a cloud machine gives out its own keys, gets the
+/// warning with no command to paste, in text and in json, and the closing line asks anyone who
+/// clones for nothing that lets it in, since a cloned project may ask for such an address to read
+/// those keys.
+#[test]
+fn a_metadata_address_gets_no_command_that_lets_it_in() -> Result {
+    let routes = Routes::start(vec![(
+        "/169.254.169.254/iris.csv".to_owned(),
+        file(IRIS, "\"v1\""),
+    )])?;
+    let link = "http://169.254.169.254/iris.csv";
+    let warning = "a later run downloads from http://169.254.169.254, a private address, only once allowed_origins lists it";
+    let add = |sandbox: &Sandbox, args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
+        command
+    };
+    let pasted = |said: &str| said.contains("allowed_origins http") || said.contains("ORIGINS=");
+    let sandbox = Sandbox::new()?;
+    let added = add(&sandbox, &["--json", "add", link]).output()?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stdout)?);
+    let warnings = warned(&json(&added)?);
+    let about: Vec<&String> = warnings
+        .iter()
+        .filter(|said| said.starts_with(warning))
+        .collect();
+    assert_eq!(about.len(), 1, "{warnings:?}");
+    assert!(!pasted(about[0]), "{}", about[0]);
+    let sandbox = Sandbox::new()?;
+    let told = add(&sandbox, &["add", link]).output()?;
+    let stderr = text(&told.stderr)?;
+    assert_eq!(told.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains(&format!("warning: {warning}\n")),
+        "{stderr}"
+    );
+    assert!(!pasted(&stderr), "{stderr}");
+    #[cfg(target_os = "linux")]
+    {
+        let sandbox = Sandbox::new()?;
+        let Some(screen) = sandbox.on_a_terminal_running(&add(&sandbox, &["add", link]))? else {
+            return Ok(());
+        };
+        assert!(
+            screen.contains("anyone who clones runs `fetchloom sync`"),
+            "{screen}"
+        );
+        assert!(!pasted(&screen), "{screen}");
+    }
+    Ok(())
+}
+
 /// a person meets the read-only files of a project's first add as an editor's permission denied
 /// or `rm -r` asking about each one, so that add says why and how to edit or delete them, once:
 /// the next add says nothing of it, and neither does a pipe, where no person reads it.
