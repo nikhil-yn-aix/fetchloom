@@ -815,17 +815,20 @@ async fn resolve_typed(
     match resolve_add(context, net, args, (link, parsed), root).await {
         Ok(addition) => Ok(addition),
         Err(error) if known => Err(error),
-        Err(error) => Err(near_miss(context, net, link, parsed, typed(error, false)).await),
+        Err(error) => {
+            Err(near_miss(context, net, ("add", link), parsed, typed(error, false)).await)
+        }
     }
 }
 
 /// `error`, a source showing no dataset of that name, which hugging face and kaggle say of a
-/// private one too, with the command meant when the owner has a public dataset one typo away. a
-/// source whose owners' datasets fetchloom cannot list is searched for nothing, and says nothing.
-async fn near_miss(
+/// private one too, with the `verb` command meant when the owner has a public dataset one typo
+/// away. a source whose owners' datasets fetchloom cannot list is searched for nothing, and says
+/// nothing.
+pub(super) async fn near_miss(
     context: &Context,
     net: &Net,
-    link: &str,
+    (verb, link): (&str, &str),
     parsed: &Parsed,
     mut error: Error,
 ) -> Error {
@@ -851,20 +854,20 @@ async fn near_miss(
     // a public dataset one typo away makes a typo likelier than a missing sign-in
     error.kind = Kind::ReferenceUnresolved;
     error.need = None;
-    error.help(near_help(link, &near))
+    error.help(near_help(verb, link, &near))
 }
 
-/// the help for a `link` a source would not show, whose owner has the public dataset `near` one
-/// typo away: the command meant, quoted for a shell, or only the dataset's name when the link may
-/// hold a secret, which no command repeats.
-fn near_help(link: &str, near: &crate::source::search::Near) -> String {
+/// the help for a `link` a source would not show to `verb`, whose owner has the public dataset
+/// `near` one typo away: the command meant, quoted for a shell, or only the dataset's name when
+/// the link may hold a secret, which no command repeats.
+fn near_help(verb: &str, link: &str, near: &crate::source::search::Near) -> String {
     // the link as typed, with the name fixed, keeps a link's file or folder
     let fixed = if link.contains(&near.given) {
         link.replacen(&near.given, &near.id, 1)
     } else {
         near.reference.to_string()
     };
-    let alone = ["add", fixed.as_str()].map(std::ffi::OsString::from);
+    let alone = [verb, fixed.as_str()].map(std::ffi::OsString::from);
     match super::command_line(alone.into_iter()) {
         Some(instead) => format!(
             "did you mean `{}`?",
@@ -2511,10 +2514,11 @@ mod tests {
                 .reference,
         };
         assert_eq!(
-            near_help("hf:datasets/scikit-learn/irsi", &near),
+            near_help("add", "hf:datasets/scikit-learn/irsi", &near),
             "did you mean `fetchloom add hf:datasets/scikit-learn/iris`?"
         );
         let help = near_help(
+            "add",
             "https://huggingface.co/datasets/scikit-learn/irsi/tree/main/a&b$(id)",
             &near,
         );
@@ -2549,6 +2553,7 @@ mod tests {
         }
         assert_eq!(
             near_help(
+                "add",
                 "https://huggingface.co/datasets/scikit-learn/irsi?rlkey=hunter2",
                 &near
             ),

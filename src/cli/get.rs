@@ -459,12 +459,7 @@ async fn one_link(
         let files = selected(args, &parsed, &listing)?;
         (listing, files)
     } else {
-        net.trust(parsed.reference.written_origin());
-        let select = crate::glob::patterns_of(&wanted_patterns(args, &parsed));
-        let pruning = crate::glob::patterns_of(&args.filter.exclude);
-        let listing = engine::resolve(&context.output, &parsed.reference, net, &select, &pruning)
-            .await
-            .map_err(|error| unlisted_offline(context.offline, error))?;
+        let listing = listed(context, net, args, (&link, &parsed)).await?;
         let files = told(context, args, &parsed, &listing)?;
         (listing, files)
     };
@@ -688,7 +683,7 @@ async fn resolve_all(
                 .resolve_in(&*net, &select)
                 .await
                 .map_err(|error| unlisted_offline(offline, error));
-            (index, listing.map(|listing| (parsed, listing)))
+            (index, parsed, listing)
         });
     }
     let _waiting = match asked.as_slice() {
@@ -700,7 +695,7 @@ async fn resolve_all(
         )),
     };
     while let Some(joined) = tasks.join_next().await {
-        let (index, resolved) = joined.map_err(|err| {
+        let (index, parsed, resolved) = joined.map_err(|err| {
             Error::new(
                 Kind::LocalIo,
                 format!("resolving stopped unexpectedly: {err}"),
@@ -711,8 +706,11 @@ async fn resolve_all(
                 tasks.abort_all();
                 return Err(error);
             }
-            Err(error) => Err(error),
-            Ok((parsed, listing)) => {
+            Err(error) => {
+                let link = links[index].as_str();
+                Err(super::add::near_miss(context, net, ("get", link), &parsed, error).await)
+            }
+            Ok(listing) => {
                 told(context, args, &parsed, &listing).map(|files| (parsed, listing, files))
             }
         };
@@ -1611,6 +1609,26 @@ fn told(
         );
     }
     files
+}
+
+/// the listing `parsed` resolves to at its source. a name its source does not show, one typo
+/// from a public dataset, gets the command meant, as `add` gives it.
+async fn listed(
+    context: &Context,
+    net: &Net,
+    args: &Get,
+    (link, parsed): (&str, &Parsed),
+) -> Result<Listing, Error> {
+    net.trust(parsed.reference.written_origin());
+    let select = crate::glob::patterns_of(&wanted_patterns(args, parsed));
+    let pruning = crate::glob::patterns_of(&args.filter.exclude);
+    match engine::resolve(&context.output, &parsed.reference, net, &select, &pruning).await {
+        Ok(listing) => Ok(listing),
+        Err(error) => {
+            let error = unlisted_offline(context.offline, error);
+            Err(super::add::near_miss(context, net, ("get", link), parsed, error).await)
+        }
+    }
 }
 
 /// the files `--select` and `--exclude` keep, or the one file or folder a pasted link names.

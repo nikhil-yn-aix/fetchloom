@@ -1984,6 +1984,37 @@ fn a_typo_in_an_id_gets_the_command_meant() -> Result {
     Ok(())
 }
 
+/// `get` with a typo in an id gets the command meant, as `add` does, in place of a sign-in.
+#[cfg(debug_assertions)]
+#[test]
+fn get_with_a_typo_in_an_id_gets_the_command_meant_too() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, kaggle) = typo_sources("401 Unauthorized")?;
+    for (args, meant) in [
+        (
+            ["get", "hf:datasets/scikit-learn/irsi", "--dry-run"].as_slice(),
+            "fetchloom get hf:datasets/scikit-learn/iris --dry-run",
+        ),
+        (
+            &["get", "hf:datasets/scikit-learn/irsi"],
+            "fetchloom get hf:datasets/scikit-learn/iris",
+        ),
+    ] {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_TEST_HF_API", &hub.url)
+            .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(10), "{stderr}");
+        assert!(
+            stderr.contains(&format!("help: did you mean `{meant}`?\n")),
+            "{stderr}"
+        );
+    }
+    Ok(())
+}
+
 /// a typo of a public name ends with the command meant at a terminal, and asks nothing.
 #[cfg(all(debug_assertions, target_os = "linux"))]
 #[test]
