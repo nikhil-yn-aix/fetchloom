@@ -82,13 +82,61 @@ impl Part {
     fn open(&self) -> io::Result<File> {
         let file = read_unfollowed(&self.path)?;
         if Id::of(&file)? != self.id {
-            return Err(io::Error::new(
+            return Err(Changed::error(
                 io::ErrorKind::InvalidData,
+                &self.path,
                 "it is not the file fetchloom checked, as when someone sharing the cache put another one at its name",
             ));
         }
         Ok(file)
     }
+}
+
+/// a file of an archive that changed after it was judged, as when someone sharing the cache put
+/// another file at its name or cut it short: the cache's fault on this machine, not the
+/// archive's, which a decoder's error carries inside it.
+#[derive(Debug)]
+pub(super) struct Changed {
+    pub(super) path: PathBuf,
+    why: &'static str,
+}
+
+impl Changed {
+    fn error(kind: io::ErrorKind, path: &Path, why: &'static str) -> io::Error {
+        io::Error::new(
+            kind,
+            Changed {
+                path: path.to_path_buf(),
+                why,
+            },
+        )
+    }
+}
+
+impl std::fmt::Display for Changed {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.why)
+    }
+}
+
+impl std::error::Error for Changed {}
+
+/// the change of an archive's file that `err`, a read's or a decoder's error, failed for, if any.
+pub(super) fn changed<'e>(err: &'e (dyn std::error::Error + 'static)) -> Option<&'e Changed> {
+    let mut cause = Some(err);
+    while let Some(error) = cause {
+        if let Some(changed) = error.downcast_ref::<Changed>() {
+            return Some(changed);
+        }
+        // an io error's own source skips the error it wraps
+        cause = match error.downcast_ref::<io::Error>() {
+            Some(io) => io
+                .get_ref()
+                .map(|inner| inner as &(dyn std::error::Error + 'static)),
+            None => error.source(),
+        };
+    }
+    None
 }
 
 impl Input {
@@ -253,9 +301,10 @@ impl Read for Joined {
         let wanted = usize::try_from(left).map_or(buffer.len(), |left| left.min(buffer.len()));
         let read = file.read(&mut buffer[..wanted])?;
         if read == 0 {
-            return Err(io::Error::new(
+            return Err(Changed::error(
                 io::ErrorKind::UnexpectedEof,
-                "a part of the archive ended before its size",
+                &self.parts[index].path,
+                "it is shorter than when fetchloom checked it",
             ));
         }
         *at += read as u64;

@@ -40,7 +40,7 @@ a cancel you choose at a question keeps its exit code: q or esc at the dataset l
 | `project.changed` | check the change made to `data.toml` or `data.lock` while the command ran, then run it again |
 | `interrupted` | retry when ready; resumable downloads may be reused |
 
-a cached archive that cannot be read because the filesystem failed uses `local.io`, exit 50. archive bytes that are malformed use `source.invalid`, exit 10.
+a cached archive that cannot be read because the filesystem failed, or whose file in the cache changed while fetchloom read it, as when someone sharing the cache put another file at its name, uses `local.io`, exit 50, naming that file. archive bytes that are malformed use `source.invalid`, exit 10.
 
 ## success with differences
 

@@ -538,6 +538,16 @@ fn damaged(
     if tar::stopped(err) {
         return Error::new(Kind::Interrupted, "stopped while unpacking the archive");
     }
+    if let Some(changed) = input::changed(err) {
+        return Error::new(
+            Kind::LocalIo,
+            format!(
+                "the cached file {} changed while fetchloom read the {noun}: {changed}",
+                changed.path.display()
+            ),
+        )
+        .help("run the same command again");
+    }
     if let Some(error) = crate::error::io_cause(err) {
         let doing = match at {
             Some(path) => format!("could not read the cached {noun} at \"{path}\""),

@@ -217,6 +217,64 @@ fn an_archive_cut_into_parts_unpacks_as_it_does_whole() {
     }
 }
 
+/// a part another file took the place of after the archive was judged, as someone sharing the
+/// cache may put one at its name, or a part cut short then, is the cache's fault on this machine,
+/// not the archive's: the error names the part and says to run the command again, never to ask
+/// the dataset's authors for a fixed copy, and nothing it unpacked is left behind.
+#[test]
+fn a_part_changed_while_it_is_read_is_no_damage_to_the_archive() {
+    let a = vec![b'x'; 64 << 10];
+    let bytes = tar_of(&[("data/a.csv", &a), ("data/b.csv", b"x,y\n3,4\n")]);
+    let change = |path: &std::path::Path, cut_short: bool| {
+        if cut_short {
+            let part = std::fs::OpenOptions::new().write(true).open(path).unwrap();
+            part.set_len(part.metadata().unwrap().len() / 2).unwrap();
+        } else {
+            let aside = path.with_extension("aside");
+            std::fs::copy(path, &aside).unwrap();
+            std::fs::rename(&aside, path).unwrap();
+        }
+    };
+    for (cut_short, why) in [
+        (false, "it is not the file fetchloom checked"),
+        (true, "it is shorter than when fetchloom checked it"),
+    ] {
+        let scratch = Scratch::new();
+        let half = bytes.len() / 2;
+        let first = scratch.file("archive.001", &bytes[..half]);
+        let second = scratch.file("archive.002", &bytes[half..]);
+        let sizes = (half as u64, (bytes.len() - half) as u64);
+        let input = Input::joined(vec![(first, sizes.0), (second.clone(), sizes.1)]).unwrap();
+        // the first header is read from the first part alone, which holds the second unopened
+        let done = Cell::new(false);
+        let watch = |_| {
+            if !done.replace(true) {
+                change(&second, cut_short);
+            }
+            false
+        };
+        let err = unpack(
+            &input,
+            Format::Tar,
+            &Limits::default(),
+            &scratch.cache,
+            &watch,
+            None,
+        )
+        .unwrap_err();
+        assert_eq!(err.kind, Kind::LocalIo, "{why}: {}", err.message);
+        assert!(
+            err.message
+                .starts_with(&format!("the cached file {} changed", second.display()))
+                && err.message.contains(why),
+            "{}",
+            err.message
+        );
+        assert_eq!(err.help.as_deref(), Some("run the same command again"));
+        scratch.assert_empty();
+    }
+}
+
 /// the ratio counts each byte of every part once: a split archive within it unpacks, and rereads
 /// of a zip's shared data cannot raise the count past the parts' total. each family holds 5 MiB,
 /// past the 4 MiB the ratio waits for; building the 7z at test time takes most of its time.
