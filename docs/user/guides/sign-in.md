@@ -106,7 +106,7 @@ save it to ~/.config/fetchloom/credentials.json? [Y/n] y
       Saved open.csv
 ```
 
-the picker clears itself once you choose, so the screen keeps the lines from `Sign in` on. enter at the save question saves the key, as for any key you type; a no saves nothing and uses the key for this run alone, as `Signed in to 127.0.0.1:19371 with a token for this run alone, not saved` says, so the next run that needs it asks again. with `--json`, or in a script, the help names the command and each way instead, and `fix` stays null.
+the picker clears itself once you choose, so the screen keeps the lines from `Sign in` on. enter at the save question saves the key, as for any key you type, unless the file would be one other users of the machine may read, as outside a windows user profile, where the question says so and enter answers no; a no saves nothing and uses the key for this run alone, as `Signed in to 127.0.0.1:19371 with a token for this run alone, not saved` says, so the next run that needs it asks again. with `--json`, or in a script, the help names the command and each way instead, and `fix` stays null.
 
 a gated hugging face dataset, a restricted zenodo record or a kaggle competition also needs you to accept its terms on its page. without a key on this machine, the offer says that first, as `First accept the terms at https://huggingface.co/datasets/bigcode/the-stack while signed in there`, then asks whether to sign in; with a key, it shows that link and asks whether to try again once you have. a key cannot accept terms for you. scripts and `--json` never get these questions: the error names the command to run.
 

@@ -821,8 +821,8 @@ fn save(
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
     match account.home(var, secret) {
         Home::File(path) => {
-            let question = save_question(account, &path, false, Privacy::of(var, &path));
-            if !agrees(question, true)? {
+            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
+            if !agrees(question, default)? {
                 return Ok(None);
             }
             let text = if path.file_name().is_some_and(|name| name == "kaggle.json") {
@@ -835,8 +835,8 @@ fn save(
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
-            let question = save_question(account, &path, false, Privacy::of(var, &path));
-            if !agrees(question, true)? {
+            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
+            if !agrees(question, default)? {
                 return Ok(None);
             }
             let Account::Login(host) = account else {
@@ -866,13 +866,13 @@ fn save(
                 .unwrap_or_default()
                 .join("credentials.json");
             if !told {
-                let question = save_question(
+                let (question, default) = save_question(
                     account,
                     &file,
                     !store::keyring_allowed(var),
                     Privacy::of(var, &file),
                 );
-                if !agrees(question, true)? {
+                if !agrees(question, default)? {
                     output.hint(&format!(
                         "to keep it out of files, set {} in your environment instead",
                         variable(account)
@@ -1014,15 +1014,26 @@ pub(super) fn asking_store<T>(output: &crate::output::Output, call: impl FnOnce(
     call()
 }
 
-/// the question before saving `account`'s key to the file `path`, which enter answers yes, as for
-/// any key typed in: a no still serves the run a refusal asked for it. the file keys go in
-/// without a credential store says so first, which `off` says `FETCHLOOM_KEYRING` turned off and
-/// `privacy` says how it is kept. the tools are named once the key is saved, so the question fits
-/// a terminal.
-fn save_question(account: &Account, path: &std::path::Path, off: bool, privacy: Privacy) -> String {
+/// the question before saving `account`'s key to the file `path`, and the answer enter gives:
+/// yes where `privacy` keeps the file the user's own, as for any key typed in, and no where other
+/// users here may read it, which the question then says. a no still serves the run a refusal
+/// asked for it. the file keys go in without a credential store says so first, which `off` says
+/// `FETCHLOOM_KEYRING` turned off. the tools are named once the key is saved, so the question
+/// fits a terminal.
+fn save_question(
+    account: &Account,
+    path: &std::path::Path,
+    off: bool,
+    privacy: Privacy,
+) -> (String, bool) {
     let save = format!("save it to {}?", units::path(path));
-    if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
-        save
+    let private = privacy != Privacy::Open;
+    let question = if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
+        if private {
+            save
+        } else {
+            format!("it would go in {}\n{save}", privacy.file())
+        }
     } else {
         let why = if off {
             "FETCHLOOM_KEYRING is off"
@@ -1030,7 +1041,8 @@ fn save_question(account: &Account, path: &std::path::Path, off: bool, privacy: 
             "no credential store here"
         };
         format!("{why}, so it would go in {}\n{save}", privacy.file())
-    }
+    };
+    (question, private)
 }
 
 /// why a key goes in fetchloom's own file, as a warning begins: `FETCHLOOM_KEYRING` turned the
@@ -1679,6 +1691,34 @@ mod tests {
         );
     }
 
+    /// enter saves a key only to a file that stays the user's own: where other users here may read
+    /// it, as outside a windows user profile, enter answers no and the question says why.
+    #[test]
+    fn enter_saves_a_key_only_to_a_file_no_one_else_reads() {
+        for (account, path) in [
+            (&Account::HuggingFace, "/home/ada/.cache/huggingface/token"),
+            (
+                &Account::Zenodo,
+                "/home/ada/.config/fetchloom/credentials.json",
+            ),
+        ] {
+            let path = std::path::Path::new(path);
+            for (privacy, enter) in [
+                (Privacy::Owner, true),
+                (Privacy::Profile, true),
+                (Privacy::Open, false),
+            ] {
+                let (question, saves) = save_question(account, path, false, privacy);
+                assert_eq!(saves, enter, "{question}");
+                assert_eq!(
+                    question.contains("a file other users here may read"),
+                    !enter,
+                    "{question}"
+                );
+            }
+        }
+    }
+
     /// each line of a question about saving or removing a key fits an 80-column terminal at the
     /// paths a home folder usually gives, so its `[y/N]` never splits.
     #[test]
@@ -1696,8 +1736,8 @@ mod tests {
         ] {
             let path = std::path::Path::new(path);
             for privacy in [Privacy::Owner, Privacy::Profile, Privacy::Open] {
-                questions.push(save_question(account, path, false, privacy));
-                questions.push(save_question(account, path, true, privacy));
+                questions.push(save_question(account, path, false, privacy).0);
+                questions.push(save_question(account, path, true, privacy).0);
             }
             if let Some(tools) = account.shared_with() {
                 questions.push(remove_question(tools, path));
