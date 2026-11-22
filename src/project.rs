@@ -606,7 +606,7 @@ impl Project {
         let Ok((mut file, found)) = self.open_state() else {
             return Ok(());
         };
-        lock::fits_state(State::records_in(&mut file, found.size))
+        lock::fits_state(State::weighed(&mut file, found.size))
     }
 
     /// the state as `read` makes it from the opened file and its length, and when it was written.

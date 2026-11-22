@@ -3,8 +3,8 @@
 use std::fs;
 
 use crate::support::{
-    Result, Routes, Sandbox, Server, add_ok, delete, edit, file, json, ok, reply, sha256_hex, text,
-    ways_left_out, zip_of,
+    Result, Routes, Sandbox, Server, add_ok, delete, delete_folder, edit, file, json, ok, reply,
+    sha256_hex, text, ways_left_out, zip_of,
 };
 #[cfg(unix)]
 use crate::support::{Running, wait_until};
@@ -5776,43 +5776,52 @@ fn a_settled_sync_answers_in_a_container_too_small_for_its_pins() -> Result {
 }
 
 /// a sync of a settled project whose data folder is gone reads the state before data.lock's files,
-/// which the shortcut leaves uncounted, so a container too small for the state's records refuses
-/// it before it reads them, naming the state, rather than being ended partway through the read.
+/// which the shortcut leaves uncounted, so a container too small for the state refuses it before
+/// it reads it, naming the state, rather than being ended partway through the read: a state as
+/// written, and one whose header no longer says where its records end, which is read whole.
 #[test]
 fn a_sync_whose_data_folder_is_gone_weighs_the_state_before_reading_it() -> Result {
-    let sandbox = Sandbox::new()?;
-    let folder = sandbox.folder("parts")?;
-    for row in 0..200 {
-        fs::write(folder.join(format!("{row:03}.csv")), format!("{row}\n"))?;
+    for unset in [false, true] {
+        let sandbox = Sandbox::new()?;
+        let folder = sandbox.folder("parts")?;
+        for row in 0..200 {
+            fs::write(folder.join(format!("{row:03}.csv")), format!("{row}\n"))?;
+        }
+        ok(&sandbox.run(&["add", "../parts"])?)?;
+        ok(&sandbox.run(&["sync"])?)?;
+        let work = sandbox.work();
+        let state = work.join(".fetchloom").join("state");
+        let mut bytes = fs::read(&state)?;
+        if unset {
+            // the 20 bytes after `{"version":3,"at":` say where the records end
+            bytes[18..38].copy_from_slice(b"0                   ");
+            fs::write(&state, &bytes)?;
+        }
+        delete_folder(&work.join("data"))?;
+        // the 12 MiB a state's read takes beside it and twice the state hold data.toml and
+        // data.lock, but not the state's read, and not the base data.lock's files need
+        let room = (12 << 20) + 2 * bytes.len();
+        let refused = sandbox
+            .command(&["--json", "sync"])
+            .env("FETCHLOOM_TEST_ROOM", room.to_string())
+            .output()?;
+        let document = json(&refused)?;
+        assert_eq!(refused.status.code(), Some(50), "{unset}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "local.io", "{unset}: {document}");
+        let message = error["message"].as_str().unwrap_or_default();
+        assert!(
+            message.starts_with("reading this project's .fetchloom/state")
+                && message.contains("this container leaves fetchloom"),
+            "{unset}: {message}"
+        );
+        let help = error["help"].as_str().unwrap_or_default();
+        assert!(
+            help.starts_with("raise the container's memory limit by"),
+            "{unset}: {help}"
+        );
+        assert!(!work.join("data").exists(), "{unset}");
     }
-    ok(&sandbox.run(&["add", "../parts"])?)?;
-    ok(&sandbox.run(&["sync"])?)?;
-    let work = sandbox.work();
-    // the state's header names where its records end, in the 20 bytes after `{"version":3,"at":`
-    let head = fs::read(work.join(".fetchloom").join("state"))?;
-    let records: u64 = std::str::from_utf8(&head[18..38])?.trim().parse()?;
-    fs::remove_dir_all(work.join("data"))?;
-    // twice the records' text holds data.toml and data.lock, but not the records' read
-    let refused = sandbox
-        .command(&["--json", "sync"])
-        .env("FETCHLOOM_TEST_ROOM", (2 * records).to_string())
-        .output()?;
-    let document = json(&refused)?;
-    assert_eq!(refused.status.code(), Some(50), "{document}");
-    let error = &document["errors"][0];
-    assert_eq!(error["kind"], "local.io", "{document}");
-    let message = error["message"].as_str().unwrap_or_default();
-    assert!(
-        message.starts_with("reading this project's .fetchloom/state")
-            && message.contains("this container leaves fetchloom"),
-        "{message}"
-    );
-    let help = error["help"].as_str().unwrap_or_default();
-    assert!(
-        help.starts_with("raise the container's memory limit by"),
-        "{help}"
-    );
-    assert!(!work.join("data").exists());
     Ok(())
 }
 

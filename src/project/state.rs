@@ -473,20 +473,19 @@ impl State {
         reading.streamed(keep)
     }
 
-    /// the bytes of records a read of the state in `file`, `length` long, may hold, leaving `file`
-    /// at its start: those its header says it has, or the whole of a json document without this
-    /// version's header, which is parsed whole. a file that is no json, as one of zeros, holds
-    /// none, since its parse stops at its first byte, and so does one that cannot be read.
-    pub(crate) fn records_in(file: &mut (impl Read + Seek), length: u64) -> u64 {
+    /// the bytes a read of the state in `file`, `length` long, may hold, leaving `file` at its
+    /// start: all of them, since a header or an index that does not fit sends the read through the
+    /// whole document, but none for a file whose first byte past any blank is no json's, as one of
+    /// zeros, since its parse stops there.
+    pub(crate) fn weighed(file: &mut (impl Read + Seek), length: u64) -> u64 {
         let mut head = Vec::with_capacity(START);
         let read = file.by_ref().take(START as u64).read_to_end(&mut head);
         if file.seek(SeekFrom::Start(0)).is_err() || read.is_err() {
-            return 0;
+            return length;
         }
-        match records_end(&head) {
-            Some(at) => at.min(length),
-            None if head.first() == Some(&b'{') => length,
-            None => 0,
+        match head.iter().find(|byte| !byte.is_ascii_whitespace()) {
+            Some(first) if *first != b'{' => 0,
+            _ => length,
         }
     }
 
@@ -1905,23 +1904,29 @@ mod tests {
         }
     }
 
-    /// a state is weighed by the records its header says it has, a json document without that
-    /// header whole, as its read takes it, and a file that is no json, as one of zeros, as holding
-    /// none, since its read stops at its first byte; each is left at its start to be read.
+    /// a state is weighed whole, as its read may hold it: with its header, without one, with its
+    /// `at` unset or a blank before it, which send the read through the whole document; a file
+    /// that is no json, as one of zeros, holds none, since its read stops at its first byte. each
+    /// is left at its start to be read.
     #[test]
-    fn a_state_is_weighed_by_the_records_its_header_names() {
+    fn a_state_is_weighed_whole_unless_it_is_no_json() {
         let bytes = crowded().render();
-        let at = records_end(&bytes[..START]).unwrap();
-        assert!(at < bytes.len() as u64);
+        let mut unset = bytes.clone();
+        let slot = HEAD.len()..HEAD.len() + SLOT;
+        unset[slot.clone()].copy_from_slice(&[b' '; SLOT]);
+        unset[slot.start] = b'0';
+        let blank = [b"\n".as_slice(), &bytes].concat();
         let headless = br#"{"files":{},"version":3}"#.to_vec();
-        for (case, file, records) in [
-            ("a state", bytes, at),
-            ("no header", headless.clone(), headless.len() as u64),
+        for (case, file, weighed) in [
+            ("a state", bytes.clone(), bytes.len()),
+            ("at unset", unset, bytes.len()),
+            ("a blank first", blank, bytes.len() + 1),
+            ("no header", headless.clone(), headless.len()),
             ("zeros", vec![0; 4096], 0),
         ] {
             let length = file.len() as u64;
             let mut file = io::Cursor::new(file);
-            assert_eq!(State::records_in(&mut file, length), records, "{case}");
+            assert_eq!(State::weighed(&mut file, length), weighed as u64, "{case}");
             assert_eq!(file.position(), 0, "{case}");
         }
     }

@@ -302,8 +302,8 @@ pub(crate) fn fits_file(bytes: u64) -> Result<(), Error> {
 /// so [`state_need`] covers the least room a static sync was seen to live through.
 const BEFORE_STATE: u64 = 12 << 20;
 
-/// refuses, before it is read, a placement state whose records take `bytes` of its text when
-/// reading them takes more than the room a container leaves, as [`state_need`] counts it. a sync
+/// refuses, before it is read, a placement state of `bytes` when reading it takes more than the
+/// room a container leaves, as [`state_need`] counts it. a sync
 /// reads the state before it knows whether it needs data.lock's files, so a project too big for
 /// its container would otherwise fill it before that count refuses it.
 pub(crate) fn fits_state(bytes: u64) -> Result<(), Error> {
@@ -318,7 +318,7 @@ fn fits_state_in(bytes: u64, room: u64) -> Result<(), Error> {
     }
     Err(too_big(
         &format!(
-            "this project's .fetchloom/state, whose records are {},",
+            "this project's .fetchloom/state, which is {},",
             crate::units::size(bytes)
         ),
         need,
@@ -330,9 +330,9 @@ fn fits_state_in(bytes: u64, room: u64) -> Result<(), Error> {
     )))
 }
 
-/// what reading a state's records of `bytes` text needs: [`BEFORE_STATE`], and two and a half
-/// times the text, since a static sync of 100,000 placed files held about twice the records'
-/// text reading them, and its walk of the data folder they name near half of it again.
+/// what reading a state of `bytes` needs: [`BEFORE_STATE`], and two and a half times its text,
+/// since a static sync of 100,000 placed files held about twice the state's text reading it, and
+/// its walk of the data folder the state names near half of it again.
 fn state_need(bytes: u64) -> u64 {
     BEFORE_STATE.saturating_add(bytes.saturating_mul(5) / 2)
 }
@@ -2901,17 +2901,17 @@ mod tests {
     }
 
     /// the state's estimate refuses every room the kernel was seen to end a sync in: for the
-    /// static build, a project of this many imported files, the bytes its state's records took,
-    /// and the least room, in tenths of a MiB, a sync lived through three times out of three, as
-    /// it said there, a limit a MiB lower having ended it: with the data folder gone, when it
-    /// read the state and then refused data.lock's files, and settled, when it walked the data
-    /// folder too. one room short of the count is refused, saying by how much.
+    /// static build, a project of this many imported files, the bytes of its state, and the least
+    /// room, in tenths of a MiB, a sync lived through three times out of three, as it said there,
+    /// a limit a MiB lower having ended it: with the data folder gone, when it read the state and
+    /// then refused data.lock's files, and settled, when it walked the data folder too. one room
+    /// short of the count is refused, saying by how much.
     #[test]
     fn the_state_estimate_covers_what_a_static_sync_was_seen_to_need() {
         for (files, records, gone, settled) in [
-            (30_000_u64, 7_200_048_u64, 223_u64, 233_u64),
-            (60_000, 14_400_048, 188, 323),
-            (100_000, 24_000_048, 453, 610),
+            (30_000_u64, 7_205_630_u64, 223_u64, 233_u64),
+            (60_000, 14_410_886, 188, 323),
+            (100_000, 24_018_033, 453, 610),
         ] {
             for tenths in [gone, settled] {
                 let lived = (tenths << 20) / 10;
@@ -2923,14 +2923,14 @@ mod tests {
                 );
             }
         }
-        let need = state_need(24_000_048);
-        assert!(fits_state_in(24_000_048, need).is_ok());
-        let refused = fits_state_in(24_000_048, need - (1 << 20)).unwrap_err();
+        let need = state_need(24_018_033);
+        assert!(fits_state_in(24_018_033, need).is_ok());
+        let refused = fits_state_in(24_018_033, need - (1 << 20)).unwrap_err();
         assert_eq!(refused.kind, Kind::LocalIo);
         assert!(
-            refused.message.starts_with(
-                "reading this project's .fetchloom/state, whose records are 22.9 MiB,"
-            ),
+            refused
+                .message
+                .starts_with("reading this project's .fetchloom/state, which is 22.9 MiB,"),
             "{}",
             refused.message
         );
