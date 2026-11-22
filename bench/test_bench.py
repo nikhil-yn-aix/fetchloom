@@ -374,6 +374,26 @@ class MeasurementTests(unittest.TestCase):
         self.assertGreater(cgroup - waited, .3)
         self.assertFalse(tree.path.exists())
 
+    @unittest.skipUnless(os.environ.get("FL_BENCH_LAB_CHECKS") == "1" and os.geteuid() == 0, "needs root and cgroup v2")
+    def test_a_run_cgroup_counts_memory_but_never_limits_it(self):
+        import run
+        # each cgroup on the way to the run's own, as fetchloom reads them to find a container's limit
+        probe = ('cg=$(sed -n "s/^0:://p" /proc/self/cgroup); echo "$cg"; d=/sys/fs/cgroup; '
+                 'for part in $(echo "$cg" | tr / " "); do d=$d/$part; echo "$(cat $d/memory.max) $(cat $d/memory.high)"; done; '
+                 'grep THP_enabled /proc/self/status')
+        name = f"test-{os.getpid()}"
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            tree = lab.Tree(name, lab.trees())
+            try:
+                result = run.measure(["sh", "-c", probe], root, os.environ, root / "log", 30, tree=tree)
+            finally:
+                tree.close()
+            seen = (root / "log").read_text().splitlines()
+        self.assertEqual(result["exit_code"], 0)
+        # no memory.max or memory.high anywhere above the command, and huge pages as the system sets them
+        self.assertEqual(seen, [f"/{lab.TREES.name}/{name}", "max max", "max max", "THP_enabled:\t1"])
+
     def test_peak_memory_excludes_the_harness(self):
         import run
         from pathlib import Path
