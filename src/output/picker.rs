@@ -359,14 +359,26 @@ fn row(
     let number = format!("{:>1$}", index + 1, count.to_string().len());
     let bold = paint(style.color, Paint::new().bold());
     let dim = paint(style.color, Paint::new().dimmed());
+    // the spaces that line a title up go with it, so a row whose title went under its reference
+    // ends at the reference, as color's codes after them would keep them from being trimmed
     let line = if index == cursor {
         let marker = if style.unicode { "\u{203a}" } else { ">" };
         let cyan = paint(style.color, accent().bold());
-        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{pad}{beside}")
+        let beside = if beside.is_empty() {
+            String::new()
+        } else {
+            format!("{pad}{beside}")
+        };
+        format!("  {cyan}{marker} {number}{cyan:#} {bold}{reference}{bold:#}{beside}")
             .trim_end()
             .to_owned()
     } else {
-        format!("    {dim}{number}{dim:#} {reference}{pad}{dim}{beside}{dim:#}")
+        let beside = if beside.is_empty() {
+            String::new()
+        } else {
+            format!("{pad}{dim}{beside}{dim:#}")
+        };
+        format!("    {dim}{number}{dim:#} {reference}{beside}")
             .trim_end()
             .to_owned()
     };
@@ -692,6 +704,28 @@ mod tests {
                 .all(|line| console::measure_text_width(line) <= 40),
             "{shown}"
         );
+    }
+
+    /// in color too, a row whose title went under its reference keeps none of the spaces that
+    /// would have lined that title up, which ran past a 40-column terminal and left a blank line.
+    #[test]
+    fn a_title_under_its_reference_leaves_no_spaces_beside_it_in_color() {
+        let option = format!(
+            "{:35}  IRIS: ICESat-2 River Surface Slope, a global dataset  1.1 GiB",
+            "hf:datasets/scikit-learn/iris"
+        );
+        for cursor in [0, 2] {
+            let shown = row(&option, (2, 12), cursor, style(true, true), 40);
+            let first = shown.lines().next().unwrap_or_default();
+            assert!(
+                console::measure_text_width(first) <= 40,
+                "{cursor}: {first:?}"
+            );
+            assert!(
+                console::strip_ansi_codes(first).ends_with("hf:datasets/scikit-learn/iris"),
+                "{cursor}: {first:?}"
+            );
+        }
     }
 
     #[test]
