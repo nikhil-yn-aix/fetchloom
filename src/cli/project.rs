@@ -383,6 +383,10 @@ async fn sync_plain(
         (old, seen, waiting)
     };
     let work = Loop::new(context, project, Arc::new(context.net()), open_cache()?).filling();
+    // the shortcut leaves data.lock's files uncounted, so the state read first is weighed instead
+    if tried {
+        project.fits_state()?;
+    }
     let mut survey = surveyed(&work, &Folders::of(plain), false)?;
     let dropped = survey.state.dropped.clone();
     super::drop::tell_left_out(&context.output, plain, &Scope::All, &dropped);

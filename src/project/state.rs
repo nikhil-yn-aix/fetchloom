@@ -473,6 +473,23 @@ impl State {
         reading.streamed(keep)
     }
 
+    /// the bytes of records a read of the state in `file`, `length` long, may hold, leaving `file`
+    /// at its start: those its header says it has, or the whole of a json document without this
+    /// version's header, which is parsed whole. a file that is no json, as one of zeros, holds
+    /// none, since its parse stops at its first byte, and so does one that cannot be read.
+    pub(crate) fn records_in(file: &mut (impl Read + Seek), length: u64) -> u64 {
+        let mut head = Vec::with_capacity(START);
+        let read = file.by_ref().take(START as u64).read_to_end(&mut head);
+        if file.seek(SeekFrom::Start(0)).is_err() || read.is_err() {
+            return 0;
+        }
+        match records_end(&head) {
+            Some(at) => at.min(length),
+            None if head.first() == Some(&b'{') => length,
+            None => 0,
+        }
+    }
+
     /// [`State::parse`] of `file`, `length` bytes from its start, with how many bytes it read. a
     /// state of one block is one read; a larger one is read [`State::read_blocks`].
     pub(crate) fn read_whole(
@@ -1885,6 +1902,27 @@ mod tests {
                 let read = indexed(&mut reading, &folders, &keep).expect(&case);
                 assert_same(&read, &whole_within(&bytes, &folders), &case);
             }
+        }
+    }
+
+    /// a state is weighed by the records its header says it has, a json document without that
+    /// header whole, as its read takes it, and a file that is no json, as one of zeros, as holding
+    /// none, since its read stops at its first byte; each is left at its start to be read.
+    #[test]
+    fn a_state_is_weighed_by_the_records_its_header_names() {
+        let bytes = crowded().render();
+        let at = records_end(&bytes[..START]).unwrap();
+        assert!(at < bytes.len() as u64);
+        let headless = br#"{"files":{},"version":3}"#.to_vec();
+        for (case, file, records) in [
+            ("a state", bytes, at),
+            ("no header", headless.clone(), headless.len() as u64),
+            ("zeros", vec![0; 4096], 0),
+        ] {
+            let length = file.len() as u64;
+            let mut file = io::Cursor::new(file);
+            assert_eq!(State::records_in(&mut file, length), records, "{case}");
+            assert_eq!(file.position(), 0, "{case}");
         }
     }
 

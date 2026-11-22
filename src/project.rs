@@ -597,6 +597,18 @@ impl Project {
         Ok((file, found))
     }
 
+    /// refuses, before the state is read, one whose records take more memory than a container's
+    /// limit leaves, as [`lock::fits_state`] weighs them; a state that cannot be opened holds none.
+    pub(crate) fn fits_state(&self) -> Result<(), Error> {
+        if !lock::limited() {
+            return Ok(());
+        }
+        let Ok((mut file, found)) = self.open_state() else {
+            return Ok(());
+        };
+        lock::fits_state(State::records_in(&mut file, found.size))
+    }
+
     /// the state as `read` makes it from the opened file and its length, and when it was written.
     /// a missing or unreadable state is empty, and so is one written for another folder, as a
     /// clone, a copy or a moved root of the project brings it: every file is then checked by its

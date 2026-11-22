@@ -5727,9 +5727,9 @@ fn a_settled_sync_finds_every_change_before_reading_data_lock() -> Result {
 }
 
 /// a settled project's sync with nothing changed builds none of its pins, so it answers in a
-/// container whose memory would not hold them, as a status there would not; once a file changed,
-/// the sync reads its pins and the container refuses it before it reads them, as before: files
-/// listed in data.lock itself and in data.lock.d.
+/// container whose memory would not hold them, as a status there would not, though it holds the
+/// state it reads; once a file changed, the sync reads its pins and the container refuses it
+/// before it reads them, as before: files listed in data.lock itself and in data.lock.d.
 #[test]
 fn a_settled_sync_answers_in_a_container_too_small_for_its_pins() -> Result {
     for inline in ["", "1"] {
@@ -5748,10 +5748,11 @@ fn a_settled_sync_answers_in_a_container_too_small_for_its_pins() -> Result {
         assert_eq!(settled.status.code(), Some(0), "{}", text(&settled.stderr)?);
         let work = sandbox.work();
         assert_eq!(work.join("data.lock.d").exists(), !inline.is_empty());
+        // past the 12 MiB a state's read takes beside its records, short of the base the pins need
         let small = |args: &[&str]| {
             sandbox
                 .command(args)
-                .env("FETCHLOOM_TEST_ROOM", (1_u64 << 20).to_string())
+                .env("FETCHLOOM_TEST_ROOM", (14_u64 << 20).to_string())
                 .output()
         };
         let answered = small(&["sync"])?;
@@ -5766,11 +5767,52 @@ fn a_settled_sync_answers_in_a_container_too_small_for_its_pins() -> Result {
         assert_eq!(error["kind"], "local.io", "{inline}: {document}");
         let message = error["message"].as_str().unwrap_or_default();
         assert!(
-            message.contains("3 files") && message.contains("1.0 MiB this container leaves"),
+            message.contains("3 files") && message.contains("14.0 MiB this container leaves"),
             "{inline}: {message}"
         );
         assert!(!work.join("data/parts/b.csv").exists(), "{inline}");
     }
+    Ok(())
+}
+
+/// a sync of a settled project whose data folder is gone reads the state before data.lock's files,
+/// which the shortcut leaves uncounted, so a container too small for the state's records refuses
+/// it before it reads them, naming the state, rather than being ended partway through the read.
+#[test]
+fn a_sync_whose_data_folder_is_gone_weighs_the_state_before_reading_it() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("parts")?;
+    for row in 0..200 {
+        fs::write(folder.join(format!("{row:03}.csv")), format!("{row}\n"))?;
+    }
+    ok(&sandbox.run(&["add", "../parts"])?)?;
+    ok(&sandbox.run(&["sync"])?)?;
+    let work = sandbox.work();
+    // the state's header names where its records end, in the 20 bytes after `{"version":3,"at":`
+    let head = fs::read(work.join(".fetchloom").join("state"))?;
+    let records: u64 = std::str::from_utf8(&head[18..38])?.trim().parse()?;
+    fs::remove_dir_all(work.join("data"))?;
+    // twice the records' text holds data.toml and data.lock, but not the records' read
+    let refused = sandbox
+        .command(&["--json", "sync"])
+        .env("FETCHLOOM_TEST_ROOM", (2 * records).to_string())
+        .output()?;
+    let document = json(&refused)?;
+    assert_eq!(refused.status.code(), Some(50), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "local.io", "{document}");
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.starts_with("reading this project's .fetchloom/state")
+            && message.contains("this container leaves fetchloom"),
+        "{message}"
+    );
+    let help = error["help"].as_str().unwrap_or_default();
+    assert!(
+        help.starts_with("raise the container's memory limit by"),
+        "{help}"
+    );
+    assert!(!work.join("data").exists());
     Ok(())
 }
 

@@ -298,6 +298,45 @@ pub(crate) fn fits_file(bytes: u64) -> Result<(), Error> {
     )
 }
 
+/// what a run holds past the room it starts with before it reads the placement state: 12 MiB,
+/// so [`state_need`] covers the least room a static sync was seen to live through.
+const BEFORE_STATE: u64 = 12 << 20;
+
+/// refuses, before it is read, a placement state whose records take `bytes` of its text when
+/// reading them takes more than the room a container leaves, as [`state_need`] counts it. a sync
+/// reads the state before it knows whether it needs data.lock's files, so a project too big for
+/// its container would otherwise fill it before that count refuses it.
+pub(crate) fn fits_state(bytes: u64) -> Result<(), Error> {
+    fits_state_in(bytes, room())
+}
+
+/// [`fits_state`] in `room`.
+fn fits_state_in(bytes: u64, room: u64) -> Result<(), Error> {
+    let need = state_need(bytes);
+    if need <= room {
+        return Ok(());
+    }
+    Err(too_big(
+        &format!(
+            "this project's .fetchloom/state, whose records are {},",
+            crate::units::size(bytes)
+        ),
+        need,
+        room,
+    )
+    .help(format!(
+        "raise the container's memory limit by {} or more",
+        crate::units::size(need - room)
+    )))
+}
+
+/// what reading a state's records of `bytes` text needs: [`BEFORE_STATE`], and two and a half
+/// times the text, since a static sync of 100,000 placed files held about twice the records'
+/// text reading them, and its walk of the data folder they name near half of it again.
+fn state_need(bytes: u64) -> u64 {
+    BEFORE_STATE.saturating_add(bytes.saturating_mul(5) / 2)
+}
+
 /// the error for reading `what`, which takes about `need` bytes of memory, more than the `room`
 /// its container leaves.
 fn too_big(what: &str, need: u64, room: u64) -> Error {
@@ -2859,6 +2898,46 @@ mod tests {
                 crate::units::size(lived)
             );
         }
+    }
+
+    /// the state's estimate refuses every room the kernel was seen to end a sync in: for the
+    /// static build, a project of this many imported files, the bytes its state's records took,
+    /// and the least room, in tenths of a MiB, a sync lived through three times out of three, as
+    /// it said there, a limit a MiB lower having ended it: with the data folder gone, when it
+    /// read the state and then refused data.lock's files, and settled, when it walked the data
+    /// folder too. one room short of the count is refused, saying by how much.
+    #[test]
+    fn the_state_estimate_covers_what_a_static_sync_was_seen_to_need() {
+        for (files, records, gone, settled) in [
+            (30_000_u64, 7_200_048_u64, 223_u64, 233_u64),
+            (60_000, 14_400_048, 188, 323),
+            (100_000, 24_000_048, 453, 610),
+        ] {
+            for tenths in [gone, settled] {
+                let lived = (tenths << 20) / 10;
+                assert!(
+                    state_need(records) >= lived,
+                    "{files} files: {} counted, {} lived",
+                    crate::units::size(state_need(records)),
+                    crate::units::size(lived)
+                );
+            }
+        }
+        let need = state_need(24_000_048);
+        assert!(fits_state_in(24_000_048, need).is_ok());
+        let refused = fits_state_in(24_000_048, need - (1 << 20)).unwrap_err();
+        assert_eq!(refused.kind, Kind::LocalIo);
+        assert!(
+            refused.message.starts_with(
+                "reading this project's .fetchloom/state, whose records are 22.9 MiB,"
+            ),
+            "{}",
+            refused.message
+        );
+        assert_eq!(
+            refused.help.as_deref(),
+            Some("raise the container's memory limit by 1.0 MiB or more")
+        );
     }
 
     /// a list is weighed as it is read: a row whose path and link run past what [`PER_FILE`]
