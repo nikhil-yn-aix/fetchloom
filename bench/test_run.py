@@ -410,6 +410,7 @@ class CampaignTests(unittest.TestCase):
             return dict(wall_seconds=1, user_seconds=1, sys_seconds=1, maxrss_bytes=1, exit_code=0, timeout=False)
 
         argv = ["run.py", "--fetchloom", "/not-executed", "--fs", "ext4", "--out", str(root / "results"), *arguments]
+        self.specs = mock.Mock(return_value=cases)
         if "--only-tools" not in arguments:
             argv += ["--only-tools", "fetchloom"]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
@@ -419,7 +420,7 @@ class CampaignTests(unittest.TestCase):
              mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
              mock.patch.object(run, "metadata", side_effect=lambda *args: dict(commands={}, orders=[], cases=[])), \
              mock.patch.object(run.os.path, "ismount", return_value=True), \
-             mock.patch.object(run.fixtures, "case_specs", return_value=cases), \
+             mock.patch.object(run.fixtures, "case_specs", self.specs), \
              mock.patch.object(run.fixtures, "build", side_effect=lambda case, seed: case), \
              mock.patch.object(run.fixtures, "prepare_native", side_effect=lambda case, *args: case), \
              mock.patch.object(run, "measure", side_effect=measured), \
@@ -440,6 +441,17 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual([row["round"] for row in control], [0, 1, 2])
         self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
+
+    def test_a_campaign_records_what_each_run_and_each_case_cost_and_shrinks_the_poor_link_as_asked(self):
+        with mock.patch.object(run.time, "monotonic", side_effect=(float(n) for n in range(10_000))):
+            meta, rows = self.campaign([dict(id="s1", profile="poor")], "--rounds", "1", "--no-warmup")
+        self.assertTrue(all(row["run_seconds"] > 0 for row in rows))
+        self.assertGreater(meta["cases"][0]["prepared_seconds"], 0)
+        self.campaign([dict(id="s1", profile="poor")], "--rounds", "1", "--poor-scale", ".5")
+        self.assertEqual(self.specs.call_args.args[3], .5)
+        for bad in ("0", "1.5", "nan", "half"):
+            with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
+                run.scale_choice(bad)
 
     def test_a_pilot_runs_one_round_of_every_case_and_tool_with_no_warmup(self):
         meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",

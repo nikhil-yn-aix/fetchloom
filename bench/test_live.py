@@ -222,7 +222,11 @@ class RecordTests(unittest.TestCase):
                                        measure=mock.patch.object(run, "measure", side_effect=measured),
                                        fingerprint=mock.patch.object(live, "fingerprint", return_value={"input.bin": "digest"}))
             once = [json.loads(line) for line in (root / "results/runs.jsonl").read_text().splitlines()]
+            recorded = json.loads((root / "results/meta.json").read_text())
         self.assertEqual((code, sorted(row["tool"] for row in once if row["kind"] == "live")), (0, ["fetchloom", "zenodo_get"]))
+        # what each run and the reference cost the campaign, for projecting its hours
+        self.assertTrue(all(row["run_seconds"] >= 0 for row in once if row["kind"] == "live"))
+        self.assertGreaterEqual(recorded["datasets"][0]["reference_seconds"], 0)
         # which tool starts comes from the seed, not from the code
         self.assertEqual({live.abba(("a", "b"), 2, random.Random(seed))[0][0] for seed in range(20)}, {"a", "b"})
 

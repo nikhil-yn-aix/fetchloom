@@ -467,6 +467,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
     the row to runs.jsonl and returns it. its log is named by a run id of one length for every arm,
     as every path a run touches is, so no arm's names cost more lookups."""
     run_id = run_id or uuid.uuid4().hex[:6]
+    begun = time.monotonic()
     row = dict(kind="lab", tool=tool.name, scenario=case["id"], profile=case["profile"],
                filesystem=workdir.parent.name, round=number, warmup=warmup, quick=case["quick"],
                count=case["count"], file_size=case["size"], status="failed", run_id=run_id, log=f"{run_id}.log")
@@ -566,6 +567,8 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
             tree.close()
         if (workdir / "prepare.log").exists():
             shutil.copyfile(workdir / "prepare.log", out / f"{run_id}-prepare.log")
+    # what the run cost the campaign, its untimed work included, for projecting a campaign's hours
+    row["run_seconds"] = time.monotonic() - begun
     append(out / "runs.jsonl", row)
     return row
 
@@ -634,6 +637,17 @@ def comparators_choice(value):
     return chosen
 
 
+def scale_choice(value):
+    """a factor that shrinks sizes: a finite number above 0 and at most 1."""
+    try:
+        scale = float(value)
+    except ValueError:
+        scale = math.nan
+    if not 0 < scale <= 1:
+        raise argparse.ArgumentTypeError("a scale is a number above 0 and at most 1")
+    return scale
+
+
 def variant_choice(value):
     try:
         return tools.variant(value)
@@ -650,6 +664,8 @@ def arguments():
     parser.add_argument("--fs", type=lambda x: csv_choices(x, ("ext4", "xfs")), default=["ext4", "xfs"])
     parser.add_argument("--rounds", type=int)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--poor-scale", type=scale_choice, default=1,
+                        help="shrink the poor link's sizes by this factor, as project.py decides from the pilot")
     parser.add_argument("--no-warmup", action="store_true",
                         help="skip the warmup round, as the pilot's one round of every case and tool does")
     parser.add_argument("--seed", type=int, default=1729)
@@ -685,7 +701,7 @@ def campaign(parser, args):
     lock = lab.exclusive()
     args.fetchloom = args.fetchloom.resolve()
     adapters = tools.available(args.fetchloom, variants, args.only_tools)
-    cases = [case for case in fixtures.case_specs(args.profiles, args.scenarios, args.quick)
+    cases = [case for case in fixtures.case_specs(args.profiles, args.scenarios, args.quick, args.poor_scale)
              if any(tool.supports(case) for tool in adapters.values())]
     if not cases:
         parser.error("no cases match these scenario/profile combinations")
@@ -745,6 +761,7 @@ def measure_case(args, fs, specification, adapters, meta):
     """builds and prepares one case outside the clock, then runs each tool that supports it once a
     round, warmup first, in a seeded shuffled order; returns how many runs failed."""
     meta_path = args.out / "meta.json"
+    begun = time.monotonic()
     lab.profile("lan")
     case = fixtures.build(specification, args.seed)
     measured = eligible(adapters, fs, case)
@@ -758,7 +775,8 @@ def measure_case(args, fs, specification, adapters, meta):
     # the plan is on record before the first run, so a campaign cut short shows it
     arms = rounds_of(args, fs, case, measured)
     rounds = arms.get(tools.Fetchloom.name, max(arms.values(), default=0))
-    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms, warmup=not args.no_warmup))
+    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms, warmup=not args.no_warmup,
+                              prepared_seconds=time.monotonic() - begun))
     lab.profile(case["profile"])
     # each case draws its own orders, so a campaign split into chunks shuffles as one run
     # would, rather than every chunk replaying the same sequence

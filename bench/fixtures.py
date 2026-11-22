@@ -43,6 +43,8 @@ REDIRECTED = ("s2r",)
 # the large file and the number of 100 KiB files on each link. the poor link's 3% loss slows every
 # tool far below its rate, so its sizes come from the runs measured on it, not from the rate
 SIZES = {"lan": (None, 1000), "local": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (4 * 1024 * 1024, 50)}
+# the poor link's sizes may shrink after its pilot, the same for every tool, no further than these
+POOR_FLOOR = (1024 * 1024, 10)
 # the only cases a claim comes from, as filesystem, link and scenario: each sets fetchloom against one
 # tool frozen from the pilot, and the eight share a 5% error
 HEADLINE = (("ext4", "home", "s1"), ("ext4", "poor", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"),
@@ -80,15 +82,26 @@ def sha256(path):
         return hashlib.file_digest(f, "sha256").hexdigest()
 
 
-def case_specs(profiles, scenarios, quick):
-    """the cases to measure, with file count and size: each scenario on the links LINKS gives it."""
+def scaled(profile, scale=1):
+    """a link's large file size and number of 100 KiB files: the poor link's shrunk by `scale`,
+    rounded down to whole MiB and files and no further than POOR_FLOOR."""
+    large, many = SIZES[profile]
+    if profile != "poor" or scale >= 1:
+        return large, many
+    mib = 1024 * 1024
+    return max(POOR_FLOOR[0], int(large * scale) // mib * mib), max(POOR_FLOOR[1], int(many * scale))
+
+
+def case_specs(profiles, scenarios, quick, poor_scale=1):
+    """the cases to measure, with file count and size: each scenario on the links LINKS gives it, the
+    poor link's sizes shrunk by `poor_scale`."""
     cases = []
     for profile in profiles:
         for scenario in scenarios:
             if profile not in LINKS[scenario]:
                 continue
             base = "s1" if scenario in BROKEN else WARM.get(scenario, scenario)
-            large, many = SIZES[profile]
+            large, many = scaled(profile, poor_scale)
             size = (large if base == "s1" else 102400 if base in ("s2r", "s11", "s12")
                     else 2 * 1024 * 1024 if base == "s13" else 1024 * 1024 if base == "s8" else 4096)
             count = 1 if base == "s1" else many if base in ("s2r", "s11", "s12", "s13") else 100 if base == "s8" else 10000

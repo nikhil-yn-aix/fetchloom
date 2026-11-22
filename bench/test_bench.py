@@ -93,6 +93,10 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sized["s11", "lan"], (1000, 102400))
         # 2 GiB in 1,000 files
         self.assertEqual(sized["s13", "local"], (1000, 2 * 1024 * 1024))
+        # a pilot over its hours shrinks the poor link alone, the same for every tool
+        shrunk = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in fixtures.case_specs(["poor", "home"], ["s1", "s2r"], False, .5)}
+        self.assertEqual(shrunk, {("s1", "poor"): (1, 2 * 1024 * 1024), ("s2r", "poor"): (25, 102400),
+                                  ("s1", "home"): sized["s1", "home"], ("s2r", "home"): sized["s2r", "home"]})
         # the resume keeps its whole file in a smoke run
         quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7", "s10"], True)}
         self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,

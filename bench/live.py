@@ -9,6 +9,7 @@ from pathlib import Path
 import random
 import shutil
 import subprocess
+import time
 from urllib.parse import quote
 import urllib.request
 
@@ -243,6 +244,7 @@ def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=
     returns it."""
     expected = dataset["expected_sha256"]
     service = dataset["service"]
+    begun = time.monotonic()
     row = dict(kind="live", service=service, scenario=service, tool=name, round=number, warmup=False,
                quick=dataset["quick"], filesystem="ext4", profile="live", status="failed",
                count=len(expected), file_size=dataset["bytes"])
@@ -288,6 +290,7 @@ def one_run(name, dataset, work, out, number, fetchloom, meta, timeout, *, cpus=
             row.update(status="skipped", reason="kagglehub refused anonymous access; see command log")
     except Exception as error:
         row["error"] = f"{type(error).__name__}: {error}"
+    row["run_seconds"] = time.monotonic() - begun
     run.append(out / "runs.jsonl", row)
     return row
 
@@ -328,9 +331,10 @@ def main():
         for service in args.services:
             reference_root = args.out / "references" / service
             try:
+                begun = time.monotonic()
                 dataset = catalog(service, args.quick)
                 expected = reference(dataset, reference_root)
-                dataset["expected_sha256"] = expected
+                dataset.update(expected_sha256=expected, reference_seconds=time.monotonic() - begun)
                 meta["datasets"].append(dataset)
             except Exception as error:
                 reason = f"public metadata or reference unavailable: {type(error).__name__}: {error}"
