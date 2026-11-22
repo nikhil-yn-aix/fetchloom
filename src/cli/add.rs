@@ -1706,7 +1706,14 @@ pub(super) fn render_add(
 ) {
     tell_started(work, starting);
     tell_marked(&work.context.output, placed);
-    tell_added(work, manifest, added, here, starting, (private, list));
+    tell_added(
+        work,
+        manifest,
+        added,
+        here,
+        (starting, placed.copied.is_some()),
+        (private, list),
+    );
 }
 
 fn tell_started(work: &Loop<'_>, starting: bool) {
@@ -2053,7 +2060,7 @@ fn tell_added(
     manifest: &Manifest,
     (name, has_files): (&str, bool),
     here: &Path,
-    starting: bool,
+    (starting, copied): (bool, bool),
     (private, list): (&[url::Origin], Option<&str>),
 ) {
     if has_files {
@@ -2066,7 +2073,7 @@ fn tell_added(
             super::project::command(&format!("path {name}"))
         ));
         if starting {
-            tell_read_only(&work.context.output, manifest, name);
+            tell_read_only(&work.context.output, manifest, name, copied);
         }
     } else {
         work.context.output.done(
@@ -2083,8 +2090,9 @@ fn tell_added(
 
 /// why the files of `name` are read-only, and how to edit or delete them, for a person at a
 /// terminal, who meets them as an editor's permission denied or `rm -r` asking about each file.
-/// a script needs no telling, and the first add of a project tells it once.
-fn tell_read_only(output: &Output, manifest: &Manifest, name: &str) {
+/// a script needs no telling, and the first add of a project tells it once. files `copied`
+/// rather than linked share nothing with the cache, so they are read-only only to stay as pinned.
+fn tell_read_only(output: &Output, manifest: &Manifest, name: &str, copied: bool) {
     let writable = manifest
         .datasets
         .get(name)
@@ -2092,8 +2100,13 @@ fn tell_read_only(output: &Output, manifest: &Manifest, name: &str) {
     if writable || !output.shows_next() {
         return;
     }
+    let why = if copied {
+        "its files are read-only copies, so they stay as data.lock pins them"
+    } else {
+        "its files are read-only, which protects the cache's copy"
+    };
     output.hint(&format!(
-        "its files are read-only, which protects the cache's copy: to edit them, set copy = true for {name} in data.toml; to delete them, run `{}`",
+        "{why}: to edit them, set copy = true for {name} in data.toml; to delete them, run `{}`",
         super::project::command(&format!("remove {name}"))
     ));
 }

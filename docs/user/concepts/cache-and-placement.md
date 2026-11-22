@@ -31,3 +31,7 @@ keep your own results outside the data folder. a file you delete from the data f
 sync keeps local edits unless forced, and status differences and kept conflicts still exit 0; [scripting](../guides/scripts.md) shows how to check for them.
 
 ### Links need one drive
+
+a hardlink is a second name for a file, and a reflink shares a file's bytes, so either works only within one drive: the cache and the data folder must be on the same one. when they are not, as home and scratch often are on a cluster, sync copies each file into the data folder instead, and a `place.copied` warning says so. the files still match data.lock, but each project then takes the full space of its data again, and its files are read-only copies rather than links to the cache.
+
+to get links back, set `FETCHLOOM_CACHE` to a folder on the drive that holds the data folder, or move the project to the cache's drive. [clusters](../guides/clusters.md#keep-the-project-and-the-cache-on-one-drive) compares the choices. a drive that cannot link at all, as FAT32 and exFAT drives cannot, always gets copies.

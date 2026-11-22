@@ -7,8 +7,8 @@ a cluster or a shared server has a small home folder, a large scratch disk and j
 fetchloom keeps one copy of each file in its cache and links it into each project. a link only works when the project's data folder and the cache are on the same drive. on most clusters, home and scratch are different drives. a project in home with its cache on scratch still works, but every project gets its own full copy of the files, in home:
 
 ```text
-warning: the cache is on another drive than the project, so files were copied
-  help: to link files instead, put both on one drive: move the project to the cache's drive, or set FETCHLOOM_CACHE to a folder on the drive of the project. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive
+warning: the cache is not on the drive that holds data, so files were copied
+  help: to link files instead, set FETCHLOOM_CACHE to a folder on the drive that holds data. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive
 ```
 
 pick one of these:

@@ -935,7 +935,7 @@ fn a_recorded_link_pointed_at_a_populated_folder_is_refused() -> Result {
 /// a data folder linked onto a disk apart from the cache, as clusters keep the code and the cache
 /// in home and the data on scratch, gets copies. the warning names the cache and the data folder,
 /// and its help moves the cache onto the data folder's disk, never the project, whose code
-/// stays where it is backed up.
+/// stays where it is backed up. the first add's read-only hint says its files are copies.
 #[cfg(target_os = "linux")]
 #[test]
 fn a_data_folder_on_another_disk_than_the_cache_moves_the_cache() -> Result {
@@ -961,14 +961,18 @@ fn a_data_folder_on_another_disk_than_the_cache_moves_the_cache() -> Result {
     ])?)?;
     let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
     sandbox.allow(&routes.url);
-    let added = sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?;
-    let stderr = text(&added.stderr)?;
-    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    let Some(screen) = sandbox.on_a_terminal(&["add", &format!("{}/iris.csv", routes.url)])? else {
+        return Ok(());
+    };
     assert!(
-        stderr.contains("warning: the cache is on another drive than data, so files were copied\n  help: to link files instead, set FETCHLOOM_CACHE to a folder on the drive of data. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive\n"),
-        "{stderr}"
+        screen.contains("warning: the cache is not on the drive that holds data, so files were copied\n  help: to link files instead, set FETCHLOOM_CACHE to a folder on the drive that holds data. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive\n"),
+        "{screen}"
     );
-    assert!(!stderr.contains("move the project"), "{stderr}");
+    assert!(!screen.contains("move the project"), "{screen}");
+    assert!(
+        screen.contains("hint: its files are read-only copies, so they stay as data.lock pins them: to edit them,"),
+        "{screen}"
+    );
     assert_eq!(fs::read(target.join("iris").join("iris.csv"))?, IRIS);
     Ok(())
 }

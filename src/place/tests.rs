@@ -69,7 +69,7 @@ fn a_cache_on_another_drive_explains_the_copy_and_the_way_to_links() {
         Unlinked::OtherDrive
             .copied_because("iris", "the file was")
             .to_string(),
-        "the cache is on another drive than iris, so the file was copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive of iris. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
+        "the cache is not on the drive that holds iris, so the file was copied. to link files instead, set FETCHLOOM_CACHE to a folder on the drive that holds iris. see https://nikhil-yn-aix.github.io/fetchloom/user/concepts/cache-and-placement/#links-need-one-drive"
     );
 }
 
