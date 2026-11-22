@@ -35,22 +35,22 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloo
 on disk: writes a pattern for each file into data.toml, takes a file its source lists out of data.lock too, and deletes the unchanged files it names from data/. to bring a file back, delete its pattern from data.toml and run `fetchloom sync`. --dry-run writes nothing";
 
     pub(super) const DROP: &str = "examples:
-  fetchloom drop pets    # free its space here; data.toml and data.lock keep it
+  fetchloom drop pets    # free its space here; data.lock keeps it
   fetchloom drop pets --dry-run    # check where its files are, freeing nothing
 
 on disk: deletes the unchanged files fetchloom placed for the datasets in data/ and their files in the cache that no other dataset or project needs, and notes in .fetchloom/state that they are dropped here. an output, a folder of your own files inside the project that add recorded where it is, keeps its files, and only the cache's copy goes. it first asks the mirrors and sources whether they still have each file. `fetchloom sync <name>` brings one back. --dry-run writes nothing";
 
     pub(super) const SYNC: &str = "examples:
-  fetchloom sync    # put every file data.lock lists in the data folder
+  fetchloom sync    # put data.lock's files in data/
   fetchloom sync iris    # only iris
-  fetchloom sync --locked --verify    # for CI, checking every file's SHA-256
+  fetchloom sync --locked --verify    # for CI, hashing every file
   fetchloom sync --force iris --dry-run    # what --force would replace in iris
 
 on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and keeps each dataset's folder out of git with a .gitignore in it. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
-  fetchloom lock    # write data.lock from data.toml, leaving data/ alone
-  fetchloom lock --check    # fail if data.lock is out of date, as CI does
+  fetchloom lock    # write data.lock from data.toml only
+  fetchloom lock --check    # fail if data.lock is out of date, for CI
   fetchloom lock --upgrade iris    # record the newest data iris's source has
   fetchloom lock --theirs iris    # after a git merge, keep their side of iris
 
@@ -73,8 +73,8 @@ on disk: nothing. it reads data.toml, data.lock and data/, and asks no server";
 on disk: nothing. it reads data.toml and data.lock and asks each source and mirror over the network: one small request a file, and one or two a dataset";
 
     pub(super) const DIFF: &str = "examples:
-  fetchloom diff    # data.lock now against HEAD's, file lists too
-  fetchloom diff main    # this branch and its uncommitted work against main
+  fetchloom diff    # data.lock against HEAD's, files too
+  fetchloom diff main    # this branch, edits too, against main
   fetchloom diff HEAD~1 HEAD --json    # what the last commit changed
   fetchloom diff -q origin/main    # a line for each dataset alone
 
@@ -89,9 +89,9 @@ on disk: nothing. it reads data.toml, data.lock and what the cache recorded of e
 
     pub(super) const EXPORT: &str = "examples:
   fetchloom export > data.sha256    # for sha256sum -c
-  fetchloom export --format links iris    # each file's link and SHA-256
+  fetchloom export --format links iris    # each link and SHA-256
   fetchloom export --format aria2 -o sources.aria2    # for aria2c -i
-  fetchloom export --format bibtex -o data.bib    # a citation of each dataset
+  fetchloom export --format bibtex -o data.bib    # a citation per dataset
 
 on disk: nothing, or the one file -o names, which it never replaces without --force. it reads data.toml, data.lock and what the cache recorded of each archive. bibtex, csl and ris ask doi.org once for each DOI, and nothing offline";
 
@@ -215,10 +215,10 @@ pub(crate) const ABOUT: &str =
 
 /// the commands a newcomer starts with, which `-h` and `--help` show first.
 pub(super) const TOP_EXAMPLES: &str = "examples:
-  fetchloom add iris    # in a project folder, pick an iris dataset to add
+  fetchloom add iris    # in a project folder, pick an iris dataset
   fetchloom add geo:GSE60450    # a GEO series, by its accession
   fetchloom add ../measurements    # files on this machine, no network needed
-  fetchloom sync    # in a clone, put the files data.lock lists in data/";
+  fetchloom sync    # in a clone, put data.lock's files in data/";
 
 /// where the R package and the python helper are, which run fetchloom from R and python.
 pub(super) fn helpers() -> String {
@@ -1619,6 +1619,34 @@ mod tests {
             for text in [super::super::help::examples_first(&help), short] {
                 for line in crate::output::wrap_help(&text, 80, false).lines() {
                     assert!(console::measure_text_width(line) <= 80, "{name}: {line}");
+                }
+            }
+        }
+    }
+
+    /// at 80 columns the comments of each examples block start at one column, in a pipe and at a
+    /// terminal, so they read as a column beside their commands.
+    #[test]
+    fn every_help_lines_up_its_example_comments() {
+        let mut screens = every_help();
+        screens.push((String::new(), top_help()));
+        for (name, help) in screens {
+            let topic: Vec<String> = name.split_whitespace().map(str::to_owned).collect();
+            let short = super::super::help::short(&topic).unwrap();
+            for text in [super::super::help::examples_first(&help), short] {
+                for terminal in [false, true] {
+                    let wrapped = crate::output::wrap_help(&text, 80, terminal);
+                    for block in wrapped.split("examples:\n").skip(1) {
+                        let comments: Vec<usize> = block
+                            .lines()
+                            .take_while(|line| line.starts_with("  "))
+                            .filter_map(|line| line.find("    # "))
+                            .collect();
+                        assert!(
+                            comments.windows(2).all(|pair| pair[0] == pair[1]),
+                            "{name}\n{wrapped}"
+                        );
+                    }
                 }
             }
         }

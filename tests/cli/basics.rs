@@ -554,7 +554,7 @@ fn help_opens_with_examples_not_the_welcome() -> Result {
             help.starts_with(
                 "fetchloom gives every copy of a project the exact research data it needs\n\n\
                  usage: fetchloom [options] <command>\n\n\
-                 examples:\n  fetchloom add iris    # in a project folder, "
+                 examples:\n  fetchloom add iris               # in a project folder, "
             ),
             "{arguments:?}: {help}"
         );

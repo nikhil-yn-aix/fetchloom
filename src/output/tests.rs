@@ -187,7 +187,11 @@ fn help_examples_wrap_as_a_shell_reads_them() {
             "examples:\n  fetchloom add iris\n    # at a terminal, pick one from a list\n  fetchloom add hf:datasets/scikit-learn/iris {mark}\n    --select \"*.csv\" --dry-run\n  fetchloom add ./flowers\n    # files on this machine, copied into the cache\n  fetchloom add -i links.txt\n    # a dataset for each link in a list"
         )
     );
-    assert_eq!(super::wrap_help(examples, 80, true), examples);
+    // at 80 the comments line up past the widest command that has one
+    assert_eq!(
+        super::wrap_help(examples, 80, true),
+        "examples:\n  fetchloom add iris            # at a terminal, pick one from a list\n  fetchloom add hf:datasets/scikit-learn/iris --select \"*.csv\" --dry-run\n  fetchloom add ./flowers       # files on this machine, copied into the cache\n  fetchloom add -i links.txt    # a dataset for each link in a list"
+    );
     assert_eq!(super::wrap_help(examples, 60, false), examples);
     let wide = "examples:\n  fetchloom add ./鸢尾花数据集/鸢尾花.csv --as iris";
     let wrapped = super::wrap_help(wide, 40, true);

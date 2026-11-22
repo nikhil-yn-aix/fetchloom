@@ -316,6 +316,29 @@ pub(super) fn example(line: &str, width: usize, below: bool) -> Vec<String> {
     lines
 }
 
+/// the column past the widest command of an examples block, `lines`, that has a comment, where
+/// [`align`] puts every comment of the block, so they read as one column.
+pub(super) fn comment_column<'a>(lines: impl IntoIterator<Item = &'a str>) -> usize {
+    lines
+        .into_iter()
+        .filter_map(|line| line.split_once(COMMENT))
+        .map(|(command, _)| columns(command))
+        .max()
+        .unwrap_or_default()
+}
+
+/// `line` of an examples block with its comment, if any, at `column`, as [`comment_column`] finds
+/// it for the block.
+pub(super) fn align(line: &str, column: usize) -> String {
+    match line.split_once(COMMENT) {
+        Some((command, comment)) => format!(
+            "{command}{}{COMMENT}{comment}",
+            " ".repeat(column.saturating_sub(columns(command)))
+        ),
+        None => line.to_owned(),
+    }
+}
+
 /// whether an example of help's `examples`, the lines of one block, has a comment that does not
 /// fit beside its command, which then puts every comment in the block below its command.
 pub(super) fn comments_below<'a>(

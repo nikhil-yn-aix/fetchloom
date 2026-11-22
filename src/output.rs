@@ -1914,21 +1914,35 @@ pub(crate) fn wrap_help(text: &str, width: usize, terminal: bool) -> String {
     let mut out = Vec::new();
     let mut examples = false;
     let mut below = false;
+    // the column every comment of an examples block starts at, so they line up
+    let mut column = 0;
     for (at, line) in lines.iter().copied().enumerate() {
         if !line.starts_with(' ') {
             examples = line == "examples:";
-            let block = lines[at + 1..]
+            let block: Vec<&str> = lines[at + 1..]
                 .iter()
                 .copied()
-                .take_while(|line| line.starts_with("  "));
-            below = examples && fit::comments_below(block, width);
+                .take_while(|line| line.starts_with("  "))
+                .collect();
+            column = fit::comment_column(block.iter().copied());
+            let aligned: Vec<String> = block.iter().map(|line| fit::align(line, column)).collect();
+            // comments that would not all fit in one column stay where the text has them
+            if fit::comments_below(aligned.iter().map(String::as_str), width) {
+                column = 0;
+            }
+            below = examples && fit::comments_below(block.iter().copied(), width);
         }
         let command = line.starts_with("  fetchloom ") && !line.trim_start().contains("  ");
         if (examples && line.starts_with("  ")) || command {
-            if terminal {
-                out.extend(fit::example(line, width, below));
+            let line = if examples {
+                fit::align(line, column)
             } else {
-                out.push(line.to_owned());
+                line.to_owned()
+            };
+            if terminal {
+                out.extend(fit::example(&line, width, below));
+            } else {
+                out.push(line);
             }
             continue;
         }

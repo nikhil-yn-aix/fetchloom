@@ -5,10 +5,10 @@ expression: "format!(\"usage: {listed}\")"
 usage: fetchloom [options] <command>
 
 examples:
-  fetchloom add iris    # in a project folder, pick an iris dataset to add
-  fetchloom add geo:GSE60450    # a GEO series, by its accession
+  fetchloom add iris               # in a project folder, pick an iris dataset
+  fetchloom add geo:GSE60450       # a GEO series, by its accession
   fetchloom add ../measurements    # files on this machine, no network needed
-  fetchloom sync    # in a clone, put the files data.lock lists in data/
+  fetchloom sync                   # in a clone, put data.lock's files in data/
 
 commands:
   add          add a dataset to the project and download it into the data folder
