@@ -4059,7 +4059,11 @@ fn o_never_writes_over_a_placed_file_spelled_another_way() -> Result {
     // `data`, still names the file as recorded
     #[cfg(unix)]
     {
-        std::os::unix::fs::symlink("data", work.join("Data"))?;
+        // a disk that ignores case, as macos's, finds `Data` in `data` itself; elsewhere a link does
+        let linked = !work.join("Data").exists();
+        if linked {
+            std::os::unix::fs::symlink("data", work.join("Data"))?;
+        }
         let args = [
             "--json",
             "get",
@@ -4079,7 +4083,9 @@ fn o_never_writes_over_a_placed_file_spelled_another_way() -> Result {
                 )),
             "{document}"
         );
-        std::fs::remove_file(work.join("Data"))?;
+        if linked {
+            std::fs::remove_file(work.join("Data"))?;
+        }
     }
     assert_eq!(server.requests().len(), asked, "nothing was asked for");
     assert_eq!(std::fs::read(work.join("data/menu/caf\u{e9}.csv"))?, placed);
