@@ -511,6 +511,7 @@ class PageTests(Quiet):
         rows = headline_rows(curl=2, aria2c=1.5)
         page = self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
         self.assertIn("| time over fetchloom's, 99.375% interval | verdict |", page)
+        self.assertIn("downloaded and checked, median of 10 runs.", page)
         self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
         # faster in these runs, but not the comparator frozen before them, so it only describes
         self.assertIn("| aria2c | 1.50 s | 1.50 s to 1.50 s | 1.50 [1.50, 1.50] | descriptive |", page)
@@ -586,7 +587,7 @@ class VerdictTests(unittest.TestCase):
         rows[0] = dict(rows[0], status="failed")
         self.assertEqual(self.judged(rows)["reason"], "fetchloom failed 1 of 10 runs")
 
-    def test_the_aa_gate_needs_every_round_passed_and_paired_and_withholds_every_verdict_of_its_case(self):
+    def test_the_control_gate_needs_every_round_passed_and_paired_and_withholds_every_verdict_of_its_case(self):
         rows = headline_rows(curl=2)
         failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+control", 4) else row for row in rows]
         missing = [row for row in rows if (row["tool"], row["round"]) != ("fetchloom+control", 10)]
@@ -670,6 +671,19 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual({comparison["word"] for comparison in unfrozen["comparisons"].values()}, {None})
         self.assertEqual({render.said(tool, unfrozen) for tool in ("curl", "aria2c", "pooch")}, {"withheld"})
         self.assertIsNone(render.hero(dict(scenario="s1", profile="home", summaries={}, judged=unfrozen)))
+
+    def test_a_headline_verdict_rests_on_ten_rounds_and_every_other_row_on_five(self):
+        rows = headline_rows(curl=2) + [row for row in headline_rows(control=(), aria2c=1.5) if row["tool"] == "aria2c" and row["round"] <= 5]
+        judged = self.judged(rows, comparator="curl")
+        self.assertEqual((judged["rival"], judged["comparisons"]["curl"]["pairs"], judged["comparisons"]["curl"]["word"]),
+                         ("curl", 10, "fetchloom faster"))
+        aria2c = judged["comparisons"]["aria2c"]
+        self.assertEqual((aria2c["pairs"], round(aria2c["median_ratio"], 9), aria2c["word"], render.said("aria2c", judged)),
+                         (5, 1.5, None, "descriptive"))
+        # a case outside the headline set runs every tool 5 rounds, and still describes its fastest one
+        described = self.judged([row for row in headline_rows(scenario="s3", profile="lan", control=(), curl=.5) if row["round"] <= 5],
+                                scenario="s3", profile="lan", planned=5)
+        self.assertEqual((described["rival"], described["reason"], described["comparisons"]["curl"]["pairs"]), ("curl", None, 5))
 
     def test_a_case_outside_the_headline_set_describes_its_fastest_tool_with_no_verdict(self):
         rows = headline_rows(scenario="s3", profile="lan", curl=.5, aria2c=.8)

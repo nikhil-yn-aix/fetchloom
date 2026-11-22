@@ -192,6 +192,8 @@ GATED = ("lan", "home", "local")
 # the runs: comparisons sharing a 5% error, bonferroni-adjusted
 HEADLINE = fixtures.HEADLINE
 FAMILY = 1 - .05 / len(HEADLINE)
+# a row that only describes needs no 10 pairs, only two for an interval at all
+DESCRIBED = 2
 SEED = 1729
 
 
@@ -214,10 +216,10 @@ def over_budget(measured):
     return f"went over the budget in {over} of {len(measured)} runs" if over else None
 
 
-def standing(base, measured, comparison):
+def standing(base, measured, comparison, minimum=ab.MIN_PAIRS):
     """why a comparison with fetchloom cannot stand, as a phrase after the tool's name, or None: a
     failed run, a run over the politeness budget, rounds other than fetchloom's, or fewer than
-    ab.MIN_PAIRS paired rounds. the measurements stay in the table either way."""
+    `minimum` paired rounds. the measurements stay in the table either way."""
     failed = sum(row.get("status") != "passed" for row in measured.values())
     if failed:
         return f"failed {failed} of {len(measured)} runs"
@@ -225,8 +227,8 @@ def standing(base, measured, comparison):
         return over_budget(measured)
     if measured.keys() != base.keys():
         return "ran other rounds than fetchloom"
-    if comparison["pairs"] < ab.MIN_PAIRS or comparison["interval"] is None or None in comparison["interval"]:
-        return f"has {comparison['pairs']} paired rounds, fewer than {ab.MIN_PAIRS}"
+    if comparison["pairs"] < minimum or comparison["interval"] is None or None in comparison["interval"]:
+        return f"has {comparison['pairs']} paired rounds, fewer than {minimum}"
     return None
 
 
@@ -250,7 +252,8 @@ def judge(case, runs, comparator=None):
             continue
         comparison = ab.paired(base, measured, level=.95 if tool == CONTROL else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
         comparisons[tool] = dict(comparison, failed=sum(row.get("status") != "passed" for row in measured.values()),
-                                 rounds=len(measured), unmet=standing(base, measured, comparison))
+                                 rounds=len(measured),
+                                 unmet=standing(base, measured, comparison, ab.MIN_PAIRS if headline else DESCRIBED))
     control = comparisons.get(CONTROL)
     own_failed = sum(row.get("status") != "passed" for row in base.values())
     if not base:
@@ -620,7 +623,27 @@ NOOP_CHECKS = ("each tool checks something else when nothing changed: fetchloom 
 REFETCH = "server body bytes / dataset size"
 # the clock of a library timed around its calls, as tools.py names it
 WARM_CALL = "call inside a warm interpreter"
-METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show the median; the thin line on each spans the fastest and slowest run. each other tool's time is set over fetchloom's round by round, and the table gives the median of those ratios with a paired percentile bootstrap interval, 20,000 resamples from seed 1729: 99.2% in the six headline cases, s1, s2r and s7 at home, s2r on the poor link, s5 and s10, whose comparisons share a 5% error, and 95% elsewhere, where a result describes and claims nothing. a verdict sets fetchloom against the fastest other tool that passed every run, from at least 10 paired rounds: fetchloom faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. fetchloom again, the a/a arm, is never a rival: on lan and home its 95% interval must sit inside 0.97 to 1.03, or the machine was too noisy and the case has no verdict; on the poor link its width is the network's own. a case where fetchloom failed a run has no verdict. `hero-*` cards repeat the headline verdicts that are not inconclusive, for the README.\n")
+METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and "
+          "verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with "
+          "the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it "
+          "had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for "
+          "at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run "
+          "past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run "
+          "past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU "
+          "is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show "
+          "the median; the thin line on each spans the fastest and slowest run. every tool runs 5 rounds, and each other tool's "
+          "time is set over fetchloom's round by round: the table gives the median of those ratios with a paired percentile "
+          "bootstrap interval, 20,000 resamples from seed 1729. "
+          f"in the {len(HEADLINE)} headline cases, s1 and s2r at home and on the poor link, s5 on the local network, and s7, "
+          "s10 and s12 at home, fetchloom, its control and the comparator frozen from the pilot run 5 rounds more, so each "
+          f"verdict rests on 10 pairs, and every interval is {percent(FAMILY)}, since the {len(HEADLINE)} comparisons share a "
+          "5% error. elsewhere intervals are 95%. only the frozen comparator's row in a headline case gets a verdict: fetchloom "
+          "faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even "
+          "when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. every other row describes and claims "
+          "nothing. the control arm, fetchloom run again, is never a rival: on every link without loss its 95% interval must "
+          "sit inside 0.97 to 1.03, or the machine was too noisy and the case has no verdict; on the poor link its width is the "
+          "network's own. a case where fetchloom failed a run has no verdict. `hero-*` cards repeat the headline verdicts that "
+          "are not inconclusive, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -709,7 +732,8 @@ def case_section(case):
     """a lab case's heading, story, table of every tool and its card."""
     summaries = case["summaries"]
     title = TITLES[case["scenario"]]
-    rounds = max(item["rounds"] for item in summaries.values())
+    # in a headline case fetchloom, its control and the frozen rival run more rounds than the rest
+    rounds = " or ".join(str(count) for count in sorted({item["rounds"] for item in summaries.values()}))
     judged = case["judged"]
     floor = max(item.get("in_flight_floor_ms") or 0 for item in summaries.values())
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",

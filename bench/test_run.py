@@ -329,12 +329,16 @@ class ManyVariantTests(unittest.TestCase):
 class CampaignTests(unittest.TestCase):
     """whole campaigns through run.main, with the lab and every client stood in for."""
 
-    def campaign(self, cases, *arguments):
-        """the meta.json and rows of a fetchloom campaign over these cases, every run passing."""
+    def campaign(self, cases, *arguments, comparators=None):
+        """the meta.json and rows of a campaign over these cases, fetchloom's alone unless --only-tools
+        says otherwise, every run passing."""
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         root = Path(folder.name)
         (root / "owned.json").write_text("{}")
+        if comparators:
+            (root / "comparators.json").write_text(json.dumps(comparators))
+            arguments += ("--comparators", str(root / "comparators.json"))
         (root / "www").mkdir()
         prepared = root / "prepared" / "fetchloom"
         prepared.mkdir(parents=True)
@@ -347,12 +351,15 @@ class CampaignTests(unittest.TestCase):
                  for case in cases]
 
         def measured(argv, cwd, env, logfile, *args, **kwargs):
-            (Path(cwd) / "data" / "f00000").mkdir(parents=True)
-            (Path(cwd) / "data" / "f00000" / "payload.bin").write_bytes(b"abc")
+            # where fetchloom places the file, and where a downloader writes it
+            for folder in (Path(cwd) / "data" / "f00000", Path(cwd).parent / "project" / "data"):
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / "payload.bin").write_bytes(b"abc")
             return dict(wall_seconds=1, user_seconds=1, sys_seconds=1, maxrss_bytes=1, exit_code=0, timeout=False)
 
-        argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
-                "--out", str(root / "results"), *arguments]
+        argv = ["run.py", "--fetchloom", "/not-executed", "--fs", "ext4", "--out", str(root / "results"), *arguments]
+        if "--only-tools" not in arguments:
+            argv += ["--only-tools", "fetchloom"]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
              mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
              mock.patch.object(lab, "pin_server", return_value={}), \
@@ -380,6 +387,26 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual([row["round"] for row in control], [0, 1, 2])
         self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
+
+    def test_every_arm_runs_five_rounds_and_a_headline_verdicts_arms_ten(self):
+        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
+                                   "--only-tools", "fetchloom,curl,aria2c", comparators={"ext4/home/s1": "curl"})
+        ran = {}
+        for row in rows:
+            ran.setdefault((row["scenario"], row["tool"]), []).append(row["round"])
+        self.assertEqual(ran, {("s1", "fetchloom"): list(range(11)), ("s1", "fetchloom+control"): list(range(11)),
+                               ("s1", "curl"): list(range(11)), ("s1", "aria2c"): list(range(6)),
+                               ("s4", "fetchloom"): list(range(6)), ("s4", "curl"): list(range(6)), ("s4", "aria2c"): list(range(6))})
+        plans = {case["id"]: (case["rounds"], case["arm_rounds"]) for case in meta["cases"]}
+        self.assertEqual(plans, {"s1": (10, {"fetchloom": 10, "curl": 10, "aria2c": 5, "fetchloom+control": 10}),
+                                 "s4": (5, {"fetchloom": 5, "curl": 5, "aria2c": 5})})
+        # a later round shuffles only the arms that run on
+        self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s1" and order["round"] > 5},
+                         {("curl", "fetchloom", "fetchloom+control")})
+        # --rounds sets every arm's count alike
+        meta, rows = self.campaign([dict(id="s1", profile="home")], "--control", "--rounds", "3")
+        self.assertEqual(sorted({(row["tool"], max(r["round"] for r in rows if r["tool"] == row["tool"])) for row in rows}),
+                         [("fetchloom", 3), ("fetchloom+control", 3)])
 
 
 class HelperTests(unittest.TestCase):

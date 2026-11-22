@@ -20,8 +20,10 @@ import fixtures
 import lab
 import tools
 
-# measured rounds per profile, after one warmup; a verdict needs at least 10 pairs
-ROUNDS = {"lan": 10, "home": 10, "poor": 10}
+# measured rounds after one warmup: every arm runs ROUNDS, and in a headline case fetchloom, its
+# control and the frozen rival run on to HEADLINE_ROUNDS, so each verdict rests on 10 pairs
+ROUNDS = 5
+HEADLINE_ROUNDS = 10
 # s10's link drops this many seconds into the download, for this many seconds
 LINK_DROP = (10, 10)
 TIME = "/usr/bin/time"
@@ -616,17 +618,25 @@ def campaign(parser, args):
     return lock, adapters, cases
 
 
-def rounds_of(args, profile):
-    """the measured rounds of a case on this profile, warmup aside."""
-    return 1 if args.quick else args.rounds or ROUNDS[profile]
+CONTROL = f"{tools.Fetchloom.name}+{tools.CONTROL[0]}"
 
 
 def eligible(adapters, fs, case):
     """the adapters that measure a case: each tool that supports it, the control arm in a headline
     case alone."""
-    control = f"{tools.Fetchloom.name}+{tools.CONTROL[0]}"
     headline = (fs, case["profile"], case["id"]) in fixtures.HEADLINE
-    return {name: tool for name, tool in adapters.items() if tool.supports(case) and (headline or name != control)}
+    return {name: tool for name, tool in adapters.items() if tool.supports(case) and (headline or name != CONTROL)}
+
+
+def rounds_of(args, fs, case, names):
+    """each arm's measured rounds in a case, warmup aside: one in a smoke run, --rounds for every arm
+    when it is given, and otherwise ROUNDS, with fetchloom, its control and the comparator frozen
+    for a headline case running on to HEADLINE_ROUNDS."""
+    if args.quick or args.rounds:
+        return {name: 1 if args.quick else args.rounds for name in names}
+    key = f"{fs}/{case['profile']}/{case['id']}"
+    longer = (tools.Fetchloom.name, CONTROL, args.comparators.get(key)) if tuple(key.split("/")) in fixtures.HEADLINE else ()
+    return {name: HEADLINE_ROUNDS if name in longer else ROUNDS for name in names}
 
 
 def estimate(args, adapters, cases):
@@ -635,7 +645,7 @@ def estimate(args, adapters, cases):
     total = 0
     for fs in args.fs:
         for case in cases:
-            runs = (rounds_of(args, case["profile"]) + 1) * len(eligible(adapters, fs, case))
+            runs = sum(rounds + 1 for rounds in rounds_of(args, fs, case, eligible(adapters, fs, case)).values())
             total += runs * (30 if case["id"] == "s7" else 3 if args.quick else 60)
     return total
 
@@ -654,15 +664,17 @@ def measure_case(args, fs, specification, adapters, meta):
             case = fixtures.prepare_native(case, args.fetchloom, [measured[name].prepared_as])
         except Exception as error:
             preparation_errors[name] = f"native preparation failed: {error}"
-    rounds = rounds_of(args, case["profile"])
-    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds))
+    # the plan is on record before the first run, so a campaign cut short shows it
+    arms = rounds_of(args, fs, case, measured)
+    rounds = arms.get(tools.Fetchloom.name, max(arms.values(), default=0))
+    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms))
     lab.profile(case["profile"])
     # each case draws its own orders, so a campaign split into chunks shuffles as one run
     # would, rather than every chunk replaying the same sequence
     rng = case_rng(args.seed, fs, case)
     failures = 0
-    for number in range(rounds + 1):
-        order = list(measured)
+    for number in range(max(arms.values(), default=0) + 1):
+        order = [name for name in measured if number <= arms[name]]
         rng.shuffle(order)
         meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))
         write_metadata(meta_path, meta)
@@ -681,7 +693,7 @@ def measure_case(args, fs, specification, adapters, meta):
             meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
             failures += row["status"] != "passed"
             wall = f"{row['wall_seconds']:.3f}s" if "wall_seconds" in row else row.get("error", "no timing")
-            print(f"{fs}/{case['profile']}/{case['id']} round {number}/{rounds} {name}: {row['status']} {wall}", flush=True)
+            print(f"{fs}/{case['profile']}/{case['id']} round {number}/{arms[name]} {name}: {row['status']} {wall}", flush=True)
             if workdir.exists():
                 shutil.rmtree(workdir)
     return failures
