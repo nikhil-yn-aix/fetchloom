@@ -250,6 +250,9 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
             .output
             .aside(&format!("using the project in {}", project.root.display()));
     }
+    if starting && dry_run {
+        tell_would_start(context, &project.root, std::env::home_dir().as_deref());
+    }
     before_holding(context, &mut request, &project.root, starting && !dry_run)
         .await
         .map_err(|error| stopped(context, error, true))?;
@@ -607,13 +610,14 @@ async fn before_holding(
     Ok(())
 }
 
-/// asks before starting a project in `root` when it is the home folder or a disk's root, which
-/// take in far more than one project's folders, or when a folder below holds a project already,
-/// which the new one would wrap. with nobody to ask it refuses, unless `--yes`.
-fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(), Error> {
-    if context.yes {
-        return Ok(());
-    }
+/// why an add asks before starting a project in `root`, and its question, or none when it
+/// starts one unasked: `root` is the home folder or a disk's root, which take in far more than
+/// one project's folders, or folders below hold projects, `below`, which the new one would wrap.
+fn start_asked(
+    root: &Path,
+    home: Option<&Path>,
+    below: &[Option<String>],
+) -> Option<(String, String)> {
     let what = if root.parent().is_none() {
         Some("the root of a disk")
     } else if home.is_some_and(|home| same_file::is_same_file(home, root).unwrap_or(false)) {
@@ -621,19 +625,18 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
     } else {
         None
     };
-    let below = super::project::projects_below(root);
-    let (why, question) = match what {
-        None if below.is_empty() => return Ok(()),
-        Some(what) => (
+    match what {
+        None if below.is_empty() => None,
+        Some(what) => Some((
             format!(
                 "{} is {what}, and a project there takes in every folder below it",
                 root.display()
             ),
             start_question(root, what),
-        ),
+        )),
         None => {
-            let (named, held, them) = held_below(&below);
-            (
+            let (named, held, them) = held_below(below);
+            Some((
                 format!(
                     "{named} below {} {held} already, so fetchloom did not start another project around {them}",
                     root.display()
@@ -641,8 +644,49 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
                 format!(
                     "{named} below this folder {held} already.\nstart another project here, around {them}?"
                 ),
-            )
+            ))
         }
+    }
+}
+
+/// `add --dry-run`'s word that the add would start a project in `root`, around the projects
+/// below it if any, and the question the add asks first, unless `--yes` answers it.
+fn tell_would_start(context: &Context, root: &Path, home: Option<&Path>) {
+    let output = &context.output;
+    let below = super::project::projects_below(root);
+    let around = if below.is_empty() {
+        String::new()
+    } else {
+        let named = super::project::named_below(&below);
+        let projects = if below.len() == 1 {
+            "the project"
+        } else {
+            "the projects"
+        };
+        format!(", around {projects} in {}", units::listed(&named, "and"))
+    };
+    output.step(
+        "Would start",
+        &format!("a project in {}{around}", units::path(root)),
+    );
+    if let Some((_, question)) = start_asked(root, home, &below).filter(|_| !context.yes) {
+        output.hint(&format!(
+            "without --dry-run, the add asks first: {} [y/N]",
+            question.replace('\n', " ")
+        ));
+    }
+}
+
+/// asks before starting a project in `root` when it is the home folder or a disk's root, which
+/// take in far more than one project's folders, or when a folder below holds a project already,
+/// which the new one would wrap. with nobody to ask it refuses, unless `--yes`.
+fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(), Error> {
+    if context.yes {
+        return Ok(());
+    }
+    let below = super::project::projects_below(root);
+    let Some((why, question)) = start_asked(root, home, &below) else {
+        return Ok(());
     };
     // the command runs again from that new folder, so a relative path in it starts one further up
     let down = super::typed::one_folder_down();

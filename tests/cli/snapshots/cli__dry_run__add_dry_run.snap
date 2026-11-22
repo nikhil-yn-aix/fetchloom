@@ -2,6 +2,7 @@
 source: tests/cli/dry_run.rs
 expression: stderr
 ---
+      Would start a project in [sandbox]/work
       Would pin iris, new in data.lock: http://127.0.0.1:[port]/files/iris.csv · 1 file · 32 B
       Would fetch iris/iris.csv · 32 B
       Would place data/iris · 1 file

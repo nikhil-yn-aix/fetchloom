@@ -1693,6 +1693,41 @@ fn a_project_right_below_is_named_and_never_wrapped_unasked() -> Result {
     Ok(())
 }
 
+/// a dry run of an add that would start a project says so, around the project below when there
+/// is one, with the question the add would ask before it; nothing is written.
+#[test]
+fn a_dry_run_says_it_would_start_a_project_and_what_it_asks() -> Result {
+    let sandbox = Sandbox::new()?;
+    let measurements = sandbox.folder("measurements")?;
+    fs::write(measurements.join("heights.csv"), b"cm\n170\n")?;
+    let above = sandbox.folder("above")?;
+    fs::create_dir(above.join("myproj"))?;
+    fs::write(above.join("myproj").join("data.toml"), "")?;
+    let empty = sandbox.folder("empty")?;
+    let wraps = "without --dry-run, the add asks first: myproj/ below this folder holds a project already. start another project here, around it? [y/N]";
+    for (folder, around, asked) in [
+        (&above, ", around the project in myproj/", Some(wraps)),
+        (&empty, "", None),
+    ] {
+        let output = sandbox
+            .command_in(folder, &["add", "../measurements", "--dry-run"])
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert_eq!(output.status.code(), Some(0), "{stderr}");
+        assert!(
+            stderr.contains(&format!(
+                "Would start a project in {}{around}\n",
+                folder.display()
+            )),
+            "{stderr}"
+        );
+        assert_eq!(stderr.contains("asks first"), asked.is_some(), "{stderr}");
+        assert!(asked.is_none_or(|asked| stderr.contains(asked)), "{stderr}");
+        assert!(!folder.join("data.toml").exists());
+    }
+    Ok(())
+}
+
 /// data.toml belongs to the repository that commits it, so the outer data.toml is left alone.
 #[test]
 fn a_git_repository_inside_a_project_starts_its_own() -> Result {
