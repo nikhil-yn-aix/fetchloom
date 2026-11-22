@@ -20,9 +20,15 @@ WARM = {"s5": "s2r", "s6": "s2r", "s9": "s3"}
 # the links each scenario runs on: the network cases on the links people have, the cases about the
 # machine's own work on lan, where the link adds nothing
 LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("lan",), "s4": ("home",), "s5": ("lan",),
-         "s6": ("lan",), "s7": ("home",), "s8": ("home",), "s9": ("lan",), "s10": ("home",)}
+         "s6": ("lan",), "s7": ("home",), "s8": ("home",), "s9": ("lan",), "s10": ("home",), "s12": ("home",)}
 # the scenarios that break into s1's download, by ctrl-c or by the link dropping
 BROKEN = ("s7", "s10")
+# the scenario that brings a dataset already in place up to its next version, in which every CHANGED-th
+# file differs
+NEXT = ("s12",)
+CHANGED = 10
+# the scenarios whose server body bytes are set over the dataset's size: what a tool asked for again
+REFETCHED = (*BROKEN, *NEXT)
 ALL_SCENARIOS = tuple(LINKS)
 # the cases whose every link answers with a 302 to the storage host, the commonest shape of a
 # repository's downloads
@@ -76,9 +82,9 @@ def case_specs(profiles, scenarios, quick):
                 continue
             base = "s1" if scenario in BROKEN else WARM.get(scenario, scenario)
             large, many = SIZES[profile]
-            size = (large if base == "s1" else 102400 if base == "s2r"
+            size = (large if base == "s1" else 102400 if base in ("s2r", "s12")
                     else 1024 * 1024 if base == "s8" else 4096)
-            count = 1 if base == "s1" else many if base == "s2r" else 100 if base == "s8" else 10000
+            count = 1 if base == "s1" else many if base in ("s2r", "s12") else 100 if base == "s8" else 10000
             if quick:
                 # a broken download keeps its whole file, so it is still downloading when it breaks
                 if scenario not in BROKEN:
@@ -140,22 +146,21 @@ def build(case, seed):
     if target.exists():
         shutil.rmtree(target)
     target.mkdir(parents=True, exist_ok=True)
-    files = []
+    files, previous = [], []
     for index in range(case["count"]):
         name = f"table-{index:05}.csv" if case["base"] == "s8" else f"file-{index:05}.bin"
+        if case["base"] in NEXT:
+            # both versions have every file; the next one changed every CHANGED-th
+            previous.append(write(target / "previous" / name, seed, f"{key}/{name}", case["size"], link(f"{key}/previous", name)))
+            source = f"{key}/next/{name}" if index % CHANGED == 0 else f"{key}/{name}"
+            files.append(write(target / "next" / name, seed, source, case["size"], link(f"{key}/next", name)))
+            continue
         path = target / name
-        with path.open("wb") as f:
-            if case["base"] == "s8":
-                f.write(table(seed, f"{key}/{name}", case["size"]))
-            remaining = 0 if case["base"] == "s8" else case["size"]
-            chunk = 0
-            while remaining:
-                length = min(1024 * 1024, remaining)
-                f.write(content(seed, f"{key}/{name}/{chunk}", length))
-                remaining -= length
-                chunk += 1
-        files.append(dict(name=name, sha256=sha256(path), size=path.stat().st_size,
-                          url=link(key, name, case["base"] in REDIRECTED)))
+        if case["base"] == "s8":
+            path.write_bytes(table(seed, f"{key}/{name}", case["size"]))
+            files.append(dict(name=name, sha256=sha256(path), size=path.stat().st_size, url=link(key, name)))
+        else:
+            files.append(write(path, seed, f"{key}/{name}", case["size"], link(key, name, case["base"] in REDIRECTED)))
     members = []
     if case["base"] == "s8":
         members = files
@@ -180,8 +185,24 @@ def build(case, seed):
         files = [dict(name=archive.name, sha256=sha256(archive), size=archive.stat().st_size,
                       url=link(key, archive.name))]
     data = dict(files=files, members=members, server_dir=str(target), fixture_signature=signature)
+    if previous:
+        data["previous"] = previous
     write_json(manifest, data)
     return dict(case, **data)
+
+
+def write(path, seed, source, size, url):
+    """a file of size random bytes fixed by seed and source, with its entry: name, sha256, size, url."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("wb") as f:
+        for chunk, start in enumerate(range(0, size, 1024 * 1024)):
+            f.write(content(seed, f"{source}/{chunk}", min(1024 * 1024, size - start)))
+    return dict(name=path.name, sha256=sha256(path), size=size, url=url)
+
+
+def served_file(case, item):
+    """the server's copy of a case's file, by its link."""
+    return lab.ROOT / "www" / served(item["url"]).lstrip("/")
 
 
 def prepare_native(case, fetchloom, names):
@@ -210,29 +231,46 @@ def prepare_native(case, fetchloom, names):
                 lab.run_group(argv, cwd=cwd, env=env, input=input, text=True, stdout=output,
                               stderr=subprocess.STDOUT, timeout=lab.PREPARE_TIMEOUT)
             if built:
-                text = "\n".join(f'[datasets.f{i:05}]\nref = "{item["url"]}"\n'
-                                 for i, item in enumerate(case["files"]))
-                (target / "data.toml").write_text(text)
-                env["FETCHLOOM_CACHE"] = str(root / "lock-cache")
-                run([fetchloom, "-q", "--yes", "lock"])
-                shutil.rmtree(root / "lock-cache", ignore_errors=True)
-                env.pop("FETCHLOOM_CACHE", None)
+                # the next version's project, and the version before it in its own folder
+                for folder, files in ((target, case["files"]), (target / "previous", case.get("previous"))):
+                    if files is None:
+                        continue
+                    folder.mkdir(exist_ok=True)
+                    text = "\n".join(f'[datasets.f{i:05}]\nref = "{item["url"]}"\n' for i, item in enumerate(files))
+                    (folder / "data.toml").write_text(text)
+                    env["FETCHLOOM_CACHE"] = str(root / "lock-cache")
+                    run([fetchloom, "-q", "--yes", "lock"], cwd=folder)
+                    shutil.rmtree(root / "lock-cache", ignore_errors=True)
+                    env.pop("FETCHLOOM_CACHE", None)
             elif tool == "dvc":
                 run(["git", "init", "-q"])
                 run(["dvc", "init", "-q"])
                 data = target / "data"
                 data.mkdir()
-                for item in case["files"]:
-                    shutil.copyfile(Path(case["server_dir"]) / item["name"], data / item["name"])
-                run(["dvc", "add", "data"])
                 remote = lab.ROOT / "www" / "dvc" / case["key"]
                 remote.mkdir(parents=True, exist_ok=True)
                 run(["dvc", "remote", "add", "stage", remote])
-                run(["dvc", "push", "-r", "stage"])
+                # each version's files go to the remote, and its data.dvc into a commit tagged with its name
+                versions = {}
+                for version, files in (("previous", case.get("previous")), ("next", case["files"])):
+                    if files is None:
+                        continue
+                    for item in files:
+                        shutil.copyfile(served_file(case, item), data / item["name"])
+                    run(["dvc", "add", "data"])
+                    run(["dvc", "push", "-r", "stage"])
+                    if case.get("previous"):
+                        versions[version] = (target / "data.dvc").read_text()
                 run(["dvc", "remote", "remove", "stage"])
                 run(["dvc", "remote", "add", "-d", "lab", link("dvc", case["key"], case.get("base") in REDIRECTED)])
                 run(["dvc", "remote", "modify", "lab", "verify", "true"])
                 run(["dvc", "config", "cache.type", "reflink,hardlink,copy"])
+                if len(versions) > 1:
+                    for version, record in versions.items():
+                        (target / "data.dvc").write_text(record)
+                        run(["git", "add", "-A"])
+                        run(["git", "commit", "-q", "-m", version])
+                        run(["git", "tag", version])
                 shutil.rmtree(data)
                 shutil.rmtree(target / ".dvc" / "cache", ignore_errors=True)
                 shutil.rmtree(target / ".dvc" / "tmp", ignore_errors=True)
@@ -241,9 +279,21 @@ def prepare_native(case, fetchloom, names):
                 run(["git", "config", "annex.backend", "SHA256E"])
                 run(["git", "config", "annex.security.allowed-ip-addresses", lab.SERVER_ADDRESS])
                 (target / "data").mkdir(exist_ok=True)
-                batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in case["files"])
+                if case.get("previous"):
+                    # the version before, tagged, then each changed file replaced by its next version's
+                    batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in case["previous"])
+                    run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)
+                    run(["datalad", "save", "-m", "previous"])
+                    run(["git", "tag", "previous"])
+                    changed = [item for item, before in zip(case["files"], case["previous"]) if item["sha256"] != before["sha256"]]
+                    run(["git", "rm", "-q", *(f"data/{item['name']}" for item in changed)])
+                    batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in changed)
+                else:
+                    batch = "".join(f'{item["url"]} data/{item["name"]}\n' for item in case["files"])
                 run(["git", "annex", "addurl", "--batch", "--with-files"], input=batch)
-                run(["datalad", "save", "-m", "prepare benchmark inputs"])
+                run(["datalad", "save", "-m", "next" if case.get("previous") else "prepare benchmark inputs"])
+                if case.get("previous"):
+                    run(["git", "tag", "next"])
                 run(["git", "annex", "drop", "--force", "--all"])
             write_json(target / ".ready", signature)
     case["prepared"] = str(root)

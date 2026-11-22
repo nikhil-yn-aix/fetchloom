@@ -745,6 +745,29 @@ class OneRunTests(unittest.TestCase):
         self.assertTrue(tree.closed)
         self.assertEqual((row["written_bytes"], row["memory_bytes"], row["maxrss_bytes"]), (8192, 90, 7))
 
+    def test_the_next_version_counts_what_was_fetched_of_either_version_over_the_new_ones_size(self):
+        class Updater(tools.Tool):
+            name = "updater"
+
+            def prepare(self, scenario, workdir):
+                workdir.mkdir(parents=True, exist_ok=True)
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        previous = [dict(name="a.bin", size=4, url="https://lab.flb/key/previous/a.bin", sha256="0" * 64),
+                    dict(name="b.bin", size=4, url="https://lab.flb/key/previous/b.bin", sha256="1" * 64)]
+        files = [dict(previous[0], url="https://lab.flb/key/next/a.bin"), dict(previous[1], url="https://lab.flb/key/next/b.bin", sha256="2" * 64)]
+
+        def measured(*args, **kwargs):
+            # the changed file, and one of the version before fetched again for nothing
+            (self.root / "access.jsonl").write_text('{"request": "GET /key/next/b.bin HTTP/1.1", "status": 200, "bytes": 4}\n'
+                                                     '{"request": "GET /key/previous/a.bin HTTP/1.1", "status": 200, "bytes": 4}\n')
+            return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+        row = self.one_run(Updater("unused"), measured, dict(self.case, id="s12", base="s12", profile="home", files=files, previous=previous))
+        self.assertEqual((row["file_bytes_served"], row["dataset_bytes"], row["body_bytes_ratio"]), (8, 8, 1.0))
+
     def test_a_run_with_more_requests_in_flight_than_the_budget_is_flagged(self):
         class Fast(tools.Tool):
             name = "fast"

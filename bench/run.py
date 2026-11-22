@@ -521,7 +521,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
         row["free_after_bytes"] = free_bytes(workdir)
         row["disk_bytes"] = before - row["free_after_bytes"]
         time.sleep(0.05)
-        paths = {fixtures.served(item["url"]) for item in case["files"]}
+        paths = {fixtures.served(item["url"]) for item in case["files"] + case.get("previous", [])}
         if tool.name == "dvc":
             # DVC addresses file bodies by MD5, not by the input filename
             for path in (lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"):
@@ -535,7 +535,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
             unseen = [host for host in (lab.HOST, lab.STORE) if not row["hosts"].get(host)]
             if unseen:
                 row["checks"].append(f"the server log shows no request to {' or '.join(unseen)}")
-        if case["id"] in fixtures.BROKEN:
+        if case["id"] in fixtures.REFETCHED:
             # what the application asked for again, not the wire: nginx never sees a retransmitted packet
             row["dataset_bytes"] = sum(item["size"] for item in case["files"])
             row["body_bytes_ratio"] = row["file_bytes_served"] / row["dataset_bytes"]

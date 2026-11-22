@@ -79,7 +79,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
                          sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "lan"),
                                  ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"), ("s8", "home"),
-                                 ("s9", "lan"), ("s10", "home")]))
+                                 ("s9", "lan"), ("s10", "home"), ("s12", "home")]))
         sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
         self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
         # the poor link's sizes come from the runs measured on its loss
@@ -89,6 +89,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sized["s2r", "home"], (1000, 102400))
         self.assertEqual(sized["s2r", "poor"], (50, 102400))
         self.assertEqual(sized["s3", "lan"], (10000, 4096))
+        self.assertEqual(sized["s12", "home"], (1000, 102400))
         # the resume keeps its whole file in a smoke run
         quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7", "s10"], True)}
         self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,
@@ -707,6 +708,46 @@ class ToolTests(unittest.TestCase):
                          [(self.work / "cache/tool" / item["name"], item["sha256"]) for item in self.FILES])
         self.assertEqual(tools.Curl("unused").outputs(plain, self.work),
                          [(self.work / "project/data" / item["name"], item["sha256"]) for item in self.FILES])
+
+    def test_each_tool_fetches_the_version_before_untimed_then_learns_of_the_next_its_own_way(self):
+        previous = [dict(item, url=item["url"].replace("/key/", "/key/previous/")) for item in self.FILES]
+        files = [dict(item, url=item["url"].replace("/key/", "/key/next/"), sha256="1" * 64) for item in self.FILES]
+        prepared = self.work / "prepared"
+        for folder, items in ((prepared / "fetchloom", files), (prepared / "fetchloom/previous", previous)):
+            folder.mkdir(parents=True)
+            (folder / "data.toml").write_text(items[0]["url"])
+            (folder / "data.lock").write_text("lock")
+        case = dict(id="s12", base="s12", files=files, previous=previous, members=[], prepared=str(prepared))
+        steps = []
+
+        def untimed(tool, scenario, workdir):
+            told = (workdir / "project/data.toml").read_text() if tool.name == "fetchloom" else None
+            steps.append(("untimed", scenario["files"][0]["url"], told))
+
+        work = self.work / "work"
+        with mock.patch.object(tools.Tool, "untimed", untimed), \
+             mock.patch.object(tools.subprocess, "run", side_effect=lambda argv, **kwargs: steps.append(argv[:4])), \
+             mock.patch.object(tools.shutil, "copytree"), \
+             mock.patch.object(lab, "run_group", side_effect=lambda argv, **kwargs: steps.append([str(x) for x in argv[:4]])):
+            for adapter in (tools.Fetchloom, tools.Dvc, tools.Datalad, tools.Pooch, tools.Aria2c, tools.Curl):
+                steps.append(adapter.name)
+                tools.reset(work)
+                adapter("unused").prepare(case, work)
+                if adapter is tools.Fetchloom:
+                    steps.append(("told", (work / "project/data.toml").read_text()))
+        before, after = previous[0]["url"], files[0]["url"]
+        self.assertEqual(steps, [
+            "fetchloom", ("untimed", before, before), ("told", after),
+            "dvc", ["dvc", "config", "cache.dir", str(work / "cache/tool")], ["git", "checkout", "-q", "previous"],
+            ("untimed", before, None), ["git", "checkout", "-q", "next"],
+            "datalad", ["datalad", "clone", str(prepared / "datalad"), str(work / "project")], ["git", "reset", "-q", "--hard"],
+            ("untimed", before, None), ["datalad", "update", "--how", "merge"],
+            "pooch", ("untimed", before, None), "aria2c", ("untimed", before, None), "curl", ("untimed", before, None)])
+        # aria2c checks each file it has and fetches again the ones whose hash changed; curl fetches all
+        self.assertIn("--check-integrity=true", self.lines(tools.Aria2c, "s12", files)[2].split())
+        self.assertEqual([word for word in self.lines(tools.Curl, "s12", files)[2].split() if word.startswith("https://")],
+                         [item["url"] for item in files])
+        self.assertFalse(tools.DurableCurl("unused").supports(case))
 
     def test_curl_follows_each_redirect_and_every_tool_fetches_the_redirected_links(self):
         redirected = [dict(item, url=fixtures.link("key", item["name"], True)) for item in self.FILES]

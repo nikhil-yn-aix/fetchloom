@@ -17,7 +17,7 @@ LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local netw
 TITLES = {"s1": "one large file", "s2r": "many files through a redirect", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files",
-          "s10": "the link drops for 10 s"}
+          "s10": "the link drops for 10 s", "s12": "the next version"}
 
 
 def summarize(rows):
@@ -129,7 +129,8 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s7": "a {size} download stopped at 10 s, then run again to finish",
            "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
            "s9": "{files} already in place, each tool confirms nothing changed",
-           "s10": "a {size} download whose link drops at 10 s for 10 s, with nothing stopped"}
+           "s10": "a {size} download whose link drops at 10 s for 10 s, with nothing stopped",
+           "s12": "{files} of {size} each already in place, brought to the dataset's next version, in which one file in ten changed"}
 
 # the site's stylesheet, whose colors the cli's themes share and the cards take
 STYLESHEET = Path(__file__).resolve().parents[1] / "docs-site/theme/assets/stylesheets/fetchloom.css"
@@ -771,13 +772,20 @@ def case_section(case):
                          f"{f'{value:.3f}x' if value is not None else 'n/a'} |")
         lines.append("\nthe link drops at 10 s for 10 s, both ways, and nothing is stopped: new packets are lost while those "
                      "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
-    if case["scenario"] == "s7":
+    if case["scenario"] in ("s7", "s12"):
         lines += ["", f"| tool | {REFETCH} |", "|---|---:|"]
         for tool, entry in summaries.items():
             value = entry["body_bytes_ratio"]
             lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
+    if case["scenario"] == "s7":
         lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both, written ones included; interruption is at 10 s, with a 5 s kill grace period.\n")
-    if case["scenario"] in ("s7", "s10"):
+    if case["scenario"] == "s12":
+        lines.append("\neach tool updates its own documented way: fetchloom and DVC sync and pull after a git pull brings the new "
+                     "data.lock or data.dvc, datalad gets after `datalad update`, pooch retrieves each file by its new hash, "
+                     "aria2c checks each file it has with `--check-integrity` and curl, which has no way to tell what changed, "
+                     "downloads every file again. the dataset is the new version, so a tool that fetches only what changed asks "
+                     "for about 0.1 of it.\n")
+    if case["scenario"] in ("s7", "s10", "s12"):
         lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]

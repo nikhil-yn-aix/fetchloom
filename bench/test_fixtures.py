@@ -96,6 +96,21 @@ class CaseTests(unittest.TestCase):
         self.assertEqual(built[0]["sha256"], built[1]["sha256"])
 
 
+class NextVersionTests(unittest.TestCase):
+    def test_the_next_version_changes_one_file_in_ten_and_keeps_the_rest_byte_for_byte(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
+            case = fixtures.build(dict(id="s12", base="s12", profile="home", size=3000, count=20, quick=False), 7)
+            previous, files = case["previous"], case["files"]
+            self.assertEqual([item["name"] for item in previous], [item["name"] for item in files])
+            changed = [item["name"] for item, before in zip(files, previous) if item["sha256"] != before["sha256"]]
+            self.assertEqual(changed, ["file-00000.bin", "file-00010.bin"])
+            self.assertEqual((files[3]["url"], previous[3]["url"]), (f"https://lab.flb/{case['key']}/next/file-00003.bin",
+                                                                     f"https://lab.flb/{case['key']}/previous/file-00003.bin"))
+            for item in files + previous:
+                self.assertEqual(fixtures.sha256(fixtures.served_file(case, item)), item["sha256"])
+                self.assertEqual(item["size"], 3000)
+
+
 class RedirectTests(unittest.TestCase):
     def test_each_file_of_the_many_files_case_goes_through_the_redirect(self):
         with tempfile.TemporaryDirectory() as folder, mock.patch.object(lab, "ROOT", Path(folder)):
@@ -144,6 +159,46 @@ class PreparationTests(unittest.TestCase):
         with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "run_group") as run:
             fixtures.prepare_native(dict(self.case, base="s2r"), self.root / "fetchloom", ["dvc"])
         self.assertIn(["dvc", "remote", "add", "-d", "lab", "https://lab.flb/r/dvc/case"], [call.args[0] for call in run.call_args_list])
+
+    def test_each_version_of_the_next_version_case_is_prepared_as_its_tool_keeps_versions(self):
+        server = self.root / "www" / "case"
+        previous = [dict(item, url=item["url"].replace("/case/", "/case/previous/")) for item in self.case["files"]]
+        files = [dict(previous[0], url=previous[0]["url"].replace("previous", "next")),
+                 dict(previous[1], sha256="1" * 64, url=previous[1]["url"].replace("previous", "next"))]
+        for version, items in (("previous", previous), ("next", files)):
+            (server / version).mkdir()
+            for item in items:
+                (server / version / item["name"]).write_bytes(b"x")
+        case = dict(self.case, id="s12", base="s12", files=files, previous=previous)
+        with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "run_group") as run:
+            for tool in ("fetchloom", "dvc", "datalad"):
+                if tool == "dvc":
+                    # dvc add writes the record each version's commit keeps
+                    run.side_effect = lambda argv, cwd=None, **kwargs: (Path(cwd) / "data.dvc").write_text(
+                        "".join(sorted(path.read_text() for path in (Path(cwd) / "data").iterdir()))) if argv[:2] == ["dvc", "add"] else None
+                else:
+                    run.side_effect = None
+                (self.root / "fetchloom").write_bytes(b"build")
+                fixtures.prepare_native(dict(case), self.root / "fetchloom", [tool])
+        calls = [(call.args[0], call.kwargs.get("cwd")) for call in run.call_args_list]
+        prepared = self.root / "prepared/case"
+        # fetchloom locks the next version, and the version before in a folder of its own
+        self.assertEqual([cwd for argv, cwd in calls if argv[-1] == "lock"], [prepared / "fetchloom", prepared / "fetchloom/previous"])
+        self.assertIn("/case/previous/b.bin", (prepared / "fetchloom/previous/data.toml").read_text())
+        self.assertIn("/case/next/b.bin", (prepared / "fetchloom/data.toml").read_text())
+        # dvc pushes both versions and commits each one's record under a tag of its name
+        dvc = [argv for argv, cwd in calls if cwd == prepared / "dvc"]
+        self.assertEqual([argv for argv in dvc if argv[0] == "git" and argv[1] in ("commit", "tag")],
+                         [["git", "commit", "-q", "-m", "previous"], ["git", "tag", "previous"],
+                          ["git", "commit", "-q", "-m", "next"], ["git", "tag", "next"]])
+        self.assertEqual(dvc.count(["dvc", "push", "-r", "stage"]), 2)
+        # datalad replaces only the file that changed
+        datalad = [call for call in run.call_args_list if call.kwargs.get("cwd") == prepared / "datalad"]
+        added = [call.kwargs["input"] for call in datalad if call.args[0][:3] == ["git", "annex", "addurl"]]
+        self.assertEqual(added, ["https://lab.flb/case/previous/a.bin data/a.bin\nhttps://lab.flb/case/previous/b.bin data/b.bin\n",
+                                 "https://lab.flb/case/next/b.bin data/b.bin\n"])
+        self.assertEqual([call.args[0] for call in datalad if call.args[0][:2] in (["git", "tag"], ["git", "rm"])],
+                         [["git", "tag", "previous"], ["git", "rm", "-q", "data/b.bin"], ["git", "tag", "next"]])
 
     def test_dvc_and_datalad_must_download_what_they_were_prepared_with(self):
         dvc = [call.args[0] for call in self.prepare("dvc").call_args_list]

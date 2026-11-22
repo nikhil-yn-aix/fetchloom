@@ -80,7 +80,7 @@ class Tool:
 
     def prepare(self, scenario, workdir):
         """the work folder before the clock starts; a warm scenario first fetches its base scenario,
-        untimed."""
+        and the next version the version before it, untimed."""
         workdir.mkdir(parents=True, exist_ok=True)
         for folder in ("home", "cache", "project", "scratch"):
             (workdir / folder).mkdir(exist_ok=True)
@@ -90,8 +90,17 @@ class Tool:
             self.untimed(base, workdir)
             if scenario["id"] == "s5":
                 self.second_project(scenario, workdir)
+        elif scenario["id"] in fixtures.NEXT:
+            previous = dict(scenario, files=scenario["previous"], version="previous")
+            self.populate(previous, workdir)
+            self.untimed(previous, workdir)
+            self.next_version(scenario, workdir)
         else:
             self.populate(scenario, workdir)
+
+    def next_version(self, scenario, workdir):
+        """tells the tool of the dataset's next version, outside the clock, as a git pull of the
+        project would; nothing for a tool whose list of files is its command."""
 
     def untimed(self, scenario, workdir):
         with (workdir / "prepare.log").open("a") as log:
@@ -142,8 +151,13 @@ class Fetchloom(Tool):
         return subprocess.check_output([self.fetchloom, "--version"], env=lab.environment(), text=True).strip()
 
     def populate(self, scenario, workdir):
+        source = Path(scenario["prepared"]) / self.prepared_as / scenario.get("version", "")
         for name in ("data.toml", "data.lock"):
-            shutil.copyfile(Path(scenario["prepared"]) / self.prepared_as / name, workdir / "project" / name)
+            shutil.copyfile(source / name, workdir / "project" / name)
+
+    def next_version(self, scenario, workdir):
+        # the next version's data.toml and data.lock, as a git pull brings them
+        self.populate(scenario, workdir)
 
     def command(self, scenario, workdir):
         return [self.fetchloom, "-q", "--yes", "sync"]
@@ -217,7 +231,7 @@ class DurableCurl(Curl):
     places, so the cost of making bytes survive a power cut is on both sides; only in the cases that
     write data."""
     name = "curl+sync"
-    scenarios = Curl.scenarios - set(NOOP)
+    scenarios = Curl.scenarios - set(NOOP) - set(fixtures.NEXT)
 
     def version(self):
         return Curl("unused").version()
@@ -240,7 +254,8 @@ class Aria2c(Tool):
                                 for item in scenario["files"]))
         # -x splits only the large file, into BUDGET pieces
         argv = ["aria2c", "-j", str(BUDGET), "-x", str(BUDGET), "-i", urls, "-d", "data"]
-        if scenario["id"] in NOOP:
+        # its documented check of files already there: a file whose hash is wrong is fetched again
+        if scenario["id"] in NOOP or scenario["id"] in fixtures.NEXT:
             argv.append("--check-integrity=true")
         return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), shell(argv),
                                                *self.unpack(scenario)])
@@ -331,6 +346,16 @@ class Dvc(Tool):
         shutil.copytree(Path(scenario["prepared"]) / self.name, workdir / "project", dirs_exist_ok=True)
         subprocess.run(["dvc", "config", "cache.dir", str(self.cache(workdir))],
                        cwd=workdir / "project", env=self.env(workdir), check=True, capture_output=True)
+        if scenario.get("version"):
+            self.checkout(scenario["version"], workdir)
+
+    def next_version(self, scenario, workdir):
+        # a git pull brings the next version's data.dvc, and dvc pull fetches what it lacks
+        self.checkout("next", workdir)
+
+    def checkout(self, version, workdir):
+        subprocess.run(["git", "checkout", "-q", version], cwd=workdir / "project", env=self.env(workdir),
+                       check=True, capture_output=True)
 
     def command(self, scenario, workdir):
         return ["dvc", "pull", "-j", str(BUDGET)]
@@ -342,18 +367,24 @@ class Datalad(Tool):
 
     def populate(self, scenario, workdir):
         # like DVC's project copy, cloning the prepared dataset is setup, not retrieval
+        self.setup(["datalad", "clone", Path(scenario["prepared"]) / self.name, workdir / "project"], workdir, workdir)
+        if scenario.get("version"):
+            self.setup(["git", "reset", "-q", "--hard", scenario["version"]], workdir)
+
+    def next_version(self, scenario, workdir):
+        # datalad's own update merges what the dataset's sibling has, and get fetches what it lacks
+        self.setup(["datalad", "update", "--how", "merge"], workdir)
+
+    def setup(self, argv, workdir, cwd=None):
+        """runs an untimed step in the project, or in cwd, logging it beside the preparation."""
         with (workdir / "prepare.log").open("a") as log:
-            lab.run_group(["datalad", "clone", Path(scenario["prepared"]) / self.name, workdir / "project"],
-                          cwd=workdir, env=self.env(workdir), stdout=log, stderr=subprocess.STDOUT,
+            lab.run_group(argv, cwd=cwd or workdir / "project", env=self.env(workdir), stdout=log, stderr=subprocess.STDOUT,
                           timeout=lab.PREPARE_TIMEOUT)
 
     def second_project(self, scenario, workdir):
         # a second project is a clone of the first, made before the clock starts as DVC's copy is
         (workdir / "project").rename(workdir / "first-project")
-        with (workdir / "prepare.log").open("a") as log:
-            lab.run_group(["datalad", "clone", workdir / "first-project", workdir / "project"],
-                          cwd=workdir, env=self.env(workdir), stdout=log, stderr=subprocess.STDOUT,
-                          timeout=lab.PREPARE_TIMEOUT)
+        self.setup(["datalad", "clone", workdir / "first-project", workdir / "project"], workdir, workdir)
 
     def command(self, scenario, workdir):
         lines = [shell(["cd", workdir / "project"]),

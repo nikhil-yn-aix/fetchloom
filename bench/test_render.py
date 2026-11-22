@@ -534,6 +534,15 @@ class PageTests(Quiet):
         self.assertIn("\neach tool checks something else when nothing changed: fetchloom trusts each file's size and modification time", page)
         self.assertIn("and aria2c and pooch hash every file again.", page)
 
+    def test_the_next_version_says_how_each_tool_updates_and_what_it_fetched_again(self):
+        page = self.render([lab_row(scenario="s12", profile="home", count=1000, file_size=102400, body_bytes_ratio=.1),
+                            lab_row(scenario="s12", profile="home", count=1000, file_size=102400, tool="curl", body_bytes_ratio=1.0)],
+                           dict(kind="lab", quick=True))
+        self.assertIn("## s12: the next version, home broadband (ext4)", page)
+        self.assertIn("1,000 files of 100 KiB each already in place, brought to the dataset's next version, in which one file in ten changed", page)
+        self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | 0.100x |\n| curl | 1.000x |", page)
+        self.assertIn("curl, which has no way to tell what changed, downloads every file again", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)
