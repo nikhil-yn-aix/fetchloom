@@ -665,6 +665,28 @@ fn citations_take_a_dataset_pinned_by_its_md5_alone() -> Result {
     Ok(())
 }
 
+/// `export -o` refuses a name this machine's disks cannot store before writing anything, as `get
+/// -o` does: windows would drop a trailing dot and write data.lock itself.
+#[test]
+fn export_refuses_an_unstorable_name() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (routes, _) = server()?;
+    added(&sandbox, &routes, &["iris.csv"])?;
+    let long = "a".repeat(256);
+    let output = sandbox.run(&["--json", "export", "-o", &long, "--force"])?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(2), "{document}");
+    let error = &document["errors"][0];
+    assert_eq!(error["kind"], "usage", "{document}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("longer than disks allow")),
+        "{document}"
+    );
+    Ok(())
+}
+
 /// `-o` never writes over the project's own data.toml or data.lock, or into its data.lock.d,
 /// `--force` or not: the refusal comes before any other check, offers no `--force`, and the pins
 /// stay as they were.

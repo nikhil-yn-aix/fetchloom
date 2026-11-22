@@ -106,6 +106,7 @@ pub(super) fn run(context: &Context, args: &args::Export) -> Result<Report, Erro
     }
     if let Some(path) = &args.output {
         super::project::refuse_own_file(path)?;
+        super::project::refuse_unstorable(path)?;
     }
     let project = super::project::find(context)?;
     let (_, manifest) = project.manifest()?;

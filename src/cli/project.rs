@@ -1980,11 +1980,28 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
         return Ok(());
     };
     let folder = resolved(lexical);
+    // windows also answers a file by its 8.3 short name, as DATA~1.LOC for data.lock, and drops
+    // a name's trailing dots and spaces, so a file that exists is judged by its long name too
+    let long = long_name(&target, &folder);
+    for name in std::iter::once(name).chain(long.as_deref()) {
+        refuse_named(path, &target, (&folder, lexical), name)?;
+    }
+    Ok(())
+}
+
+/// [`refuse_own_file`] for the file `name` in `folder`, the folder `-o` names resolved, or in
+/// `lexical`, that folder as typed.
+fn refuse_named(
+    path: &Path,
+    target: &Path,
+    (folder, lexical): (&Path, &Path),
+    name: &std::ffi::OsStr,
+) -> Result<(), Error> {
     let is = |name: &std::ffi::OsStr, own: &str| {
         name.to_str()
             .is_some_and(|name| name::fold(name) == name::fold(own))
     };
-    refuse_pins(path, &folder, name, &is)?;
+    refuse_pins(path, folder, name, &is)?;
     let inside = folder
         .join(name)
         .components()
@@ -2011,13 +2028,13 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
         )
         .help(format!("give -o a file outside {part}")));
     }
-    let made = [folder.as_path(), lexical]
+    let made = [folder, lexical]
         .into_iter()
         .find_map(|folder| made_by_sync(folder, name));
     match made {
         None => Ok(()),
         Some(Made::Placed(dataset, recorded)) => {
-            let placed = if typed_as(&target, &recorded) {
+            let placed = if typed_as(target, &recorded) {
                 String::new()
             } else {
                 format!(" which some disks take for {},", name::spelled(&recorded))
@@ -2040,6 +2057,35 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
         )
         .help("give -o another file name")),
     }
+}
+
+/// the long name windows keeps for the file `target` names another way, by its 8.3 short name or
+/// with trailing dots or spaces, as data.lock for DATA~1.LOC: none elsewhere, for a file that does
+/// not exist, through a link, or where the name typed is that name.
+fn long_name(target: &Path, folder: &Path) -> Option<std::ffi::OsString> {
+    if !cfg!(windows) {
+        return None;
+    }
+    let long = std::fs::canonicalize(target).ok()?;
+    let name = long.file_name()?;
+    (long.parent() == Some(folder) && Some(name) != target.file_name()).then(|| name.to_owned())
+}
+
+/// refuses `path`, the file `-o` names, when this machine's disks cannot store its name, as
+/// windows cannot keep a trailing dot: the file written would be another one.
+pub(super) fn refuse_unstorable(path: &Path) -> Result<(), Error> {
+    let Some(reason) = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(name::unstorable)
+    else {
+        return Ok(());
+    };
+    Err(Error::new(
+        Kind::Usage,
+        format!("-o cannot write {}: {reason}", path.display()),
+    )
+    .help("choose another name for -o"))
 }
 
 /// what a sync made in a project's data folder, as the project's state records it.

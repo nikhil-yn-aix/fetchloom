@@ -3944,6 +3944,85 @@ fn get_never_writes_over_a_projects_own_files() -> Result {
     Ok(())
 }
 
+/// windows answers a file by its 8.3 short name and drops a name's trailing dots and spaces, so
+/// `get -o` and `export -o` refuse those spellings of a project's pins and placed files too.
+#[cfg(windows)]
+#[test]
+fn o_never_writes_a_projects_files_by_a_short_name_or_a_trailing_dot() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        (
+            "/measurements-long-name.csv".to_owned(),
+            file(b"a,b\n1,2\n", "\"m1\""),
+        ),
+        ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let source = format!("{}/measurements-long-name.csv", server.url);
+    let added = sandbox.run(&["add", &source, "--as", "m"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    let guarded = [
+        "data.lock",
+        "data.toml",
+        "data/m/measurements-long-name.csv",
+    ];
+    let kept = guarded.map(|path| std::fs::read(work.join(path)));
+    let mut spellings = vec![
+        "data.lock.".to_owned(),
+        "data.lock ".to_owned(),
+        "data.toml.".to_owned(),
+        "data/m/measurements-long-name.csv.".to_owned(),
+    ];
+    for path in guarded {
+        spellings.extend(short_name(&work, path)?);
+    }
+    let link = format!("{}/hello.txt", server.url);
+    let asked = server.requests().len();
+    for spelled in &spellings {
+        for args in [
+            vec!["--json", "get", &link, "-o", spelled, "--force"],
+            vec!["--json", "export", "-o", spelled, "--force"],
+        ] {
+            let output = sandbox.command(&args).output()?;
+            let document = json(&output)?;
+            assert_eq!(output.status.code(), Some(2), "{args:?}: {document}");
+            assert_eq!(
+                document["errors"][0]["kind"], "usage",
+                "{args:?}: {document}"
+            );
+        }
+    }
+    assert_eq!(server.requests().len(), asked, "nothing was asked for");
+    for (path, before) in guarded.iter().zip(kept) {
+        assert_eq!(std::fs::read(work.join(path))?, before?, "{path}");
+    }
+    Ok(())
+}
+
+/// `relative`, a file in `work`, with its last name as its 8.3 short name, as cmd's `%~snx` gives
+/// it, or none where the volume keeps no short names.
+#[cfg(windows)]
+fn short_name(work: &std::path::Path, relative: &str) -> Result<Option<String>> {
+    use std::os::windows::process::CommandExt as _;
+    let path = work.join(relative);
+    let output = std::process::Command::new("cmd")
+        .raw_arg(format!(
+            "/d /c for %I in (\"{}\") do @echo %~snxI",
+            path.display()
+        ))
+        .output()?;
+    let short = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    let long = relative.rsplit('/').next().unwrap_or(relative);
+    if short.is_empty() || short.eq_ignore_ascii_case(long) {
+        return Ok(None);
+    }
+    Ok(Some(match relative.rsplit_once('/') {
+        Some((folder, _)) => format!("{folder}/{short}"),
+        None => short,
+    }))
+}
+
 /// `get -o` and `export -o` never write into a `.git` or `.fetchloom` folder, nor over a file a
 /// sync placed or the .gitignore it keeps in a dataset's folder, `--force` or not, and never offer
 /// `--force` for them: git would break, or keep the dataset's files, and no command would notice.

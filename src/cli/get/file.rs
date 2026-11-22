@@ -74,16 +74,7 @@ pub(super) fn usage(path: &Path, links: &[String], listed: bool) -> Result<(), E
         .help(format!("name the file inside it, as in `-o {named}`")));
     }
     super::super::project::refuse_own_file(path)?;
-    if let Some(reason) = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(crate::name::unstorable)
-    {
-        return Err(
-            Error::new(Kind::Usage, format!("-o cannot write {shown}: {reason}"))
-                .help("choose another name for -o"),
-        );
-    }
+    super::super::project::refuse_unstorable(path)?;
     if let Some((blocked, what)) = blocked(path) {
         let instead = blocked
             .parent()
