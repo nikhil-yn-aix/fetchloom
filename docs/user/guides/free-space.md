@@ -6,9 +6,9 @@
 
 ```text
 $ fetchloom remove penguins
+    Removed penguins from data.toml and data.lock
 warning: data/penguins/penguins.csv is no longer needed, but it has changed, so it stays
   help: delete it if you do not need it
-    Removed penguins
 ```
 
 the cache keeps the bytes. `fetchloom cache gc` removes what no project needs once it is a day old, and `--now` removes it at once, here the CSV and the excluded member:
