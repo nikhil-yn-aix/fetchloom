@@ -71,6 +71,8 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
     let mut column = 0;
     // the last space a line may break at, and the column it stands at
     let mut last: Option<(usize, usize)> = None;
+    // where the line being laid out starts in `shown`
+    let mut line = 0;
     for (at, &(_, c)) in shown.iter().enumerate() {
         if breakable[at] {
             last = Some((at, column));
@@ -81,10 +83,22 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
             continue;
         }
         if ticked[at] {
-            if let Some((space, before)) = last.take() {
-                let start = if after[space] > room { 0 } else { indent };
-                breaks.push((space, start));
-                column = start + column - before - 1;
+            // a command moves whole to the next line, its punctuation with it, under the text, or
+            // as far left as it needs to fit whole; one wider than a line runs on there, and the
+            // terminal wraps it, since a shell runs the first line of a split command alone
+            match last.take() {
+                Some((space, before)) => {
+                    let unit = after[space];
+                    let start = if unit <= room || unit >= width {
+                        indent
+                    } else {
+                        width - unit
+                    };
+                    breaks.push((space, start));
+                    column = start + column - before - 1;
+                    line = space + 1;
+                }
+                None => column -= width,
             }
             continue;
         }
@@ -95,12 +109,24 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
         {
             breaks.push((space, indent));
             column = indent + column - before - 1;
+            line = space + 1;
             if column <= width {
                 continue;
             }
         }
-        breaks.push((at, indent));
-        column = indent + wide;
+        // a word too wide for a line, as a long path or link, is cut at the edge, after the last
+        // `/` before it where it has one, so a name in it stays whole
+        let cut = (line + 1..at)
+            .rev()
+            .find(|&before| shown[before - 1].1 == '/' && shown[before].1 != '/')
+            .unwrap_or(at);
+        breaks.push((cut, indent));
+        column = indent
+            + shown[cut..=at]
+                .iter()
+                .map(|&(_, c)| console::measure_text_width(c.encode_utf8(&mut [0; 4])))
+                .sum::<usize>();
+        line = cut;
     }
     breaks
 }
@@ -393,8 +419,9 @@ mod tests {
     use super::fit;
 
     /// a command in backticks too wide to follow its label on the first line goes on the next,
-    /// whole, rather than past the edge or split, since a shell would run a split command's first
-    /// line alone.
+    /// whole, under the text or as far left as it needs to fit, never at the first column, and
+    /// never split, since a shell would run a split command's first line alone. its punctuation
+    /// stays with it, so no line starts with a comma.
     #[test]
     fn a_command_too_wide_beside_its_label_goes_on_the_next_line() {
         assert_eq!(
@@ -402,14 +429,27 @@ mod tests {
                 "  next: `fetchloom add kaggle:uciml/iris` puts the first match in a project",
                 40
             ),
-            "  next:\n`fetchloom add kaggle:uciml/iris` puts\n        the first match in a project"
+            "  next:\n       `fetchloom add kaggle:uciml/iris`\n        puts the first match in a\n        project"
         );
         assert_eq!(
             fit(
                 "  help: `fetchloom sync --force data/iris/iris.csv` discards your edit",
                 40
             ),
-            "  help:\n`fetchloom sync --force data/iris/iris.csv`\n        discards your edit"
+            "  help:\n        `fetchloom sync --force data/iris/iris.csv` discards your edit",
+            "wider than the line, the command runs on, and the terminal wraps it"
+        );
+        let mirror = "/datadisk/fl-perf/qa-ux/p8-gate/homes/newcomer/mirror";
+        assert_eq!(
+            fit(
+                &format!(
+                    "  next: teammates run `fetchloom settings set mirrors {mirror}`, plus any mirrors they already use"
+                ),
+                80
+            ),
+            format!(
+                "  next: teammates run\n        `fetchloom settings set mirrors {mirror}`, plus any mirrors they already use"
+            )
         );
     }
 
@@ -478,10 +518,10 @@ mod tests {
         assert_eq!(
             fit(&format!("  help: open {link} in a browser"), 40),
             format!(
-                "  help: open {}\n        {}\n        {} in a\n        browser",
-                &link[..27],
-                &link[27..59],
-                &link[59..]
+                "  help: open {}\n        {}\n        {} in\n        a browser",
+                &link[..20],
+                &link[20..52],
+                &link[52..]
             )
         );
         assert_eq!(fit("short\n  also short", 60), "short\n  also short");
@@ -498,8 +538,8 @@ mod tests {
             fit(&format!("      Would fetch {path} · 45.1 MiB"), 80),
             format!(
                 "      Would fetch {}\n            {} · 45.1 MiB",
-                &path[..62],
-                &path[62..]
+                &path[..17],
+                &path[17..]
             )
         );
         let command =
@@ -512,7 +552,7 @@ mod tests {
                 80
             ),
             format!(
-                "  help: if you made it to keep data on another disk, list that folder with\n{command}\n        first"
+                "  help: if you made it to keep data on another disk, list that folder with\n  {command}\n        first"
             )
         );
         let link = "http://127.0.0.1:18871/slow/6000000/3/clean/train-00001-of-00004-5852b56a2bd28fd9.parquet";
@@ -520,8 +560,8 @@ mod tests {
             fit(&format!("  shard · {link} · 1 file · 5.7 MiB"), 80),
             format!(
                 "  shard · {}\n  {} · 1 file · 5.7 MiB",
-                &link[..70],
-                &link[70..]
+                &link[..44],
+                &link[44..]
             )
         );
         let fits = "bart/sub-01/func/sub-01_task-balloonanalogrisktask_run-01_events.tsv";
