@@ -199,6 +199,8 @@ GATED = ("lan", "home", "local")
 # the runs: comparisons sharing a 5% error, bonferroni-adjusted
 HEADLINE = fixtures.HEADLINE
 FAMILY = 1 - .05 / len(HEADLINE)
+# two tools whose pilot times are this close are both frozen as a case's rivals, declared before any data
+TIE = 1.05
 # a row that only describes needs no 10 pairs, only two for an interval at all
 DESCRIBED = 2
 SEED = 1729
@@ -239,16 +241,18 @@ def standing(base, measured, comparison, minimum=ab.MIN_PAIRS):
     return None
 
 
-def judge(case, runs, comparator=None):
-    """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
-    FAMILY in a headline case and 95% elsewhere; the control arm's 95% interval; and the one verdict, a
-    headline case's against the comparator frozen before its runs, or the reason there is none. every
-    other comparison only describes, as a case outside the headline set does against the fastest
-    other tool that passed every run. a reason that holds for the whole case, such as a noisy
-    machine, a campaign cut short of the rounds it planned or no frozen comparator, withholds it."""
+def judge(case, runs, comparators=None, level=FAMILY):
+    """a case's comparisons and verdicts: each other tool's time over fetchloom's, rounds paired, at
+    `level` in a headline case and 95% elsewhere; the control arm's 95% interval; and a headline case's
+    verdict against each comparator frozen before its runs, or the reason there is none. every other
+    comparison only describes, as a case outside the headline set does against the fastest other tool
+    that passed every run. a reason that holds for the whole case, such as a noisy machine, a campaign
+    cut short of the rounds it planned or no frozen comparator, withholds every verdict."""
+    if isinstance(comparators, str):
+        comparators = [comparators]
     key = (case["filesystem"], case["profile"], case["scenario"])
     headline = key in HEADLINE
-    level = FAMILY if headline else .95
+    level = level if headline else .95
     planned = case.get("planned")
     plan = set(range(1, planned + 1)) if isinstance(planned, int) and planned > 0 else None
     rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
@@ -283,31 +287,34 @@ def judge(case, runs, comparator=None):
                                                          and control["interval"][1] <= CONTROL_GATE[1]):
         withheld = (f"the control arm's 95% interval, {bounds(control)}, is not inside {CONTROL_GATE[0]} to {CONTROL_GATE[1]}, "
                     "so the machine was too noisy")
-    elif headline and comparator is None:
+    elif headline and not comparators:
         withheld = "no comparator was frozen for it before its runs"
     else:
         withheld = None
     summaries = case["summaries"]
-    rivals = [tool for tool, comparison in comparisons.items()
-              if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
-    # a headline case's rival is never chosen from the data that judges it
-    rival = comparator if headline else min(rivals, key=lambda tool: (summaries[tool]["median"], tool)) if rivals else None
-    named = f"{rival}, the frozen comparator," if headline else rival
-    if withheld:
-        reason = withheld
-    elif rival is None:
-        reason = "no other tool passed every run"
-    elif rival not in comparisons:
-        reason = f"{named} did not run"
-    elif comparisons[rival]["unmet"]:
-        reason = f"{named} {comparisons[rival]['unmet']}"
-    else:
-        reason = None
-    # only the frozen comparator's verdict is one of the headline comparisons the 5% family error covers
+    passing = [tool for tool, comparison in comparisons.items()
+               if not tool.startswith(ab.BASE + "+") and not comparison["failed"] and summaries[tool]["median"] is not None]
+    # a headline case's rivals are never chosen from the data that judges them
+    chosen = list(comparators or []) if headline else [min(passing, key=lambda tool: (summaries[tool]["median"], tool))] if passing else []
+    rivals = {}
+    for rival in chosen:
+        named = (f"{rival}, the frozen comparator," if len(chosen) == 1 else f"{rival}, a frozen comparator,") if headline else rival
+        if withheld:
+            rivals[rival] = withheld
+        elif rival not in comparisons:
+            rivals[rival] = f"{named} did not run"
+        elif comparisons[rival]["unmet"]:
+            rivals[rival] = f"{named} {comparisons[rival]['unmet']}"
+        else:
+            rivals[rival] = None
+    # only a frozen comparator's verdict is one of the headline comparisons the 5% family error covers
     for tool, comparison in comparisons.items():
-        comparison["word"] = word(comparison["interval"], tool) if headline and reason is None and tool == rival else None
+        comparison["word"] = word(comparison["interval"], tool) if headline and tool in rivals and rivals[tool] is None else None
+    first = chosen[0] if chosen else None
+    reason = withheld or (rivals[first] if first else "no other tool passed every run")
     return dict(headline=headline, level=level, comparisons=comparisons, control=control, reason=reason, withheld=withheld,
-                rival=rival if reason is None else None, comparator=comparator if headline else None)
+                rivals=rivals, rival=first if reason is None else None, comparator=first if headline else None,
+                comparators=chosen if headline else [])
 
 
 def planned(metas):
@@ -318,24 +325,38 @@ def planned(metas):
 
 
 def frozen(metas):
-    """the comparator each headline case was frozen with before its runs, from the meta.json of the
+    """the comparators each headline case was frozen with before its runs, from the meta.json of the
     lab campaign that measured it, so one a later chunk recorded never judges it; ValueError when
     two campaigns froze different ones for a case."""
     chosen, recorded = {}, {}
     for meta in metas:
         cases = meta.get("cases")
         own = {f"{case['filesystem']}/{case['profile']}/{case['id']}" for case in cases or []}
-        for case, tool in (meta.get("comparators") or {}).items():
-            if recorded.setdefault(case, tool) != tool:
+        for case, tools in (meta.get("comparators") or {}).items():
+            tools = [tools] if isinstance(tools, str) else list(tools)
+            if recorded.setdefault(case, tools) != tools:
                 raise ValueError(f"lab campaigns froze different comparators for {case}; render them separately")
             if not cases or case in own:
-                chosen[case] = tool
+                chosen[case] = tools
     return chosen
 
 
+def headline_comparisons(comparators):
+    """how many comparisons the headline family holds: one a headline case, and one more for each
+    comparator past the first that a case froze."""
+    return len(HEADLINE) + sum(len(tools) - 1 for case, tools in comparators.items() if tuple(case.split("/")) in HEADLINE and tools)
+
+
+def family(comparators):
+    """the level of each headline interval: a 5% error, bonferroni-adjusted for every headline
+    comparison."""
+    return 1 - .05 / headline_comparisons(comparators)
+
+
 def pick(rows):
-    """the comparator to freeze for each headline case a pilot measured: the fastest other tool that
-    passed every run within the budget, the control arm and fetchloom's variants never among them."""
+    """the comparators to freeze for each headline case a pilot measured: the fastest other tool that
+    passed every run within the budget, and the next fastest too when its time is within TIE of it,
+    the control arm and fetchloom's variants never among them."""
     runs = defaultdict(lambda: defaultdict(list))
     for row in rows:
         if row.get("kind") == "lab" and not row.get("warmup") and "tool" in row:
@@ -344,9 +365,11 @@ def pick(rows):
     for key in HEADLINE:
         measured = {tool: summarize(values) for tool, values in runs.get(key, {}).items()
                     if not tool.startswith(ab.BASE) and not any(row.get("over_budget") for row in values)}
-        passing = [tool for tool, entry in measured.items() if not entry["failures"] and entry["median"] is not None]
+        passing = sorted((tool for tool, entry in measured.items() if not entry["failures"] and entry["median"] is not None),
+                         key=lambda tool: (measured[tool]["median"], tool))
         if passing:
-            chosen["/".join(key)] = min(passing, key=lambda tool: (measured[tool]["median"], tool))
+            close = len(passing) > 1 and measured[passing[1]]["median"] <= TIE * measured[passing[0]]["median"]
+            chosen["/".join(key)] = passing[:2 if close else 1]
     return chosen
 
 
@@ -533,6 +556,7 @@ def group(rows, metas):
     campaigns = [meta for meta in metas if meta.get("kind") == "lab"]
     check_chunks(campaigns)
     comparators = frozen(campaigns)
+    level = family(comparators)
     plans = planned(campaigns)
     shaping = network_profiles(metas)
     cases = []
@@ -541,7 +565,7 @@ def group(rows, metas):
         case = dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
                     link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]),
                     planned=plans.get(f"{fs}/{profile}/{scenario}"), runs=lab[scenario, profile, fs])
-        cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs], comparators.get(f"{fs}/{profile}/{scenario}"))))
+        cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs], comparators.get(f"{fs}/{profile}/{scenario}"), level)))
     # a dropped link's cost is set against the same tool's s1, the same file on the same link
     for case in cases:
         if case["scenario"] == "s10" and conditions.get(("s1", case["profile"], case["filesystem"]), ())[1:] == (
@@ -630,31 +654,36 @@ NOOP_CHECKS = ("each tool checks something else when nothing changed: fetchloom 
 REFETCH = "server body bytes / dataset size"
 # the clock of a library timed around its calls, as tools.py names it
 WARM_CALL = "call inside a warm interpreter"
-METHOD = ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and "
-          "verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with "
-          "the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it "
-          "had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for "
-          "at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run "
-          "past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run "
-          "past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU "
-          "is user plus system time of every process a command started, from the cgroup each run has to itself, so helpers "
-          "and workers count; for pooch it is its calls' own. peak memory is the most anonymous memory those processes held "
-          "at once, read from the cgroup every 20 ms, and largest process is the biggest single process's peak, as GNU time "
-          "reports it. written is what a run wrote to the measured disk, from the cgroup's io.stat after a flush, and disk is "
-          "the free-space change, so a link or reflink counts once. each is the median of a tool's passed runs. bars show "
-          "the median; the thin line on each spans the fastest and slowest run. every tool runs 5 rounds, and each other tool's "
-          "time is set over fetchloom's round by round: the table gives the median of those ratios with a paired percentile "
-          "bootstrap interval, 20,000 resamples from seed 1729. "
-          f"in the {len(HEADLINE)} headline cases, s1 and s2r at home and on the poor link, s5 on the local network, and s7, "
-          "s10 and s12 at home, fetchloom, its control and the comparator frozen from the pilot run 5 rounds more, so each "
-          f"verdict rests on 10 pairs, and every interval is {percent(FAMILY)}, since the {len(HEADLINE)} comparisons share a "
-          "5% error. elsewhere intervals are 95%. only the frozen comparator's row in a headline case gets a verdict: fetchloom "
-          "faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even "
-          "when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. every other row describes and claims "
-          "nothing. the control arm, fetchloom run again, is never a rival: on every link without loss its 95% interval must "
-          "sit inside 0.97 to 1.03, or the machine was too noisy and the case has no verdict; on the poor link its width is the "
-          "network's own. a case where fetchloom failed a run has no verdict. `hero-*` cards repeat the headline verdicts that "
-          "are not inconclusive, for the README.\n")
+def method(comparators):
+    """how the page measures and judges, with the headline family the frozen comparators make."""
+    count = headline_comparisons(comparators)
+    return ("a command-line tool's clock runs from its start to its exit, including interpreter startup, resolution and "
+            "verification. pooch, a library, is timed around its calls inside an interpreter that has already imported it, with "
+            "the import beside it. warmups are excluded. the server's log gives each run's connections and the most requests it "
+            "had in flight to one host, HTTP/2 streams included: a request counts from its arrival until it was logged, and for "
+            "at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run "
+            "past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run "
+            "past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU "
+            "is user plus system time of every process a command started, from the cgroup each run has to itself, so helpers "
+            "and workers count; for pooch it is its calls' own. peak memory is the most anonymous memory those processes held "
+            "at once, read from the cgroup every 20 ms, and largest process is the biggest single process's peak, as GNU time "
+            "reports it. written is what a run wrote to the measured disk, from the cgroup's io.stat after a flush, and disk is "
+            "the free-space change, so a link or reflink counts once. each is the median of a tool's passed runs. bars show "
+            "the median; the thin line on each spans the fastest and slowest run. every tool runs 5 rounds, and each other tool's "
+            "time is set over fetchloom's round by round: the table gives the median of those ratios with a paired percentile "
+            "bootstrap interval, 20,000 resamples from seed 1729. "
+            f"in the {len(HEADLINE)} headline cases, s1 and s2r at home and on the poor link, s5 on the local network, and s7, "
+            "s10 and s12 at home, fetchloom, its control and each comparator frozen from the pilot run 5 rounds more, so each "
+            "verdict rests on 10 pairs. a case freezes the pilot's fastest other tool that passed every run within the budget, "
+            "and the next fastest too when its time was within 5% of it. "
+            f"every headline interval is {percent(family(comparators))}, since the {count} comparisons share a 5% error; "
+            "elsewhere intervals are 95%. only a frozen comparator's row in a headline case gets a verdict: fetchloom "
+            "faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even "
+            "when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. every other row describes and claims "
+            "nothing. the control arm, fetchloom run again, is never a rival: on every link without loss its 95% interval must "
+            "sit inside 0.97 to 1.03, or the machine was too noisy and the case has no verdict; on the poor link its width is the "
+            "network's own. a case where fetchloom failed a run has no verdict. `hero-*` cards repeat the headline verdicts that "
+            "are not inconclusive, for the README.\n")
 
 
 def page(rows, metas, cases, services):
@@ -665,7 +694,7 @@ def page(rows, metas, cases, services):
         lines.append("these are smoke-test sizes and rounds, not full benchmark results.\n")
     lines += machines(metas)
     lines += networks(metas)
-    lines.append(METHOD)
+    lines.append(method(frozen([meta for meta in metas if meta.get("kind") == "lab"])))
     warmup_failures = sum(bool(row.get("warmup")) and row.get("status") == "failed" for row in rows)
     if warmup_failures:
         lines.append(f"{warmup_failures} warmup commands failed; their records remain in runs.jsonl.\n")
@@ -857,7 +886,7 @@ def over(tool, judged):
 
 def said(tool, judged):
     """what a tool's interval says against fetchloom, in the table's verdict column: the verdict, or
-    why there is none, for a headline case's frozen comparator alone; withheld when the whole case
+    why there is none, for a headline case's frozen comparators alone; withheld when the whole case
     has no verdict, as the line under the table says why; descriptive for every other tool."""
     comparison = judged["comparisons"].get(tool)
     if comparison is None or comparison["failed"]:
@@ -868,26 +897,33 @@ def said(tool, judged):
         return "fetchloom variant, never a rival"
     if judged["withheld"]:
         return "withheld"
-    if judged["headline"] and tool == judged["comparator"]:
+    if judged["headline"] and tool in judged["comparators"]:
         return comparison["word"] or comparison["unmet"]
     return "descriptive"
 
 
 def verdict_lines(case):
-    """the case's verdict, the seconds before the ratio, or why it has none, and what the control arm saw;
-    a case outside the headline set describes its fastest other tool instead, with no verdict."""
+    """the case's verdicts, the seconds before the ratio, one for each comparator frozen for a headline
+    case, or why there is none, and what the control arm saw; a case outside the headline set
+    describes its fastest other tool instead, with no verdict."""
     judged = case["judged"]
-    rival = judged["rival"]
-    if rival is None:
+    rivals = judged["rivals"]
+    if judged["withheld"] or not rivals:
         lines = [f"\nno verdict: {judged['reason']}."]
     else:
-        comparison = judged["comparisons"][rival]
-        chosen = "the comparator frozen before these runs" if judged["headline"] else "the fastest other tool that passed every run"
-        compared = (f"fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against {seconds(case['summaries'][rival]['median'])} "
-                    f"for {rival}, {chosen}; {rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, "
-                    f"interval {bounds(comparison)}")
-        lines = [f"\nverdict (headline, {percent(judged['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
-                 else f"\ndescriptive, {percent(judged['level'])} interval, no verdict: {compared}."]
+        lines = []
+        for rival, reason in rivals.items():
+            if reason is not None:
+                lines.append(f"\nno verdict: {reason}.")
+                continue
+            comparison = judged["comparisons"][rival]
+            chosen = ("the fastest other tool that passed every run" if not judged["headline"]
+                      else "the comparator frozen before these runs" if len(rivals) == 1 else "a comparator frozen before these runs")
+            compared = (f"fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against {seconds(case['summaries'][rival]['median'])} "
+                        f"for {rival}, {chosen}; {rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, "
+                        f"interval {bounds(comparison)}")
+            lines.append(f"\nverdict (headline, {percent(judged['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
+                         else f"\ndescriptive, {percent(judged['level'])} interval, no verdict: {compared}.")
     control = judged["control"]
     if control is not None and control["interval"] is not None:
         noise = "" if case["profile"] in GATED else ", on this lossy link the network's own randomness"

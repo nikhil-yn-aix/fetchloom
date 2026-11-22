@@ -591,12 +591,12 @@ class PageTests(Quiet):
 
 
 class VerdictTests(unittest.TestCase):
-    def judged(self, rows, scenario="s1", profile="home", filesystem="ext4", comparator=None, planned=10):
+    def judged(self, rows, scenario="s1", profile="home", filesystem="ext4", comparator=None, planned=10, level=render.FAMILY):
         runs = {}
         for row in rows:
             runs.setdefault(row["tool"], []).append(row)
         case = dict(scenario=scenario, profile=profile, filesystem=filesystem, summaries=render.summaries(runs), planned=planned)
-        return render.judge(case, runs, comparator)
+        return render.judge(case, runs, comparator, level)
 
     def test_a_headline_case_sets_fetchloom_against_the_comparator_frozen_before_its_runs(self):
         rows = headline_rows(curl=2, aria2c=1.5)
@@ -697,11 +697,16 @@ class VerdictTests(unittest.TestCase):
         rows += headline_rows(rounds=1, scenario="s3", profile="lan", datalad=.5)
         # the control arm, faster than all, is fetchloom and never a comparator
         rows += [lab_row(profile="home", quick=False, tool="fetchloom+control", wall_seconds=.1, round=1)]
-        self.assertEqual(render.pick([dict(row, warmup=False) for row in rows]), {"ext4/home/s1": "aria2c"})
+        self.assertEqual(render.pick([dict(row, warmup=False) for row in rows]), {"ext4/home/s1": ["aria2c"]})
+
+    def test_a_pilot_freezes_two_comparators_whose_times_are_within_five_percent(self):
+        for curl, frozen in ((1.55, ["aria2c", "curl"]), (1.575, ["aria2c", "curl"]), (1.6, ["aria2c"])):
+            rows = headline_rows(rounds=1, curl=curl, aria2c=1.5, pooch=1.7)
+            self.assertEqual(render.pick([dict(row, warmup=False) for row in rows]), {"ext4/home/s1": frozen}, curl)
 
     def test_campaigns_that_froze_different_comparators_cannot_be_read_as_one(self):
-        self.assertEqual(render.frozen([dict(comparators={"ext4/home/s1": "curl"}), dict(comparators={"ext4/home/s1": "curl"}), {}]),
-                         {"ext4/home/s1": "curl"})
+        self.assertEqual(render.frozen([dict(comparators={"ext4/home/s1": "curl"}), dict(comparators={"ext4/home/s1": ["curl"]}), {}]),
+                         {"ext4/home/s1": ["curl"]})
         with self.assertRaisesRegex(ValueError, "froze different comparators for ext4/home/s1"):
             render.frozen([dict(comparators={"ext4/home/s1": "curl"}), dict(comparators={"ext4/home/s1": "aria2c"})])
         # a comparator counts only from the campaign that measured its case, never from a later chunk's record
@@ -709,7 +714,31 @@ class VerdictTests(unittest.TestCase):
             return [dict(filesystem="ext4", profile="home", id=scenario)]
         self.assertEqual(render.frozen([dict(cases=measured("s1")),
                                         dict(cases=measured("s2r"), comparators={"ext4/home/s1": "curl", "ext4/home/s2r": "aria2c"})]),
-                         {"ext4/home/s2r": "aria2c"})
+                         {"ext4/home/s2r": ["aria2c"]})
+
+    def test_two_frozen_comparators_each_get_a_verdict_and_widen_the_headline_family(self):
+        rows = headline_rows(curl=2, aria2c=1.5, pooch=.5)
+        judged = self.judged(rows, comparator=["aria2c", "curl"], level=render.family({"ext4/home/s1": ["aria2c", "curl"]}))
+        self.assertEqual({tool: comparison["word"] for tool, comparison in judged["comparisons"].items()},
+                         {"fetchloom+control": None, "curl": "fetchloom faster", "aria2c": "fetchloom faster", "pooch": None})
+        self.assertEqual([render.said(tool, judged) for tool in ("aria2c", "curl", "pooch")],
+                         ["fetchloom faster", "fetchloom faster", "descriptive"])
+        # nine comparisons share the 5% error: the eight cases, and this case's second comparator
+        self.assertAlmostEqual(judged["level"], 1 - .05 / 9)
+        self.assertEqual(render.percent(judged["level"]), "99.444%")
+        lines = render.verdict_lines(dict(scenario="s1", profile="home", summaries=render.summaries(
+            {tool: [row for row in rows if row["tool"] == tool] for tool in ("fetchloom", "aria2c", "curl")}), judged=judged))
+        self.assertEqual([line.split(":")[1].strip() for line in lines[:2]],
+                         ["fetchloom 1.00 s against 1.50 s for aria2c, a comparator frozen before these runs; aria2c's time over "
+                          "fetchloom's is 1.50, interval 1.50 to 1.50", "fetchloom 1.00 s against 2.00 s for curl, a comparator frozen "
+                          "before these runs; curl's time over fetchloom's is 2.00, interval 2.00 to 2.00"])
+        # one that failed has no verdict, and the other keeps its own
+        failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("curl", 4) else row for row in rows]
+        judged = self.judged(failed, comparator=["aria2c", "curl"])
+        self.assertEqual((judged["rivals"], judged["comparisons"]["aria2c"]["word"]),
+                         ({"aria2c": None, "curl": "curl, a frozen comparator, failed 1 of 10 runs"}, "fetchloom faster"))
+        # a family never shrinks below the eight cases, whatever the pilot froze
+        self.assertEqual(render.family({"ext4/home/s1": ["curl"]}), render.FAMILY)
 
     def test_only_the_frozen_comparator_gets_a_verdict_and_every_other_tool_describes(self):
         rows = headline_rows(curl=2, aria2c=1.5, pooch=.5)

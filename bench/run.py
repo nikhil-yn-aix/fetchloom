@@ -615,18 +615,22 @@ def case_rng(seed, fs, case):
 
 
 def comparators_choice(value):
-    """a json file of the comparator each headline case froze from its pilot, `render.py
-    --comparators` output, as fs/profile/scenario to the name of a tool other than fetchloom."""
+    """a json file of the comparators each headline case froze from its pilot, `render.py
+    --comparators` output, as fs/profile/scenario to a list of distinct tools other than fetchloom, or
+    to one such tool's name; returned with every value a list."""
     try:
         chosen = json.loads(Path(value).read_text())
     except (OSError, ValueError) as error:
         raise argparse.ArgumentTypeError(f"cannot read the frozen comparators: {error}") from None
     names = {cls.name for cls in tools.CLASSES} - {tools.Fetchloom.name}
+    if isinstance(chosen, dict):
+        chosen = {case: [tools_] if isinstance(tools_, str) else tools_ for case, tools_ in chosen.items()}
     if not isinstance(chosen, dict) or not all(
-            isinstance(case, str) and isinstance(tool, str) and len(case.split("/")) == 3 and tool in names
+            isinstance(case, str) and isinstance(frozen, list) and frozen and len(set(frozen)) == len(frozen)
+            and all(isinstance(tool, str) and tool in names for tool in frozen) and len(case.split("/")) == 3
             and case.split("/")[0] in ("ext4", "xfs") and case.split("/")[1] in lab.PROFILES
-            and case.split("/")[2] in fixtures.ALL_SCENARIOS for case, tool in chosen.items()):
-        raise argparse.ArgumentTypeError("frozen comparators map fs/profile/scenario to another tool's name")
+            and case.split("/")[2] in fixtures.ALL_SCENARIOS for case, frozen in chosen.items()):
+        raise argparse.ArgumentTypeError("frozen comparators map fs/profile/scenario to other tools' names")
     return chosen
 
 
@@ -660,7 +664,7 @@ def arguments():
     parser.add_argument("--server-cpus", type=lab.cpu_choice,
                         help="CPU list for the lab server's nginx, apart from the measured commands' --cpus")
     parser.add_argument("--comparators", type=comparators_choice, default={},
-                        help="the comparator each headline case froze from the pilot, from render.py --comparators")
+                        help="the comparators each headline case froze from the pilot, from render.py --comparators")
     parser.add_argument("--control", action="store_true",
                         help="run fetchloom again in each headline case, as the control arm that measures this machine's noise")
     return parser
@@ -687,9 +691,9 @@ def campaign(parser, args):
         parser.error("no cases match these scenario/profile combinations")
     for fs in args.fs:
         for case in cases:
-            tool = args.comparators.get(f"{fs}/{case['profile']}/{case['id']}")
-            if tool is not None and (tool not in adapters or not adapters[tool].supports(case)):
-                parser.error(f"{tool}, the comparator frozen for {fs}/{case['profile']}/{case['id']}, is not measured in it")
+            for tool in args.comparators.get(f"{fs}/{case['profile']}/{case['id']}", []):
+                if tool not in adapters or not adapters[tool].supports(case):
+                    parser.error(f"{tool}, a comparator frozen for {fs}/{case['profile']}/{case['id']}, is not measured in it")
     if (args.out / "runs.jsonl").exists():
         parser.error("output already contains runs; use a new directory")
     args.out.mkdir(parents=True, exist_ok=True)
@@ -722,7 +726,7 @@ def rounds_of(args, fs, case, names):
     if args.quick or args.rounds:
         return {name: 1 if args.quick else args.rounds for name in names}
     key = f"{fs}/{case['profile']}/{case['id']}"
-    longer = (tools.Fetchloom.name, CONTROL, args.comparators.get(key)) if tuple(key.split("/")) in fixtures.HEADLINE else ()
+    longer = (tools.Fetchloom.name, CONTROL, *args.comparators.get(key, [])) if tuple(key.split("/")) in fixtures.HEADLINE else ()
     return {name: HEADLINE_ROUNDS if name in longer else ROUNDS for name in names}
 
 

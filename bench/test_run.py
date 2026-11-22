@@ -471,6 +471,10 @@ class CampaignTests(unittest.TestCase):
         # a later round shuffles only the arms that run on
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s1" and order["round"] > 5},
                          {("curl", "fetchloom", "fetchloom+control")})
+        # two comparators frozen within 5% of each other both run on
+        meta, rows = self.campaign([dict(id="s1", profile="home")], "--control", "--only-tools", "fetchloom,curl,aria2c",
+                                   comparators={"ext4/home/s1": ["aria2c", "curl"]})
+        self.assertEqual(meta["cases"][0]["arm_rounds"], {"fetchloom": 10, "curl": 10, "aria2c": 10, "fetchloom+control": 10})
         # --rounds sets every arm's count alike
         meta, rows = self.campaign([dict(id="s1", profile="home")], "--control", "--rounds", "3")
         self.assertEqual(sorted({(row["tool"], max(r["round"] for r in rows if r["tool"] == row["tool"])) for row in rows}),
@@ -1074,10 +1078,11 @@ class ComparatorTests(unittest.TestCase):
     def test_frozen_comparators_name_a_headline_case_and_another_tool(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "comparators.json"
-            path.write_text(json.dumps({"ext4/home/s1": "aria2c", "ext4/lan/s5": "dvc"}))
-            self.assertEqual(run.comparators_choice(str(path)), {"ext4/home/s1": "aria2c", "ext4/lan/s5": "dvc"})
+            path.write_text(json.dumps({"ext4/home/s1": ["aria2c", "curl"], "ext4/lan/s5": "dvc"}))
+            self.assertEqual(run.comparators_choice(str(path)), {"ext4/home/s1": ["aria2c", "curl"], "ext4/lan/s5": ["dvc"]})
             for bad in ([], {"ext4/home/s1": "fetchloom"}, {"ext4/home/s1": "wget"}, {"home/s1": "curl"},
-                        {"ntfs/home/s1": "curl"}, {"ext4/far/s1": "curl"}, {"ext4/home/s2": "curl"}):
+                        {"ntfs/home/s1": "curl"}, {"ext4/far/s1": "curl"}, {"ext4/home/s2": "curl"},
+                        {"ext4/home/s1": []}, {"ext4/home/s1": ["curl", "curl"]}, {"ext4/home/s1": ["curl", "fetchloom"]}):
                 path.write_text(json.dumps(bad))
                 with self.subTest(bad=bad), self.assertRaisesRegex(argparse.ArgumentTypeError, "frozen comparators map"):
                     run.comparators_choice(str(path))
@@ -1126,7 +1131,7 @@ class MainRefusalTests(unittest.TestCase):
         frozen = self.root / "comparators.json"
         frozen.write_text(json.dumps({"ext4/home/s2r": "curl"}))
         self.assertEqual(self.refused("--comparators", str(frozen)),
-                         "run.py: error: curl, the comparator frozen for ext4/home/s2r, is not measured in it")
+                         "run.py: error: curl, a comparator frozen for ext4/home/s2r, is not measured in it")
         (self.root / "results").mkdir(exist_ok=True)
         (self.root / "results/runs.jsonl").write_text("")
         self.assertEqual(self.refused(), "run.py: error: output already contains runs; use a new directory")
