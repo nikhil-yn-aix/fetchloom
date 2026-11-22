@@ -986,6 +986,33 @@ impl Output {
         self.remember(bar)
     }
 
+    /// a bar for one download of a batch whose own bar counts them all: it joins the terminal's
+    /// bars once the download has lasted `after`, so a batch of quick files keeps one steady line
+    /// rather than a bar for each file that comes and goes many times a second. hidden unless a
+    /// person is watching the terminal.
+    pub(crate) fn bar_after(&self, verb: &'static str, message: String, after: Duration) -> Bar {
+        let (Some(bars), Some(joining)) = (&self.bars, &self.joining) else {
+            return self.bar(verb, message);
+        };
+        let bar = joining.bar_at(
+            bars,
+            (verb, message),
+            (self.style.color, self.style.unicode),
+            self.stopping.clone(),
+            Instant::now() + after,
+        );
+        self.remember(bar)
+    }
+
+    /// when each bar waiting to join the terminal's is due, for tests.
+    #[cfg(test)]
+    pub(crate) fn bars_due(&self) -> Vec<Instant> {
+        self.joining
+            .as_ref()
+            .map(|joining| joining.due())
+            .unwrap_or_default()
+    }
+
     /// [`Output::wait`], its bar a [`Output::short_bar`]; its plain lines where no bar shows are the
     /// same.
     pub(crate) fn short_wait(&self, verb: &'static str, what: String) -> Wait {

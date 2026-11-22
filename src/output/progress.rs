@@ -526,6 +526,13 @@ impl Waiting {
 }
 
 impl Joining {
+    /// when each bar waiting to join is due, the earliest first, for tests.
+    #[cfg(test)]
+    pub(super) fn due(&self) -> Vec<Instant> {
+        let waiting = self.waiting.lock().unwrap_or_else(PoisonError::into_inner);
+        waiting.due.iter().map(|(at, _)| *at).collect()
+    }
+
     /// a bar like [`Bar::add`]'s that counts unseen and joins `bars` at `due`, kept in order of
     /// when each joins.
     pub(super) fn bar_at(

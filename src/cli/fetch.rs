@@ -733,6 +733,10 @@ fn unbounded(
     (format!("{took}, and its server never said its size"), help)
 }
 
+/// how long one download of a batch lasts before its own bar joins the batch's: a file that ends
+/// sooner, as most of a batch of small ones do, never flashes a bar of its own.
+const FILE_BAR_AFTER: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// one download as it runs: its bar, its part of the overall progress, and the question before
 /// a large file whose size only its server tells.
 struct Watch<'a> {
@@ -872,14 +876,19 @@ impl<'a> Watch<'a> {
         *self.named.lock().unwrap_or_else(PoisonError::into_inner) = Some(label);
     }
 
-    /// the download's bar, made when it is first needed. in a batch, its time left is the batch
-    /// bar's; alone, it says about how long it takes until it can tell its own.
+    /// the download's bar, made when it is first needed. in a batch, it shows once the download
+    /// has lasted [`FILE_BAR_AFTER`] and leaves the time left to the batch's bar; alone, it shows
+    /// at once and says about how long it takes until it can tell its own.
     fn bar(&self) -> &Bar {
         self.bar.get_or_init(|| {
-            let bar = self.output.bar("Downloading", self.job.label.clone());
+            let label = self.job.label.clone();
             if self.overall.bar.is_some() {
+                let bar = self.output.bar_after("Downloading", label, FILE_BAR_AFTER);
                 bar.untimed();
-            } else if let Some(time) = self.overall.time() {
+                return bar;
+            }
+            let bar = self.output.bar("Downloading", label);
+            if let Some(time) = self.overall.time() {
                 bar.foreseen(time);
             }
             bar
@@ -3657,6 +3666,44 @@ mod tests {
             })
             .unwrap();
         assert_eq!(watch.bar().timing(), (true, Some("under 10 s".to_owned())));
+    }
+
+    /// a batch's own bar counts its files, so a file of it gets a bar of its own only once it has
+    /// lasted a moment, and a batch of quick files keeps one steady line rather than a bar that
+    /// comes and goes for each; a lone download's bar shows at once.
+    #[test]
+    fn a_file_of_a_batch_shows_its_own_bar_only_once_it_lasts() {
+        let context = Context::new(Output::on_screen(crate::output::screen::Screen::default()));
+        let job = |label: &str| {
+            let mut fetch = Fetch::new(Url::parse("https://example.org/a.bin").unwrap());
+            fetch.expect.size = Some(10);
+            Job {
+                fetch,
+                label: label.to_owned(),
+                dataset: None,
+                named_by_caller: false,
+                again: None,
+            }
+        };
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        let jobs = [job("parts/a.bin"), job("parts/b.bin")];
+        let batch = Overall::new(&context, &jobs);
+        let before = std::time::Instant::now();
+        let file = Watch::new(&jobs[0], &context.output, &batch, &approval, false, &held);
+        file.bar();
+        let due = context.output.bars_due();
+        assert_eq!(due.len(), 1, "{due:?}");
+        assert!(due[0] >= before + FILE_BAR_AFTER, "{due:?}");
+        let lone = [job("c.bin")];
+        let alone = Overall::new(&context, &lone);
+        let watch = Watch::new(&lone[0], &context.output, &alone, &approval, false, &held);
+        watch.bar();
+        assert_eq!(
+            context.output.bars_due().len(),
+            1,
+            "a lone bar shows at once"
+        );
     }
 
     /// plain lines never say a refused download began, however long a person took to say no.
