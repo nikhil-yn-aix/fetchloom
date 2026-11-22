@@ -821,6 +821,41 @@ fn a_first_add_that_fails_leaves_the_folder_as_it_was() -> Result {
     Ok(())
 }
 
+/// a disk that fills in a download's first second, before the download first records what it
+/// has, keeps what reached it but its last MiB, which makes room for the record, so the add run
+/// again once there is room goes on from there.
+#[cfg(debug_assertions)]
+#[test]
+fn an_add_a_full_disk_stopped_goes_on_from_the_bytes_it_kept() -> Result {
+    const MIB: usize = 1 << 20;
+    let sandbox = Sandbox::new()?;
+    let body: Vec<u8> = (0..=250u8).cycle().take(4 * MIB).collect();
+    let site = crate::support::Ranged::start("/files/big.bin", body.clone(), 0)?;
+    sandbox.allow(&site.url);
+    let full = sandbox
+        .command(&["add", &site.url, "--as", "big"])
+        .env("FETCHLOOM_TEST_FULL_AT", (3 * MIB).to_string())
+        .output()?;
+    let stderr = text(&full.stderr)?;
+    assert_eq!(full.status.code(), Some(50), "{stderr}");
+    assert!(stderr.contains("the disk is full"), "{stderr}");
+    let again = sandbox.run(&["add", &site.url, "--as", "big"])?;
+    ok(&again)?;
+    assert_eq!(fs::read(sandbox.work().join("data/big/big.bin"))?, body);
+    let requests = site.requests();
+    let from: Option<usize> = requests.get(1).and_then(|head| {
+        head.lines()
+            .find_map(|line| line.strip_prefix("range: bytes="))
+            .and_then(|range| range.trim().strip_suffix('-'))
+            .and_then(|start| start.parse().ok())
+    });
+    assert!(
+        requests.len() == 2 && from.is_some_and(|from| (MIB..3 * MIB).contains(&from)),
+        "{requests:?}"
+    );
+    Ok(())
+}
+
 #[cfg(debug_assertions)]
 const SEARCHED: [(&str, &[u8]); 7] = [
     (

@@ -1729,13 +1729,15 @@ impl Net {
         let writing = tokio::task::spawn_blocking(move || -> io::Result<PartialWriter> {
             while let Some(handed) = receiver.blocking_recv() {
                 for chunk in &handed.chunks {
-                    writer.write_chunk(writer.written(), chunk)?;
+                    if let Err(err) = writer.write_chunk(writer.written(), chunk) {
+                        return Err(writer.failed(err));
+                    }
                 }
                 if handed.record {
-                    writer.save()?;
+                    writer.save().map_err(|err| writer.failed(err))?;
                 }
             }
-            writer.save()?;
+            writer.save().map_err(|err| writer.failed(err))?;
             Ok(writer)
         });
         let body = self

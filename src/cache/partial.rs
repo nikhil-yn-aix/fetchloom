@@ -37,6 +37,9 @@ const WRITEBACK_SLOWEST: Duration = Duration::from_secs(10);
 const BUFFER: usize = 1024 * 1024;
 /// the largest download hashed without a thread of its own.
 const SMALL: u64 = 1024 * 1024;
+/// what a download a full disk stopped gives back of its last bytes, so the record of the rest
+/// finds a block.
+const RECORD_ROOM: u64 = 1024 * 1024;
 
 pub(crate) enum Claim {
     Owned(Partial),
@@ -535,6 +538,10 @@ impl Partial {
                 name: recorded.as_ref().and_then(|record| record.name.clone()),
                 keyed: recorded.as_ref().is_some_and(|record| record.keyed),
             },
+            #[cfg(debug_assertions)]
+            full_at: std::env::var("FETCHLOOM_TEST_FULL_AT")
+                .ok()
+                .and_then(|text| text.parse().ok()),
         };
         if keep && let Some(record) = recorded {
             writer.keep(record.ranges, length)?;
@@ -701,6 +708,10 @@ pub(crate) struct PartialWriter {
     bytes: PathBuf,
     record_path: PathBuf,
     record: Record,
+    /// a disk that is full once the file holds this many bytes, for CLI tests. release builds
+    /// never read it.
+    #[cfg(debug_assertions)]
+    full_at: Option<u64>,
 }
 
 impl PartialWriter {
@@ -782,7 +793,7 @@ impl PartialWriter {
                 self.flush_pending()?;
             }
             if bytes.len() >= BUFFER {
-                write_all_at(&self.file, at, bytes)?;
+                self.put(at, bytes)?;
                 self.wrote(at, bytes.len());
             }
             self.hasher.update(bytes.clone())?;
@@ -796,7 +807,7 @@ impl PartialWriter {
             if !self.named {
                 self.checkpoint()?;
             }
-            write_all_at(&self.file, at, bytes)?;
+            self.put(at, bytes)?;
             self.wrote(at, bytes.len());
             if let Some(run) = self.runs.iter_mut().find(|run| run.end == at) {
                 run.hasher.update(bytes);
@@ -840,11 +851,29 @@ impl PartialWriter {
     fn flush_pending(&mut self) -> io::Result<()> {
         if !self.pending.is_empty() {
             let at = self.prefix - self.pending.len() as u64;
-            write_all_at(&self.file, at, &self.pending)?;
+            self.put(at, &self.pending)?;
             self.wrote(at, self.pending.len());
             self.pending.clear();
         }
         Ok(())
+    }
+
+    /// writes `bytes` into the file at `at`.
+    fn put(&self, at: u64, bytes: &[u8]) -> io::Result<()> {
+        #[cfg(debug_assertions)]
+        if let Some(full) = self.full_at
+            && at.saturating_add(bytes.len() as u64) > full
+        {
+            let fits =
+                usize::try_from(full.saturating_sub(at)).map_or(0, |fits| fits.min(bytes.len()));
+            write_all_at(&self.file, at, &bytes[..fits])?;
+            return Err(io::Error::from_raw_os_error(if cfg!(windows) {
+                112
+            } else {
+                28
+            }));
+        }
+        write_all_at(&self.file, at, bytes)
     }
 
     /// notes `len` bytes written at `at`, and starts the disk writing what was written since it
@@ -911,6 +940,10 @@ impl PartialWriter {
                 sha256: run.hasher.sha256_so_far(),
             })
             .collect();
+        self.write_record()
+    }
+
+    fn write_record(&mut self) -> io::Result<()> {
         let text = serde_json::to_vec(&self.record).map_err(io::Error::other)?;
         let scratch = Folder::open(self.cache.root(), Path::new("tmp"), self.cache.sharing)?;
         self.folder
@@ -918,6 +951,48 @@ impl PartialWriter {
         self.saved = Instant::now();
         self.named = true;
         Ok(())
+    }
+
+    /// `err`, which ended the download, once the bytes of the prefix that reached the file are
+    /// recorded, when no record names any yet, as in a download's first second, so a later run
+    /// goes on from them. a full disk gives back the last of them first, so the record has room.
+    /// what waited to be written is fetched again; a download with a record keeps it.
+    pub(crate) fn failed(&mut self, err: io::Error) -> io::Error {
+        let full = matches!(
+            err.kind(),
+            io::ErrorKind::StorageFull | io::ErrorKind::QuotaExceeded
+        );
+        if !self.named
+            && let Err(unkept) = self.keep_written(full)
+        {
+            tracing::debug!(%unkept, "could not record what a failed download wrote");
+        }
+        err
+    }
+
+    /// records the bytes of the prefix in the file, read back to hash them, since the hash
+    /// worker may have taken bytes never written. with `full`, the last [`RECORD_ROOM`] go first.
+    /// a download with no record holds nothing past its prefix, as it records the prefix before
+    /// its first byte past it.
+    fn keep_written(&mut self, full: bool) -> io::Result<()> {
+        let written = self.prefix - self.pending.len() as u64;
+        self.pending.clear();
+        let kept = if full {
+            written.saturating_sub(RECORD_ROOM)
+        } else {
+            written
+        };
+        self.file.set_len(kept)?;
+        if kept == 0 {
+            return Ok(());
+        }
+        let mut hasher = Hasher::default();
+        hash_range(&self.file, &mut hasher, 0, kept)?;
+        self.prefix = kept;
+        self.record.received = kept;
+        self.record.sha256 = hasher.sha256_so_far();
+        self.record.ranges = Vec::new();
+        self.write_record()
     }
 
     /// puts the finished file into the cache under its hash. a download with bytes missing
