@@ -1750,7 +1750,7 @@ fn a_removal_tells_the_dataset_before_its_files() -> Result {
     let stderr = text(&removed.stderr)?;
     assert_eq!(removed.status.code(), Some(0), "{stderr}");
     let dataset = stderr.find("Removed iris from data.toml and data.lock\n");
-    let files = stderr.find("Removed 1 file from data/ that no dataset needs\n");
+    let files = stderr.find("Removed 1 file from data/ that no remaining dataset needs\n");
     assert!(
         dataset
             .zip(files)

@@ -75,6 +75,7 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     let mut placing =
         place::Placing::new(&project, &kept, &lock, &cache, false, &Scope::All, survey)?;
     placing.unmark_removed(unlisted_outputs(&gone, &folders));
+    placing.removing_datasets();
     if dry_run {
         let outcome = previewed(context, &placing, &kept, &listed, &unrecorded);
         tell_would_ask(context, &gone, &names);

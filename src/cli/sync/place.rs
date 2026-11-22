@@ -35,8 +35,22 @@ use crate::source::local::{LineEnds, Reach, Since};
 use crate::stop::Stop;
 use crate::work::Work;
 
+/// what the files a run deletes as no dataset's were.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum Unneeded {
+    /// files no dataset in data.toml needs.
+    #[default]
+    Strays,
+    /// files of the datasets a removal takes out, which no remaining dataset needs.
+    Removed,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub(crate) struct Placement {
+    /// what the files it deleted as no dataset's were, which words their line; never part of the
+    /// JSON document.
+    #[serde(skip)]
+    pub(crate) unneeded: Unneeded,
     pub(crate) placed: u64,
     pub(crate) replaced: u64,
     pub(crate) removed: u64,
@@ -1092,6 +1106,8 @@ pub(crate) struct Placing<'a> {
     /// how many files a run that tells `Placing <n> files` as placing starts expects to place,
     /// as its live line names them, and what says whether that line's plain lines said so.
     told_at_once: Option<(usize, crate::output::Begun)>,
+    /// what the files the run deletes as no dataset's are: a removal's own, as `remove` says.
+    unneeded: Unneeded,
 }
 
 impl<'a> Placing<'a> {
@@ -1209,6 +1225,7 @@ impl<'a> Placing<'a> {
             elsewhere: Vec::new(),
             forced,
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         })
     }
 
@@ -1240,6 +1257,12 @@ impl<'a> Placing<'a> {
     /// it deletes their markers too.
     pub(crate) fn unmark_removed(&mut self, folders: Vec<String>) {
         self.unmarking = folders;
+    }
+
+    /// says the run takes datasets out of data.toml, so what it deletes is told as no remaining
+    /// dataset's, never as a stray of no dataset at all.
+    pub(crate) fn removing_datasets(&mut self) {
+        self.unneeded = Unneeded::Removed;
     }
 
     /// says the run's manifest leaves out the datasets at `folders` though data.toml still names
@@ -1709,6 +1732,7 @@ impl<'a> Placing<'a> {
     /// what [`Placing::remove_only`] would do, with nothing written.
     pub(crate) fn preview_removal(&self) -> Preview {
         let mut preview = Preview::default();
+        preview.placement.unneeded = self.unneeded;
         self.preview_unwanted(&mut preview);
         preview
     }
@@ -1902,6 +1926,7 @@ impl<'a> Placing<'a> {
             elsewhere,
             forced: _,
             told_at_once,
+            unneeded: _,
         } = self;
         let root = placing_root(project, manifest)?;
         let mut placement = Placement {
@@ -2170,10 +2195,14 @@ impl<'a> Placing<'a> {
             outputs,
             unmarking,
             still_marked,
+            unneeded,
             ..
         } = self;
         let root = placing_root(project, manifest)?;
-        let mut placement = Placement::default();
+        let mut placement = Placement {
+            unneeded,
+            ..Placement::default()
+        };
         let wanted: HashSet<&str> = targets.iter().map(|target| target.path.as_str()).collect();
         let mut placer = Placer::new(&root).with_threads(survey.threads);
         let removed = remove_unwanted(
@@ -5089,6 +5118,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         };
 
         placing
@@ -5168,6 +5198,7 @@ mod tests {
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
                 told_at_once: None,
+                unneeded: Unneeded::Strays,
             };
             let placement = if syncing {
                 placing.apply(
@@ -5259,6 +5290,7 @@ mod tests {
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
                 told_at_once: None,
+                unneeded: Unneeded::Strays,
             };
             if after_survey {
                 fs::remove_file(&file).unwrap();
@@ -5502,6 +5534,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         };
         let context = crate::cli::Context::new(output);
         let net = std::sync::Arc::new(context.net());
@@ -5659,6 +5692,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         };
         placing
             .apply(
@@ -5734,6 +5768,7 @@ mod tests {
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
                 told_at_once: None,
+                unneeded: Unneeded::Strays,
             };
 
             let placed = placing.apply(
@@ -5814,6 +5849,7 @@ mod tests {
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
                 told_at_once: None,
+                unneeded: Unneeded::Strays,
             };
 
             let placed = placing.apply(
@@ -6044,6 +6080,7 @@ mod tests {
                 elsewhere: Vec::new(),
                 forced: Vec::new(),
                 told_at_once: None,
+                unneeded: Unneeded::Strays,
             }
             .placing_bound()
         };
@@ -6126,6 +6163,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         };
 
         placing
@@ -6348,6 +6386,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         };
         let holding: Vec<String> = placing
             .holding()
@@ -6407,6 +6446,7 @@ mod tests {
             elsewhere: Vec::new(),
             forced: Vec::new(),
             told_at_once: None,
+            unneeded: Unneeded::Strays,
         }
     }
 

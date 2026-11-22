@@ -60,7 +60,7 @@ if deleting files fails after `data.toml` and `data.lock` were written, as for p
 
 ```text
       Would remove a from data.toml and data.lock
-      Would remove 1 file from data/ that no dataset needs
+      Would remove 1 file from data/ that no remaining dataset needs
          Ok dry run, nothing was changed
 ```
 

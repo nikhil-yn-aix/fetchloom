@@ -749,10 +749,16 @@ fn tell_removed(output: &Output, manifest: &Manifest, verbs: [&str; 2], placemen
         .saturating_sub(placement.cut_short.values().sum())
         .saturating_sub(placement.cleared_outputs.len() as u64);
     if unneeded > 0 {
+        // a removal's own files were needed until it took their dataset out
+        let needs = if placement.unneeded == super::Unneeded::Removed {
+            "that no remaining dataset needs"
+        } else {
+            "that no dataset needs"
+        };
         output.step(
             verbs[1],
             &format!(
-                "{} from {}/ that no dataset needs",
+                "{} from {}/ {needs}",
                 units::count(unneeded, "file", "files"),
                 manifest.data_dir
             ),
