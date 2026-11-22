@@ -502,8 +502,8 @@ fn unknown(topic: &[String]) -> Error {
             error.help(format!("did you mean `{shown}`?"))
         }
         None => error
-            .detail("topics: agents, concepts, environment, exit-codes,")
-            .detail("or a command, such as add or cache gc")
+            .detail("topics: agents, concepts, environment and exit-codes")
+            .detail("a command is a topic too, such as add or cache gc")
             .help("`fetchloom --help` lists the commands"),
     }
 }
@@ -1088,6 +1088,8 @@ mod tests {
         let lines = unknown.details.iter().map(AsRef::as_ref);
         for line in lines.chain(unknown.help.as_deref()) {
             assert!(line.chars().count() <= 56, "{line}");
+            // each line reads alone, so none looks cut from a list a wider screen would show whole
+            assert!(!line.ends_with(',') && !line.starts_with("or "), "{line}");
         }
     }
 
