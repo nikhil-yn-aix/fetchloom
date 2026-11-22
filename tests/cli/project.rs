@@ -1725,6 +1725,20 @@ fn at_the_root_of_a_disk_no_help_names_a_project_below() -> Result {
     Ok(())
 }
 
+/// in the home folder with no project below it, status never says to start a project there,
+/// where add would ask first and take no for an answer: it says to make a folder for one.
+#[test]
+fn status_in_the_home_folder_starts_a_project_in_a_folder_of_its_own() -> Result {
+    let sandbox = Sandbox::new()?;
+    let home = sandbox.folder("home")?;
+    let status = sandbox.command_in(&home, &["--json", "status"]).output()?;
+    let document = json(&status)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(!help.contains("start a project here"), "{document}");
+    assert!(help.contains("make a folder for it"), "{document}");
+    Ok(())
+}
+
 /// a dry run of an add that would start a project says so, around the project below when there
 /// is one, with the question the add would ask before it; nothing is written.
 #[test]
