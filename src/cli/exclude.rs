@@ -554,7 +554,7 @@ fn unplanned(
         return error.help(help);
     }
     error.help(
-        "check the path: exclude leaves out files data.lock places, and a file of your own you delete yourself if you do not need it",
+        "check the path: exclude leaves out only files that data.lock places; to get rid of a file of your own, delete it",
     )
 }
 
