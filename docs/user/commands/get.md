@@ -108,7 +108,7 @@ error: cannot write data/py.csv/iris.csv: data/py.csv is a file, not a folder
 
 ### a file already there
 
-a project's own `data.toml` and `data.lock`, and a file in its `data.lock.d`, are never written: `-o` naming one is a usage error, exit 2, before any request, `--force` or not, since it would take the project's pins. any other file already at the path stays as it is unless `--force` asks to replace it:
+a project's own `data.toml` and `data.lock`, and a file in its `data.lock.d`, are never written: `-o` naming one is a usage error, exit 2, before any request, `--force` or not, since it would take the project's pins. so is a file in a `.git` or `.fetchloom` folder, and in a data folder, a file sync placed or the `.gitignore` it keeps beside a dataset's files, since git or `fetchloom status` would no longer tell what changed. any other file already at the path stays as it is unless `--force` asks to replace it:
 
 | the file there | without `--force` | with `--force` |
 |---|---|---|

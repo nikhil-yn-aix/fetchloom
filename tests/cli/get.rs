@@ -3938,3 +3938,69 @@ fn get_never_writes_over_a_projects_own_files() -> Result {
     assert!(!work.join("new").exists());
     Ok(())
 }
+
+/// `get -o` and `export -o` never write into a `.git` or `.fetchloom` folder, nor over a file a
+/// sync placed or the .gitignore it keeps in a dataset's folder, `--force` or not, and never offer
+/// `--force` for them: git would break, or keep the dataset's files, and no command would notice.
+#[test]
+fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        ("/iris.csv".to_owned(), file(b"a,b\n1,2\n", "\"i1\"")),
+        ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &format!("{}/iris.csv", server.url)])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let work = sandbox.work();
+    std::fs::create_dir(work.join(".git"))?;
+    std::fs::write(work.join(".git/config"), b"[core]\n")?;
+    let kept = [".git/config", "data/iris/.gitignore", "data/iris/iris.csv"]
+        .map(|path| std::fs::read(work.join(path)));
+    let elsewhere = sandbox.folder("elsewhere")?;
+    let below = sandbox.folder("work/notes")?;
+    let link = format!("{}/hello.txt", server.url);
+    let asked = server.requests().len();
+    for (folder, args) in [
+        (&work, ["get", &link, "-o", ".git/config"].as_slice()),
+        (&work, &["get", &link, "-o", ".git/config", "--force"]),
+        (&work, &["get", &link, "-o", ".GIT/hooks/pre-commit"]),
+        (&work, &["get", &link, "-o", ".fetchloom/x", "--force"]),
+        (
+            &work,
+            &["get", &link, "-o", "data/iris/.gitignore", "--force"],
+        ),
+        (
+            &work,
+            &["get", &link, "-o", "data/iris/iris.csv", "--force"],
+        ),
+        (&below, &["get", &link, "-o", "../data/iris/iris.csv"]),
+        (&elsewhere, &["get", &link, "-o", ".git/config"]),
+        (&work, &["export", "-o", ".git/config", "--force"]),
+        (&work, &["export", "-o", "data/iris/.gitignore", "--force"]),
+    ] {
+        let output = sandbox
+            .command_in(folder, &[&["--json"], args].concat())
+            .output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {document}");
+        let error = &document["errors"][0];
+        assert_eq!(error["kind"], "usage", "{args:?}: {document}");
+        assert!(
+            !error.to_string().contains("--force"),
+            "{args:?}: {document}"
+        );
+    }
+    assert_eq!(server.requests().len(), asked, "nothing was asked for");
+    for (path, before) in [".git/config", "data/iris/.gitignore", "data/iris/iris.csv"]
+        .iter()
+        .zip(kept)
+    {
+        assert_eq!(std::fs::read(work.join(path))?, before?, "{path}");
+    }
+    assert!(!work.join(".fetchloom/x").exists());
+    assert!(!elsewhere.join(".git").exists());
+    let own = sandbox.run(&["get", &link, "-o", "data/iris/notes.txt"])?;
+    assert_eq!(own.status.code(), Some(0), "{}", text(&own.stderr)?);
+    Ok(())
+}

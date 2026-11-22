@@ -1967,21 +1967,127 @@ pub(super) fn data_links(context: &Context) -> crate::project::DataLinks {
     }
 }
 
-/// refuses `path`, the one file `-o` names, when it is a project's own data.toml or data.lock,
-/// or lies in its data.lock.d: writing it would take the pins, `--force` or not. names are
-/// compared ignoring case, as a disk that ignores case compares them.
+/// refuses `path`, the one file `-o` names, `--force` or not, when writing it would break the
+/// project or git where no command notices: a project's own data.toml or data.lock, anything in
+/// its data.lock.d, in a `.git` or a `.fetchloom` folder, and what a sync made in a data folder,
+/// a file it placed or the .gitignore it keeps there. names are compared ignoring case, as a
+/// disk that ignores case compares them.
 pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
     let Ok(target) = std::path::absolute(path) else {
         return Ok(());
     };
-    let (Some(folder), Some(name)) = (target.parent(), target.file_name()) else {
+    let (Some(lexical), Some(name)) = (target.parent(), target.file_name()) else {
         return Ok(());
     };
-    let folder = resolved(folder);
+    let folder = resolved(lexical);
     let is = |name: &std::ffi::OsStr, own: &str| {
         name.to_str()
             .is_some_and(|name| name.eq_ignore_ascii_case(own))
     };
+    refuse_pins(path, &folder, name, &is)?;
+    let inside = folder
+        .join(name)
+        .components()
+        .chain(target.components())
+        .find_map(|part| {
+            let std::path::Component::Normal(part) = part else {
+                return None;
+            };
+            let part = part.to_str()?;
+            name::metadata(part).map(|reason| (part.to_owned(), reason))
+        });
+    if let Some((part, reason)) = inside {
+        let keeper = if reason == name::OWN_FOLDER {
+            "fetchloom"
+        } else {
+            "the repository"
+        };
+        return Err(Error::new(
+            Kind::Usage,
+            format!(
+                "-o names {}, inside {part}, which {keeper} keeps for itself, so fetchloom never writes there",
+                path.display()
+            ),
+        )
+        .help(format!("give -o a file outside {part}")));
+    }
+    let made = [folder.as_path(), lexical]
+        .into_iter()
+        .find_map(|folder| made_by_sync(folder, name));
+    match made {
+        None => Ok(()),
+        Some(Made::Placed(dataset)) => Err(Error::new(
+            Kind::Usage,
+            format!(
+                "-o names {}, a file sync placed for {dataset}, and fetchloom never writes over the files it placed",
+                path.display()
+            ),
+        )
+        .help("give -o another file name: data.lock pins this one")),
+        Some(Made::Marker(at)) => Err(Error::new(
+            Kind::Usage,
+            format!(
+                "-o names {}, the .gitignore that keeps the dataset files in {at} out of git, and fetchloom never writes over it",
+                path.display()
+            ),
+        )
+        .help("give -o another file name")),
+    }
+}
+
+/// what a sync made in a project's data folder, as the project's state records it.
+enum Made {
+    /// a file it placed, by the dataset it placed it for.
+    Placed(String),
+    /// the .gitignore it keeps in a dataset's folder, by that folder's path in the project.
+    Marker(String),
+}
+
+/// what a sync made at `name` in `folder` of the project around it, or none: a folder outside
+/// any project, or one named through `..`, holds nothing a sync made.
+fn made_by_sync(folder: &Path, name: &std::ffi::OsStr) -> Option<Made> {
+    let project = Project::find(folder)?;
+    let mut at = String::new();
+    for part in folder.strip_prefix(&project.root).ok()?.components() {
+        let std::path::Component::Normal(part) = part else {
+            return None;
+        };
+        if !at.is_empty() {
+            at.push('/');
+        }
+        at.push_str(part.to_str()?);
+    }
+    if at.is_empty() {
+        return None;
+    }
+    let name = name.to_str()?;
+    let path = format!("{at}/{name}");
+    let (state, _) = project.state_within(std::slice::from_ref(&at), &|placed| {
+        placed.eq_ignore_ascii_case(&path)
+    });
+    if name.eq_ignore_ascii_case(".gitignore")
+        && state
+            .markers
+            .keys()
+            .any(|marked| marked.eq_ignore_ascii_case(&at))
+    {
+        return Some(Made::Marker(at));
+    }
+    let placed = state.files.values().map(|placed| &placed.dataset);
+    placed
+        .chain(state.copied.files.values())
+        .next()
+        .map(|dataset| Made::Placed(dataset.clone()))
+}
+
+/// refuses `path` when it is a project's own data.toml or data.lock, or lies in its
+/// data.lock.d: writing it would take the pins.
+fn refuse_pins(
+    path: &Path,
+    folder: &Path,
+    name: &std::ffi::OsStr,
+    is: &dyn Fn(&std::ffi::OsStr, &str) -> bool,
+) -> Result<(), Error> {
     let lists = lock::lists::FOLDER;
     let own = [manifest::FILE, lock::FILE, lists]
         .into_iter()

@@ -25,7 +25,7 @@ fetchloom export [options] [name]...
 | `--format aria2` | each file downloaded as an `aria2c -i` input file, with `out=` its place below the data folder and `checksum=sha-256=` |
 | `--format bibtex`, `csl`, `ris` | a citation of each dataset: a BibTeX entry, a CSL-JSON item, as pandoc and zotero read them, or an RIS record, as [citations](#citations) says |
 | `--format statement` | a data availability paragraph for a paper: each dataset with its DOI or link, and the SHA-256 of each of its files |
-| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists`. the project's own `data.toml`, `data.lock` and what `data.lock.d` holds are refused as usage, exit 2, `--force` or not |
+| `-o`, `--output <file>` | write to `<file>` instead of stdout. a file already there is kept, and the command fails with `local.not_empty`, as `data.sha256 already exists`. the project's own `data.toml`, `data.lock` and what `data.lock.d` holds are refused as usage, exit 2, `--force` or not, and so is a file in a `.git` or `.fetchloom` folder, or one sync placed in a data folder or the `.gitignore` it keeps there |
 | `--force` | with `-o`, replace a file already there. it is moved aside until the new one has its name |
 
 [global options](global-options.md) also apply.
