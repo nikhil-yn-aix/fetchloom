@@ -860,6 +860,17 @@ const UNSIGNED_HELP: &str = "check the link. if you trust that server, add its c
 /// what to do about a certificate whose dates exclude now.
 const CLOCK_HELP: &str = "check this machine's clock. if it is right, the server's certificate is out of date, and only whoever runs the server can renew it";
 
+/// a certificate no authority this machine trusts signed, in plain words.
+const UNSIGNED: &str =
+    "no authority this machine trusts signed it, as with one a server signs itself";
+
+/// a certificate an authority uses to sign others, sent as a server's own, in plain words.
+const AUTHORITY: &str =
+    "it is a certificate authority's own, as one a server signs itself often is";
+
+/// what to do about a certificate only its server can replace.
+const REPLACE_HELP: &str = "only whoever runs the server can replace its certificate";
+
 /// the refusal of the certificate `url`'s host sent, saying in plain words what rustls found
 /// wrong with it, and what to check.
 fn distrusted(url: &Url, tls: &rustls::Error) -> Error {
@@ -874,18 +885,13 @@ fn distrusted(url: &Url, tls: &rustls::Error) -> Error {
     };
     let (why, help) = match tls {
         rustls::Error::InvalidCertificate(bad) => match bad {
-            Bad::UnknownIssuer => (
-                "no authority this machine trusts signed it, as with one a server signs itself"
-                    .to_owned(),
-                UNSIGNED_HELP,
-            ),
+            Bad::UnknownIssuer => (UNSIGNED.to_owned(), UNSIGNED_HELP),
             // webpki's reason for a certificate a server signed itself as its own authority,
             // as openssl's own makes one, which rustls passes on only as text
-            Bad::Other(other) if other.0.to_string().contains("CaUsedAsEndEntity") => (
-                "it is a certificate authority's own, as one a server signs itself often is"
-                    .to_owned(),
-                UNSIGNED_HELP,
-            ),
+            Bad::Other(other) if other.0.to_string().contains("CaUsedAsEndEntity") => {
+                (AUTHORITY.to_owned(), UNSIGNED_HELP)
+            }
+            Bad::Other(other) if cfg!(target_os = "macos") => apple(&other.0.to_string()),
             Bad::ExpiredContext { not_after, .. } => {
                 (format!("it expired on {}", day(not_after)), CLOCK_HELP)
             }
@@ -914,7 +920,7 @@ fn distrusted(url: &Url, tls: &rustls::Error) -> Error {
             ),
             Bad::Revoked => (
                 "the authority that signed it revoked it".to_owned(),
-                "only whoever runs the server can replace its certificate",
+                REPLACE_HELP,
             ),
             _ => (tls.to_string(), UNSIGNED_HELP),
         },
@@ -925,6 +931,32 @@ fn distrusted(url: &Url, tls: &rustls::Error) -> Error {
         format!("{host} sent a certificate this machine does not trust: {why}"),
     )
     .help(help)
+}
+
+/// apple's reason for refusing a certificate in plain words. macos's verifier passes on the
+/// reasons it has no rustls name for only as text ending in apple's code, as
+/// `“127.0.0.1” certificate is not standards compliant: -67901`.
+fn apple(said: &str) -> (String, &'static str) {
+    let (reason, code) = said
+        .rsplit_once(": ")
+        .and_then(|(reason, code)| Some((reason, code.parse::<i32>().ok()?)))
+        .map_or((said, None), |(reason, code)| (reason, Some(code)));
+    match code {
+        // errSecNotTrusted, errSecInvalidCertAuthority and errSecInvalidRoot
+        Some(-67843 | -67826 | -67612) => (UNSIGNED.to_owned(), UNSIGNED_HELP),
+        // errSecCertificateIsCA
+        Some(-67902) => (AUTHORITY.to_owned(), UNSIGNED_HELP),
+        // errSecCertificateExpired and errSecCertificateNotValidYet
+        Some(-67818) => ("it expired".to_owned(), CLOCK_HELP),
+        Some(-67819) => ("it is not valid yet".to_owned(), CLOCK_HELP),
+        // errSecCertificateValidityPeriodTooLong, which apple's verifier calls not standards
+        // compliant, as it does a certificate a server signs itself for years
+        Some(-67901) => (
+            "it stays valid for longer than macos allows a server's certificate".to_owned(),
+            REPLACE_HELP,
+        ),
+        _ => (format!("macos refused it: {reason}"), UNSIGNED_HELP),
+    }
 }
 
 /// a name a certificate states, as webpki words it, `DnsName("example.org")`, made plain.
@@ -2020,22 +2052,61 @@ mod tests {
         };
         assert_eq!(error.kind, Kind::NetworkUnreachable);
         // macos holds a server's certificate to apple's rules before it asks who signed it, and
-        // the fixture, valid for a century, breaks them, so there only the start is the same
-        if cfg!(target_os = "macos") {
-            assert!(
-                error
-                    .message
-                    .starts_with("127.0.0.1 sent a certificate this machine does not trust: "),
-                "{}",
-                error.message
-            );
+        // the fixture, valid for a century, breaks them
+        let (why, help) = if cfg!(target_os = "macos") {
+            (
+                "it stays valid for longer than macos allows a server's certificate",
+                REPLACE_HELP,
+            )
         } else {
-            assert_eq!(
-                error.message,
-                "127.0.0.1 sent a certificate this machine does not trust: no authority this machine trusts signed it, as with one a server signs itself"
-            );
+            (UNSIGNED, UNSIGNED_HELP)
+        };
+        assert_eq!(
+            error.message,
+            format!("127.0.0.1 sent a certificate this machine does not trust: {why}")
+        );
+        assert_eq!(error.help.as_deref(), Some(help));
+    }
+
+    /// apple's reasons, which macos's verifier passes on as text ending in apple's code, are said
+    /// in plain words, and one with a code fetchloom does not know as apple's own words alone.
+    #[test]
+    fn a_certificate_macos_refuses_is_told_in_plain_words() {
+        let cases = [
+            (
+                "“127.0.0.1” certificate is not standards compliant: -67901",
+                "it stays valid for longer than macos allows a server's certificate",
+                REPLACE_HELP,
+            ),
+            (
+                "“lab.example” certificate is not trusted: -67843",
+                UNSIGNED,
+                UNSIGNED_HELP,
+            ),
+            (
+                "“lab.example” certificate is expired: -67818",
+                "it expired",
+                CLOCK_HELP,
+            ),
+            (
+                "“lab.example” certificate is a CA: -67902",
+                AUTHORITY,
+                UNSIGNED_HELP,
+            ),
+            (
+                "“lab.example” certificate name is not permitted: -67900",
+                "macos refused it: “lab.example” certificate name is not permitted",
+                UNSIGNED_HELP,
+            ),
+            (
+                "certificate is not valid for server authentication",
+                "macos refused it: certificate is not valid for server authentication",
+                UNSIGNED_HELP,
+            ),
+        ];
+        for (said, why, help) in cases {
+            assert_eq!(apple(said), (why.to_owned(), help), "{said}");
         }
-        assert_eq!(error.help.as_deref(), Some(UNSIGNED_HELP));
     }
 
     /// what rustls finds wrong with a certificate is said in plain words, with a date where it
