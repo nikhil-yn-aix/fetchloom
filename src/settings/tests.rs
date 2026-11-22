@@ -171,10 +171,46 @@ fn unset_variables_keep_the_defaults() {
     assert_eq!(empty.jobs, Set::default(JOBS));
 }
 
+/// the buffers and the local workers a room takes leave the base a run holds beside them, so
+/// together they fit the room: for every room from the base and two workers' share to 1 GiB, with
+/// the static build's base, and at the room a 48 MiB container left a run that unpacked a
+/// 3,001-file archive, 34.1 MiB, one worker and 3 MiB of buffers, where it took 24 workers and
+/// 17 MiB before and the kernel ended it. a room past 540 MiB budgets as it always did.
+#[test]
+fn a_small_room_sizes_buffers_and_workers_past_the_base() {
+    let base = crate::project::lock::base(true);
+    let fits = |room: u64| {
+        let workers = u64::try_from(workers_in(room, base)).unwrap();
+        base + buffers_in(room, base) + workers * PER_WORKER
+    };
+    for room in ((base + 2 * PER_WORKER)..=(1 << 30)).step_by(1 << 20) {
+        assert!(
+            fits(room) <= room,
+            "{}: {} taken",
+            crate::units::size(room),
+            crate::units::size(fits(room))
+        );
+    }
+    let seen = (341 << 20) / 10;
+    assert_eq!(workers_in(seen, base), 1);
+    assert_eq!(buffers_in(seen, base), (seen - base) / 2);
+    for room in [540 << 20, 2 << 30, 64 << 30] {
+        assert_eq!(
+            buffers_in(room, base),
+            (room / 4).clamp(LEAST_MEMORY, MOST_MEMORY),
+            "{room}"
+        );
+    }
+    // a room under the base still buffers one batch and runs one worker
+    assert_eq!(buffers_in(16 << 20, base), LEAST_BUFFERS);
+    assert_eq!(workers_in(16 << 20, base), 1);
+}
+
 #[test]
 fn the_memory_budget_is_a_quarter_of_what_the_machine_gives_within_bounds() {
+    let base = crate::project::lock::BASE;
     for (room, budget) in [
-        (Some(100 << 20), 50 << 20),
+        (Some(100 << 20), ((100 << 20) - base) / 2),
         (Some(600 << 20), LEAST_MEMORY),
         (Some(2 << 30), 512 << 20),
         (Some(64 << 30), MOST_MEMORY),

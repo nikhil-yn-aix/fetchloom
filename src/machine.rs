@@ -127,6 +127,21 @@ fn memory_under(root: &Path) -> Option<Room> {
     Some(Room { bytes, in_cgroup })
 }
 
+/// keeps this process off transparent huge pages, as a run in a container must be: its allocator
+/// touched its arenas a few bytes at a time, and with each touch taking a 2 MiB page, a static
+/// run unpacking a 3,001-file archive held 91 MB in place of 32, past a 48 MiB limit that then
+/// ended it. outside a container's limit the kernel pages out instead, so huge pages may stay.
+#[cfg(target_os = "linux")]
+pub(crate) fn small_pages() {
+    if let Err(err) = rustix::thread::disable_transparent_huge_pages(true) {
+        tracing::debug!(%err, "could not keep this run off huge pages");
+    }
+}
+
+/// [`small_pages`], which only linux needs.
+#[cfg(not(target_os = "linux"))]
+pub(crate) fn small_pages() {}
+
 /// the number a debug build takes from the variable `name` in place of this machine's, so CLI
 /// tests and docs examples print the same anywhere. release builds never read it.
 pub(crate) fn pretended(name: &str) -> Option<u64> {

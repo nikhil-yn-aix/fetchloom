@@ -36,7 +36,7 @@ path components longer than 255 UTF-8 bytes are refused, except on windows, whic
 
 ### worker budgets
 
-`FETCHLOOM_THREADS` accepts 1 through 256; unset or empty preserves defaults. `Threads` limits each local worker group, not the total number of OS threads in a process. network writers, hash workers, DNS helpers and progress threads are separate. a command reads the logical CPU count once, `threads::remember_processors` as it starts, and `threads::available_parallelism` answers with it from then on, since on linux each read goes through `/proc/self/cgroup` and a `cpu.max` file for each cgroup level.
+`FETCHLOOM_THREADS` accepts 1 through 256; unset or empty preserves defaults. without it or a level's cap, a small memory room caps local workers itself: `settings::workers_in` gives one for each `PER_WORKER`, 3 MiB, of half of what the room leaves past `lock::BASE`, at least one, and `settings::buffers_in` gives the buffers the other half, so base, buffers and workers fit the room; a run in a cgroup with a memory limit also turns transparent huge pages off for itself, `machine::small_pages`, since its allocator's arenas otherwise took a 2 MiB page for each touch. `Threads` limits each local worker group, not the total number of OS threads in a process. network writers, hash workers, DNS helpers and progress threads are separate. a command reads the logical CPU count once, `threads::remember_processors` as it starts, and `threads::available_parallelism` answers with it from then on, since on linux each read goes through `/proc/self/cgroup` and a `cpu.max` file for each cgroup level.
 
 | work | default and cap behavior |
 |---|---|

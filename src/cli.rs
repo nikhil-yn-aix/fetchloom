@@ -899,6 +899,9 @@ fn unusable(
 fn share(settings: &Settings) {
     crate::project::lock::set_most_files(settings.most_files.value);
     crate::project::lock::set_room(settings.machine.container_room());
+    if settings.machine.container_room().is_some() {
+        crate::machine::small_pages();
+    }
     sync::disk::set_level(settings.resources.value);
 }
 

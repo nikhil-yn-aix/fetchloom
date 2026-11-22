@@ -115,7 +115,21 @@ impl Settings {
         let workers = threads.limit(processors);
         let hashers = threads.limit(self.hash_workers());
         let lanes = hashers.clamp(1, 2);
-        let level = || self.threads.map(|set| set.origin.to_string());
+        let level = || {
+            self.threads
+                .map(|set| match (set.origin, self.machine.memory) {
+                    (Origin::Machine, Some(room)) => format!(
+                        "one for each {} of half of {} once the {} a run holds is set aside",
+                        units::size(super::PER_WORKER),
+                        self.room_text(room),
+                        units::size(crate::project::lock::BASE)
+                    ),
+                    (origin, _) => origin.to_string(),
+                })
+        };
+        let roomy = self
+            .threads
+            .is_some_and(|set| set.origin == Origin::Machine);
         let mut reasons = Vec::new();
         let mut why = |what: &str, reason: Option<String>| {
             if let Some(reason) = reason {
@@ -145,7 +159,7 @@ impl Settings {
         why(
             "hash lanes",
             (lanes < 2).then(|| match level() {
-                Some(level) if self.hash_workers() < processors => level,
+                Some(level) if self.hash_workers() < processors || roomy => level,
                 _ if processors > 1 => "FETCHLOOM_THREADS".to_owned(),
                 _ => "one processor".to_owned(),
             }),
@@ -161,25 +175,41 @@ impl Settings {
         }
     }
 
+    /// the memory the machine gives a run, as `-v` names it.
+    fn room_text(&self, room: u64) -> String {
+        let place = if self.machine.memory_in_cgroup {
+            "this cgroup leaves"
+        } else {
+            "available"
+        };
+        format!("the {} {place}", units::size(room))
+    }
+
     /// what holds the memory budget where it is.
     fn buffers(&self) -> Option<String> {
         let budget = self.memory.value;
         match (self.memory.origin, self.machine.memory) {
             (Origin::Machine, Some(room)) => {
-                let place = if self.machine.memory_in_cgroup {
-                    "this cgroup leaves"
-                } else {
-                    "available"
-                };
-                let room_text = format!("the {} {place}", units::size(room));
+                let room_text = self.room_text(room);
                 let quarter = room / 4;
-                Some(if quarter > MOST_MEMORY {
+                let base = crate::project::lock::BASE;
+                let spare = room.saturating_sub(base);
+                Some(if budget == super::LEAST_BUFFERS && spare / 2 < budget {
+                    format!(
+                        "{} at least, though {room_text} holds less once the {} a run holds is set aside",
+                        units::size(budget),
+                        units::size(base)
+                    )
+                } else if budget == spare / 2 && budget <= LEAST_MEMORY {
+                    format!(
+                        "half of {room_text} once the {} a run holds is set aside",
+                        units::size(base)
+                    )
+                } else if quarter > MOST_MEMORY {
                     format!(
                         "{} at most, less than a quarter of {room_text}",
                         units::size(budget)
                     )
-                } else if budget == room / 2 && quarter < budget {
-                    format!("half of {room_text}")
                 } else if quarter < budget {
                     format!(
                         "{} at least, more than a quarter of {room_text}",
@@ -217,6 +247,7 @@ mod tests {
     use super::super::{File, Settings, parse};
     use super::{Level, Spending};
     use crate::machine::Machine;
+    use crate::project::lock::BASE;
     use crate::threads::Threads;
 
     const MIB: u64 = 1 << 20;
@@ -309,7 +340,7 @@ mod tests {
                 "lean",
                 tiny,
                 lean,
-                (100 * MIB, "machine"),
+                ((200 * MIB - BASE) / 2, "machine"),
                 (100_000, "default"),
             ),
             (
@@ -650,12 +681,15 @@ mod tests {
             spends(
                 Level::Lean,
                 [2, 2, 2, 1],
-                60 * MIB,
+                (120 * MIB - BASE) / 2,
                 &[
                     "downloads: resources = lean",
                     "to one host: resources = lean",
                     "local workers: this run may use 2 of the 24 processors",
-                    "buffers: half of the 120.0 MiB this cgroup leaves",
+                    &format!(
+                        "buffers: half of the 120.0 MiB this cgroup leaves once the {} a run holds is set aside",
+                        crate::units::size(BASE)
+                    ),
                     "hash lanes: resources = lean",
                 ],
             ),
@@ -711,8 +745,11 @@ mod tests {
                 spends(
                     Level::Default,
                     [8, 4, 4, 2],
-                    150 * MIB,
-                    &["buffers: half of the 300.0 MiB this cgroup leaves"],
+                    (300 * MIB - BASE) / 2,
+                    &[&format!(
+                        "buffers: half of the 300.0 MiB this cgroup leaves once the {} a run holds is set aside",
+                        crate::units::size(BASE)
+                    )],
                 ),
             ),
             (

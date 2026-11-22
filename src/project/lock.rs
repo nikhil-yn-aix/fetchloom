@@ -31,12 +31,12 @@ const VERSION: u32 = 1;
 /// 76.7 MiB on glibc and 92.5 MiB on musl for 100,000 files, and 690 and 668 MiB for 1,000,001.
 const PER_FILE: u64 = 650;
 /// what a run holds beside a project's pins, [`base`] of this build.
-const BASE: u64 = base(cfg!(target_env = "musl"));
+pub(crate) const BASE: u64 = base(cfg!(target_env = "musl"));
 
 /// what a run holds beside a project's pins: what it holds before it reads the project, which the
 /// musl build's allocator starts larger, and 8 MiB more, since a status of 20,000 to 40,000 files
 /// held up to 6.5 MiB past the pins as it read the data folder, and the kernel ended it there.
-const fn base(musl: bool) -> u64 {
+pub(crate) const fn base(musl: bool) -> u64 {
     if musl { 28 << 20 } else { 16 << 20 }
 }
 

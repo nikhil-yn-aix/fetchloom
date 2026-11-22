@@ -30,6 +30,11 @@ const JOBS: usize = 8;
 pub(crate) const ASK_ABOVE: u64 = 10 << 30;
 /// the most memory a run budgets for its buffers on its own, however much the machine has.
 const MOST_MEMORY: u64 = 4 << 30;
+/// the least a run budgets for its buffers: one batch of a download's bytes.
+const LEAST_BUFFERS: u64 = 1 << 20;
+/// what one more local worker held unpacking a 3,001-file archive on the static build: 1.6 to
+/// 2.7 MB a worker past the first, measured.
+const PER_WORKER: u64 = 3 << 20;
 
 /// the settings file's name, in fetchloom's folder beside the credentials file.
 const FILE: &str = "settings.toml";
@@ -615,14 +620,29 @@ impl Settings {
         } else {
             defaults.memory
         };
-        // a level caps local workers only where FETCHLOOM_THREADS does not
-        let threads = limits
-            .threads
-            .filter(|_| var("FETCHLOOM_THREADS").is_none_or(|value| value.is_empty()))
+        // a level caps local workers only where FETCHLOOM_THREADS does not, and so does a room
+        // too small for a worker a processor, whichever takes fewer
+        let leveled = limits.threads.map(|value| Set {
+            value,
+            origin: Origin::Resources(resources.value),
+        });
+        let roomy = machine
+            .memory
+            .map(|room| workers_in(room, crate::project::lock::BASE))
+            .filter(|&fit| fit < machine.processors.max(1))
             .map(|value| Set {
                 value,
-                origin: Origin::Resources(resources.value),
+                origin: Origin::Machine,
             });
+        let threads = match (leveled, roomy) {
+            (Some(leveled), Some(roomy)) => Some(if roomy.value < leveled.value {
+                roomy
+            } else {
+                leveled
+            }),
+            (leveled, roomy) => leveled.or(roomy),
+        }
+        .filter(|_| var("FETCHLOOM_THREADS").is_none_or(|value| value.is_empty()));
         Ok(Settings {
             machine,
             resources,
@@ -718,16 +738,34 @@ impl Settings {
     }
 }
 
-/// the memory budget `machine` gives a run without a level: a quarter of what it has, but never
-/// more than half of it, however small, nor more than 4 GiB.
+/// the memory budget `machine` gives a run without a level, as [`buffers_in`] sizes it.
 fn budget(machine: Machine) -> Set<u64> {
     match machine.memory {
         Some(room) => Set {
-            value: (room / 4).clamp(LEAST_MEMORY.min(room / 2), MOST_MEMORY),
+            value: buffers_in(room, crate::project::lock::BASE),
             origin: Origin::Machine,
         },
         None => Set::default(LEAST_MEMORY),
     }
+}
+
+/// the buffers a run budgets in `room` beside `base`, what it holds without them: a quarter of
+/// the room, from 256 MiB to 4 GiB, but never more than half of what the room leaves past the
+/// base, however small, nor less than [`LEAST_BUFFERS`]. a container a 3,001-file archive filled
+/// with buffers at half its room and the base beside them ended the run.
+fn buffers_in(room: u64, base: u64) -> u64 {
+    let half = (room.saturating_sub(base) / 2).max(LEAST_BUFFERS);
+    (room / 4)
+        .clamp(LEAST_MEMORY.min(half), MOST_MEMORY)
+        .min(half)
+}
+
+/// the local workers a run of `room` takes at most beside `base`: one for each [`PER_WORKER`] of
+/// the half of what the room leaves past the base that [`buffers_in`] leaves them, and always one.
+fn workers_in(room: u64, base: u64) -> usize {
+    usize::try_from(room.saturating_sub(base) / 2 / PER_WORKER)
+        .unwrap_or(usize::MAX)
+        .max(1)
 }
 
 /// `fallback`, a knob's value without a level, or what `level` gives it as `value`.

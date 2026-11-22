@@ -22,8 +22,8 @@ the variable wins over the file, so `FETCHLOOM_RESOURCES=default` runs once at t
 |---|---|---|---|
 | `jobs`, requests at once | 2 | 8 | 32 |
 | `host_jobs`, requests at once to one host | 2 | 4 | 16 |
-| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | a quarter of the memory available, or on linux of what a cgroup's limit leaves, from 256 MiB to 4 GiB but never more than half of it; 256 MiB where the system does not say | as `default` |
-| local workers, as `FETCHLOOM_THREADS` caps them | 2, or 1 on a machine with one processor | up to the processors | as `default` |
+| `memory`, the budget download buffers aim to stay within | 128 MiB, or the default budget when that is smaller | a quarter of the memory available, or on linux of what a cgroup's limit leaves, from 256 MiB to 4 GiB but never more than half of what that leaves once the 16 MiB a run holds beside its buffers is set aside, 28 MiB on the static build linux installs, nor less than 1 MiB; 256 MiB where the system does not say | as `default` |
+| local workers, as `FETCHLOOM_THREADS` caps them | 2, or 1 on a machine with one processor, or fewer as `default` takes | up to the processors, and no more than one for each 3 MiB of the other half of what the memory leaves once that base is set aside, at least one | as `default` |
 
 `max` leaves memory and local workers at the default. checking placed files spreads a few large files over the local workers, as it does many small ones, but a ceiling of one or two workers keeps each file on one, so lean adds no hashing buffers. at `default` and `max`, a project whose state file holds 16 MiB or more, some 65,000 files, has it read on a thread of its own while its data folder is listed, which made a settled sync of 100,000 files take 0.79 of its time and cost 1,000,000 files 6 to 7% more peak memory; lean reads it first, as every level does a smaller one.
 
@@ -57,10 +57,12 @@ threads           2                        resources = lean  FETCHLOOM_THREADS
 `-v` starts each command that downloads, hashes or places files, `add`, `remove`, `exclude`, `sync`, `lock`, `status`, `path`, `push`, `get` and `cache verify`, with what that run spends: downloads at once and to one host, the local workers one step runs at most, the memory budget for buffers, and hash lanes, which is two when a download that needs an MD5 beside its SHA-256 may hash it on a second worker. a line below names what holds each number that is not fetchloom's own default: a level, a variable or the settings file, the processors this process may use, or the memory the system or a cgroup leaves. stderr from a run in a cgroup limited to 512 MiB and two processors' time, on a machine of 24:
 
 ```text
-  Resources default: 8 downloads at once, 4 to one host, 2 local workers, 254.8 MiB for buffers, 2 hash lanes
+  Resources default: 8 downloads at once, 4 to one host, 2 local workers, 240.8 MiB for buffers, 2 hash lanes
             local workers: this run may use 2 of the 24 processors
-            buffers: half of the 509.6 MiB this cgroup leaves
+            buffers: half of the 509.6 MiB this cgroup leaves once the 28.0 MiB a run holds is set aside
 ```
+
+in a cgroup with a memory limit, a run on linux also keeps off transparent huge pages: its allocator touched its arenas a few bytes at a time, each touch took a 2 MiB page, and a run unpacking a 3,001-file archive held 91 MB in place of 32, past what a 48 MiB container left it.
 
 and from the same run at lean:
 
