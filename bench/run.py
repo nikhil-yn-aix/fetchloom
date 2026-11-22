@@ -646,6 +646,8 @@ def arguments():
     parser.add_argument("--fs", type=lambda x: csv_choices(x, ("ext4", "xfs")), default=["ext4", "xfs"])
     parser.add_argument("--rounds", type=int)
     parser.add_argument("--quick", action="store_true")
+    parser.add_argument("--no-warmup", action="store_true",
+                        help="skip the warmup round, as the pilot's one round of every case and tool does")
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--out", type=Path, default=lab.ROOT / "results" / "lab")
     parser.add_argument("--only-tools", type=lambda x: csv_choices(x, tuple(t.name for t in tools.CLASSES)))
@@ -730,7 +732,7 @@ def estimate(args, adapters, cases):
     total = 0
     for fs in args.fs:
         for case in cases:
-            runs = sum(rounds + 1 for rounds in rounds_of(args, fs, case, eligible(adapters, fs, case)).values())
+            runs = sum(rounds + (not args.no_warmup) for rounds in rounds_of(args, fs, case, eligible(adapters, fs, case)).values())
             total += runs * (30 if case["id"] == "s7" else 3 if args.quick else 60)
     return total
 
@@ -752,13 +754,13 @@ def measure_case(args, fs, specification, adapters, meta):
     # the plan is on record before the first run, so a campaign cut short shows it
     arms = rounds_of(args, fs, case, measured)
     rounds = arms.get(tools.Fetchloom.name, max(arms.values(), default=0))
-    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms))
+    meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms, warmup=not args.no_warmup))
     lab.profile(case["profile"])
     # each case draws its own orders, so a campaign split into chunks shuffles as one run
     # would, rather than every chunk replaying the same sequence
     rng = case_rng(args.seed, fs, case)
     failures = 0
-    for number in range(max(arms.values(), default=0) + 1):
+    for number in range(1 if args.no_warmup else 0, max(arms.values(), default=0) + 1):
         order = [name for name in measured if number <= arms[name]]
         rng.shuffle(order)
         meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))

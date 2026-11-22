@@ -76,13 +76,13 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 ### Pilot
 
-One full-size round of every case and tool checks correctness and the budget and gives each run's time, from which the real run's hours are projected; if they come to more than 8, shrink the poor link's sizes in `fixtures.py`, the same for every tool. The pilot then freezes each headline case's rival:
+One full-size round of every case and tool, with no warmup round, checks correctness and the budget and gives each run's time, from which the real run's hours are projected; if they come to more than 8, shrink the poor link's sizes in `fixtures.py`, the same for every tool. The pilot then freezes each headline case's rival:
 
 ```sh
-python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --control \
+python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --no-warmup --control \
   --profiles lan,home,poor,local --fs ext4 --cpus 12-23 --server-cpus 6-11 \
   --out "$FL_BENCH_ROOT/results/pilot/lab-ext4"
-python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --control \
+python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --no-warmup --control \
   --profiles lan --scenarios s5,s6 --fs xfs --cpus 12-23 --server-cpus 6-11 \
   --out "$FL_BENCH_ROOT/results/pilot/lab-xfs"
 python3 bench/render.py --comparators "$FL_BENCH_ROOT/results/pilot" > comparators.json

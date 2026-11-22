@@ -441,6 +441,14 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
 
+    def test_a_pilot_runs_one_round_of_every_case_and_tool_with_no_warmup(self):
+        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
+                                   "--only-tools", "fetchloom,curl", "--rounds", "1", "--no-warmup")
+        self.assertEqual(sorted((row["scenario"], row["tool"], row["round"], row["warmup"]) for row in rows),
+                         [("s1", "curl", 1, False), ("s1", "fetchloom", 1, False), ("s1", "fetchloom+control", 1, False),
+                          ("s4", "curl", 1, False), ("s4", "fetchloom", 1, False)])
+        self.assertEqual({(case["id"], case["rounds"], case["warmup"]) for case in meta["cases"]}, {("s1", 1, False), ("s4", 1, False)})
+
     def test_the_lab_server_runs_on_cpus_apart_from_the_measured_commands(self):
         pinned = mock.Mock(return_value={"41": [0]})
         meta, rows = self.campaign([dict(id="s4", profile="home")], "--rounds", "1", "--cpus", "1", "--server-cpus", "0", pinned=pinned)
