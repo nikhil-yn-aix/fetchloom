@@ -975,6 +975,7 @@ pub(crate) mod tests {
                 "src/cli/fetch/mirrors.rs",
                 "fetchloom push --verify --to {}",
             ),
+            ("src/cli/path.rs", "fetchloom drop"),
             ("src/cli/remove.rs", "fetchloom remove --help"),
             ("src/cli/search.rs", "fetchloom sync --offline"),
             ("src/cli/settings.rs", "fetchloom push --to {}"),
