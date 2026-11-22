@@ -426,7 +426,8 @@ fn tell(
     ));
 }
 
-/// how the datasets came out, in a few words: `alpha from ours, beta from theirs, 1 the same`.
+/// how the datasets came out, in a few words: `alpha from ours, beta from theirs, 1 the same`, and
+/// those alike on both sides that no side pins.
 fn facts(summary: &Summary) -> String {
     let mut facts = Vec::new();
     for (names, how) in [
@@ -441,9 +442,39 @@ fn facts(summary: &Summary) -> String {
     if !summary.same.is_empty() {
         facts.push(format!("{} the same", summary.same.len()));
     }
+    let taken =
+        |name: &String| summary.from_ours.contains(name) || summary.from_theirs.contains(name);
+    let unpinned = summary.unpinned.iter().filter(|name| !taken(name)).count();
+    if unpinned > 0 {
+        facts.push(format!("{unpinned} not pinned"));
+    }
     if facts.is_empty() {
         "no datasets".to_owned()
     } else {
         facts.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// the merge's line counts the datasets no side pins apart from those that are the same, so a
+    /// merge of two data.toml files with no data.lock still says what it holds.
+    #[test]
+    fn the_merge_line_counts_unpinned_datasets_apart() {
+        let names = |names: &[&str]| names.iter().map(|name| (*name).to_owned()).collect();
+        let summary = Summary {
+            from_ours: names(&["alpha"]),
+            same: names(&["core"]),
+            unpinned: names(&["alpha", "beta"]),
+            ..Summary::default()
+        };
+        assert_eq!(facts(&summary), "alpha from ours, 1 the same, 1 not pinned");
+        let lockless = Summary {
+            unpinned: names(&["alpha", "beta"]),
+            ..Summary::default()
+        };
+        assert_eq!(facts(&lockless), "2 not pinned");
     }
 }

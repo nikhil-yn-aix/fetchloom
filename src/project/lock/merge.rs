@@ -96,7 +96,7 @@ pub(crate) struct Summary {
     pub(crate) from_ours: Vec<String>,
     /// taken from their side, the same way.
     pub(crate) from_theirs: Vec<String>,
-    /// alike on both sides.
+    /// alike on both sides, and pinned.
     pub(crate) same: Vec<String>,
     /// removed on one side while the other left it as it was, or by a choice.
     pub(crate) removed: Vec<String>,
@@ -585,8 +585,11 @@ fn summarize(decided: &Decided, merged: &Manifest, records: Option<&[Parsed]>) -
             &mut summary.from_theirs
         } else if from(Side::Ours) {
             &mut summary.from_ours
-        } else {
+        } else if pinned(name) {
             &mut summary.same
+        } else {
+            // alike on both sides, and pinned by neither, as `unpinned` says
+            continue;
         };
         list.push(name.clone());
     }

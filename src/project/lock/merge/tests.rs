@@ -461,6 +461,19 @@ fn a_pin_one_side_made_again_for_extract_or_access_wins() {
     assert_eq!(theirs.summary.from_theirs, ["x"]);
 }
 
+/// a dataset both sides hold alike in data.toml that neither side's data.lock pins is not pinned,
+/// which the merge says apart, never one of the datasets that are the same.
+#[test]
+fn an_unpinned_dataset_both_sides_hold_alike_is_not_the_same() {
+    let text = toml(&[("x", "zenodo:1"), ("y", "zenodo:2")]);
+    let manifest = sides(text.clone(), text, None);
+    let pinned = lock(vec![pin("x", "zenodo:1", b"one")]);
+    let locks = sides(pinned.clone(), pinned, None);
+    let merged = merged(&manifest, &locks, &[]).unwrap();
+    assert_eq!(merged.summary.same, ["x"]);
+    assert_eq!(merged.summary.unpinned, ["y"]);
+}
+
 /// a dataset both sides changed in data.toml takes the chosen side's entry, and that side's pin
 /// when it answers the entry; otherwise it is left for `fetchloom lock` to pin.
 #[test]
@@ -629,7 +642,7 @@ fn a_dataset_alike_but_written_apart_keeps_our_text_and_says_so() {
     let locks = sides(lock(Vec::new()), lock(Vec::new()), None);
     let merged = merged(&sides(ours.clone(), theirs, None), &locks, &[]).unwrap();
     assert_eq!(merged.manifest, ours);
-    assert_eq!(merged.summary.same, ["a"]);
+    assert_eq!(merged.summary.unpinned, ["a"], "alike, and no side pins it");
     assert_eq!(
         merged.warnings,
         [
