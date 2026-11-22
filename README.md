@@ -55,7 +55,7 @@ the installers add the program's folder to your PATH; set `FETCHLOOM_NO_MODIFY_P
 start in a folder for your project:
   mkdir iris-study && cd iris-study
   fetchloom add iris              pick an iris dataset online and pin its files
-  fetchloom add ../measurements   copy files from this machine, no network needed
+  fetchloom add ../measurements   copy this machine's files, no network needed
 
 in a project you cloned:
   fetchloom sync                  put the pinned files in data/

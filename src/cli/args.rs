@@ -233,7 +233,7 @@ pub(crate) const PURPOSE: &str = "exact research data for every project, on ever
 pub(crate) const WELCOME: &str = "start in a folder for your project:
   mkdir iris-study && cd iris-study
   fetchloom add iris              pick an iris dataset online and pin its files
-  fetchloom add ../measurements   copy files from this machine, no network needed
+  fetchloom add ../measurements   copy this machine's files, no network needed
 
 in a project you cloned:
   fetchloom sync                  put the pinned files in data/
@@ -1622,6 +1622,15 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// a bare `fetchloom` shows the welcome whole at 80 columns, so no word of it wraps alone.
+    #[test]
+    fn the_welcome_fits_80_columns() {
+        assert_eq!(
+            crate::output::wrap_help(super::WELCOME, 80, true),
+            super::WELCOME
+        );
     }
 
     /// at 80 columns the comments of each examples block start at one column, in a pipe and at a
