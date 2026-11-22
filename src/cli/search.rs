@@ -37,15 +37,15 @@ pub(super) async fn run(context: &Context, args: &args::Search) -> Result<Report
         let width = output.width();
         let table = parts(output, &report.candidates, width, LIST_LEAD);
         let pad = table.column;
-        // an id too wide for the verb column moves every id of a narrow list to the edge alike
+        // an id too wide for the verb column moves every id of a narrow list to the edge alike,
+        // with a title or without, each match's title and facts under it at one indent
         let narrow = width.is_some_and(|width| {
-            table
-                .rows
-                .iter()
-                .any(|shown| shown.title_below && units::columns(&shown.reference) + 12 > width)
+            table.rows.iter().any(|shown| {
+                (shown.title_below || shown.below) && units::columns(&shown.reference) + 12 > width
+            })
         });
         for shown in &table.rows {
-            if shown.title_below {
+            if shown.title_below || narrow {
                 output.candidate_under(&shown.reference, &shown.title, &shown.facts, narrow);
             } else {
                 output.candidate(

@@ -194,6 +194,47 @@ fn a_list_taller_than_the_terminal_scrolls_in_place() -> Result {
 
 /// `TERM=dumb` is how a screen reader's user runs fetchloom; the error comes after the list.
 #[cfg(target_os = "linux")]
+/// at a terminal too narrow for an id beside the verb column, every match starts at the edge
+/// alike, one without a title too, and its facts go under it at one indent.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_narrow_list_starts_every_match_at_the_edge_alike() -> Result {
+    let sandbox = Sandbox::new()?;
+    let catalogs = Catalogs::new(HF, KAGGLE, ZENODO)?;
+    let command = catalogs.command(&sandbox, &["search", "iris"]);
+    let Some((_, screen)) =
+        crate::support::typed(&sandbox.work(), &command, "rows 60 cols 40", "", "")?
+    else {
+        return Ok(());
+    };
+    let lines: Vec<&str> = screen.lines().map(|line| line.trim_matches('\r')).collect();
+    let ids: Vec<&&str> = lines
+        .iter()
+        .filter(|line| {
+            ["hf:", "kaggle:", "zenodo:"]
+                .iter()
+                .any(|id| line.trim_start().starts_with(id))
+        })
+        .collect();
+    assert!(
+        ids.iter()
+            .any(|line| line.contains("hf:datasets/scikit-learn/iris")),
+        "{screen}"
+    );
+    assert!(
+        ids.iter()
+            .all(|line| line.starts_with("  ") && !line.starts_with("   ")),
+        "{screen}"
+    );
+    assert!(
+        !lines
+            .iter()
+            .any(|line| line.starts_with("            ") && line.contains(" KiB")),
+        "{screen}"
+    );
+    Ok(())
+}
+
 #[test]
 fn a_dumb_terminal_lists_the_matches_first_in_its_width() -> Result {
     let sandbox = Sandbox::new()?;
