@@ -13,7 +13,7 @@ examples:
   fetchloom completions powershell | Out-String | Invoke-Expression
 
 the script completes fl too, the short name the installers make, when fl runs
-this fetchloom.
+this fetchloom
 
 arguments:
   <shell>  the shell that loads the script [possible values: bash, elvish, fish,

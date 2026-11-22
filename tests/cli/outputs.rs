@@ -1744,9 +1744,7 @@ fn a_changed_output_is_never_partly_healed() -> Result {
     let help = text(&sandbox.run(&["sync", "--help"])?.stdout)?;
     let help = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        help.contains(
-            "in an output's folder, also deletes each file data.lock does not list for it"
-        ),
+        help.contains("it also deletes each file there that data.lock does not list for it"),
         "{help}"
     );
     assert_eq!(fs::read(folder.join("iris_clean.csv"))?, CLEAN);
