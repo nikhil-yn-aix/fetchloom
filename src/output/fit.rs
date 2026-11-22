@@ -83,8 +83,9 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
     breaks
 }
 
-/// whether each of `shown` is a space a line may break at: past `indent`, the first of a run of
-/// spaces, outside backticks and double quotes, and not between a number and its unit.
+/// whether each of `shown` is a space a line may break at: the one that ends the label or verb
+/// before `indent`, or one past it, the first of a run of spaces, outside backticks and double
+/// quotes, and not between a number and its unit.
 fn breakable(shown: &[(usize, char)], indent: usize) -> Vec<bool> {
     let mut breakable = vec![false; shown.len()];
     let mut column = 0;
@@ -95,10 +96,12 @@ fn breakable(shown: &[(usize, char)], indent: usize) -> Vec<bool> {
         match c {
             '`' => ticked = !ticked,
             '"' if !ticked => quoted = !quoted,
+            // the space that ends a label or a verb too, so a command too wide to follow it
+            // there goes on the next line rather than past the edge
             ' ' if !ticked
                 && !quoted
                 && !number
-                && column > indent
+                && column + 1 >= indent
                 && at > 0
                 && shown[at - 1].1 != ' ' =>
             {
@@ -325,6 +328,19 @@ fn commented(comment: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::fit;
+
+    /// a command in backticks too wide to follow its label on the first line goes on the next,
+    /// whole, rather than past the edge, where a terminal would wrap its last backtick alone.
+    #[test]
+    fn a_command_too_wide_beside_its_label_goes_on_the_next_line() {
+        assert_eq!(
+            fit(
+                "  next: `fetchloom add kaggle:uciml/iris` puts the first match in a project",
+                40
+            ),
+            "  next:\n`fetchloom add kaggle:uciml/iris` puts\n        the first match in a project"
+        );
+    }
 
     /// a step whose verb is two words goes on under its text, as one of one word does, while a
     /// line of prose that happens to have a space at the verb column's edge keeps its indent.
