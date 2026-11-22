@@ -346,7 +346,10 @@ struct Overall {
     plan: std::sync::Mutex<Option<String>>,
     /// what the batch downloads, which its counts and sizes take once each: never bytes the cache
     /// held as it began.
-    counting: HashSet<Counted>,
+    counting: HashMap<Counted, usize>,
+    /// whether the size of each download, by its place in `counting`, was known as the batch
+    /// began.
+    known: Vec<bool>,
     /// the first two files of the batch that expect each SHA-256 two or more of its downloads
     /// share, so one waiting for the other's bytes says so.
     twins: HashMap<Sha256, (String, String)>,
@@ -395,46 +398,51 @@ impl Overall {
     }
 
     /// the batch of `files`, which counts each download once: the first file of those sharing its
-    /// bytes, and none whose bytes the cache held.
+    /// bytes, with the size any of them states, and none whose bytes the cache held.
     fn from_files(context: &Context, files: &[Batched<'_>]) -> Overall {
-        let mut counting = HashSet::new();
-        let mut shared = HashMap::new();
-        let downloads: Vec<&Batched<'_>> = files
-            .iter()
-            .filter(|file| {
-                file.counted.as_ref().is_some_and(|counted| {
-                    let first = counting.insert(counted.clone());
-                    if !first && let Counted::Bytes(digest) = counted {
-                        shared.entry(*digest).or_insert(file.label);
-                    }
-                    first
-                })
-            })
-            .collect();
-        // the first file of each shared SHA-256, looked for only when the batch shares any
+        use std::collections::hash_map::Entry;
+        let mut counting = HashMap::new();
+        let mut downloads: Vec<(&str, &str, Option<u64>)> = Vec::new();
         let mut twins = HashMap::new();
-        if !shared.is_empty() {
-            for file in files {
-                if let Some(Counted::Bytes(digest)) = &file.counted
-                    && let Some(second) = shared.remove(digest)
-                {
-                    twins.insert(*digest, (file.label.to_owned(), second.to_owned()));
+        for file in files {
+            let Some(counted) = &file.counted else {
+                continue;
+            };
+            match counting.entry(counted.clone()) {
+                Entry::Vacant(slot) => {
+                    slot.insert(downloads.len());
+                    downloads.push((file.label, &file.host, file.size));
+                }
+                Entry::Occupied(slot) => {
+                    let (first, _, size) = &mut downloads[*slot.get()];
+                    *size = size.or(file.size);
+                    if let Counted::Bytes(digest) = counted {
+                        twins
+                            .entry(*digest)
+                            .or_insert_with(|| ((*first).to_owned(), file.label.to_owned()));
+                    }
                 }
             }
         }
         let what = match downloads.as_slice() {
-            [only] => only.label.to_owned(),
+            [(only, ..)] => (*only).to_owned(),
             _ => units::count(downloads.len() as u64, "file", "files"),
         };
         let hosts = hosts(
             context,
-            downloads.iter().map(|file| (file.host.clone(), file.size)),
+            downloads
+                .iter()
+                .map(|(_, host, size)| ((*host).to_owned(), *size)),
         );
         let mut overall =
             Self::from_sizes(context, (files.len(), downloads.len(), what, hosts), || {
-                downloads.iter().map(|file| file.size)
+                downloads.iter().map(|(_, _, size)| *size)
             });
         overall.counting = counting;
+        overall.known = downloads
+            .iter()
+            .map(|(_, _, size)| size.is_some())
+            .collect();
         overall.twins = twins;
         overall
     }
@@ -456,10 +464,14 @@ impl Overall {
     }
 
     /// whether the download of `job` is the first of its bytes to tell the batch `told`, which
-    /// the batch counts once; never one whose bytes the cache held as it began.
+    /// the batch counts once; never one whose bytes the cache held as it began, nor a size any
+    /// file sharing them stated then, which the batch's total holds already.
     fn first(&self, job: &Job, told: Telling) -> bool {
         let counted = Counted::of(job.fetch.expect.sha256, &job.fetch.url, &job.label);
-        self.counting.contains(&counted)
+        let Some(&at) = self.counting.get(&counted) else {
+            return false;
+        };
+        !(told == Telling::Size && self.known[at])
             && self
                 .told
                 .lock()
@@ -502,7 +514,8 @@ impl Overall {
             waiting: AtomicUsize::new(count),
             alone: downloads == 1,
             plan: std::sync::Mutex::new(None),
-            counting: HashSet::new(),
+            counting: HashMap::new(),
+            known: Vec::new(),
             twins: HashMap::new(),
             told: std::sync::Mutex::new(HashSet::new()),
             downloads,
@@ -1313,14 +1326,23 @@ impl<'a> Watch<'a> {
     }
 
     /// tells the batch the size of a download that ended without its size ever told, as one
-    /// sent in chunks does, from the bytes it received, so the batch can learn its total.
-    fn ended(&self) {
+    /// sent in chunks does, from the bytes it received, so the batch can learn its total. one
+    /// that `came` from the cache as its twin's download left it tells its size, since its
+    /// twin's bytes are those the batch moved.
+    fn ended(&self, came: Option<&Fetched>) {
         if self.job.fetch.expect.size.is_none()
             && !self.sized.swap(true, Ordering::Relaxed)
             && self.overall.first(self.job, Telling::Size)
         {
-            self.overall
-                .sized(&host_of(self.job), self.received.load(Ordering::Relaxed));
+            let size = match came {
+                Some(found)
+                    if found.origin == Origin::Cache && self.overall.twin(self.job).is_some() =>
+                {
+                    found.size
+                }
+                _ => self.received.load(Ordering::Relaxed),
+            };
+            self.overall.sized(&host_of(self.job), size);
         }
     }
 
@@ -2179,7 +2201,7 @@ async fn run_each(
                     only,
                 };
                 let fetched = recovering(&net, &cache, &output, recovery, &job, &on).await;
-                watch.ended();
+                watch.ended(fetched.as_ref().ok());
                 let fetched = fetched.and_then(|found| watch.checked(&cache, found));
                 if fetched.is_ok() {
                     overall.finished(&job);
@@ -2764,7 +2786,8 @@ mod tests {
             waiting: AtomicUsize::new(0),
             alone: false,
             plan: std::sync::Mutex::default(),
-            counting: HashSet::new(),
+            counting: HashMap::new(),
+            known: Vec::new(),
             twins: HashMap::new(),
             told: std::sync::Mutex::default(),
             downloads: 0,
@@ -3700,6 +3723,107 @@ mod tests {
             "{}",
             stopped.message
         );
+    }
+
+    /// files sharing bytes add their size to the batch's total once, whichever states it, tells
+    /// it or ends first: one stated as the batch begins holds, and one only a download learns
+    /// counts once, from the twin that downloaded or the one the cache then served.
+    #[test]
+    fn shared_bytes_are_sized_once_whichever_file_tells() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = |name: &str, bytes: &[u8], sized: bool| {
+            let mut fetch = Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap());
+            fetch.expect.sha256 = Some(crate::digest::sha256(bytes));
+            fetch.expect.size = sized.then_some(bytes.len() as u64);
+            Job {
+                fetch,
+                label: format!("a/{name}"),
+                dataset: None,
+                named_by_caller: false,
+                again: None,
+            }
+        };
+        let started = |total| Event::Started {
+            total,
+            resumed: 0,
+            resumable: Resumable::Maybe,
+        };
+        let from_cache = Fetched {
+            digest: crate::digest::sha256(b"same"),
+            size: 4,
+            moved: 0,
+            name: None,
+            origin: Origin::Cache,
+            version: None,
+            began: None,
+            arrived: None,
+            asked: std::time::Duration::ZERO,
+        };
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        // one twin states 4 bytes and one states nothing, in either order; the unknown one
+        // downloads, and the other ends from the cache
+        for stated_first in [true, false] {
+            let mut jobs = vec![
+                job("one.csv", b"same", stated_first),
+                job("copy.csv", b"same", !stated_first),
+                job("other.csv", b"other", true),
+            ];
+            let overall = Overall::new(&context, &jobs);
+            let total = || overall.bar.as_ref().and_then(Bar::total);
+            assert_eq!(total(), Some(9), "stated first: {stated_first}");
+            let unknown = usize::from(stated_first);
+            let downloading = jobs.remove(unknown);
+            let watch = Watch::new(
+                &downloading,
+                &context.output,
+                &overall,
+                &approval,
+                false,
+                &held,
+            );
+            watch.on(&started(Some(4))).unwrap();
+            watch.ended(None);
+            let cached = Watch::new(&jobs[0], &context.output, &overall, &approval, false, &held);
+            cached.ended(Some(&from_cache));
+            assert_eq!(total(), Some(9), "stated first: {stated_first}");
+        }
+        // neither twin states its size: the batch learns it once, from whichever ends first
+        for cache_first in [true, false] {
+            let jobs = [
+                job("one.csv", b"same", false),
+                job("copy.csv", b"same", false),
+                job("other.csv", b"other", true),
+            ];
+            let overall = Overall::new(&context, &jobs);
+            let total = || overall.bar.as_ref().and_then(Bar::total);
+            assert_eq!(total(), None);
+            let downloading =
+                Watch::new(&jobs[0], &context.output, &overall, &approval, false, &held);
+            downloading.on(&started(None)).unwrap();
+            downloading.on(&Event::Bytes(4)).unwrap();
+            let cached = Watch::new(&jobs[1], &context.output, &overall, &approval, false, &held);
+            if cache_first {
+                cached.ended(Some(&from_cache));
+                downloading.ended(None);
+            } else {
+                downloading.ended(None);
+                cached.ended(Some(&from_cache));
+            }
+            assert_eq!(total(), Some(9), "cache first: {cache_first}");
+        }
     }
 
     /// a file that waits for bytes another file of its batch downloads names that file, never
