@@ -475,10 +475,25 @@ enum Folders {
 
 /// the datasets in aligned columns, a line each for `grep`. a narrow terminal leaves out usual
 /// folders, cuts the source to [`SOURCE`], leaves out the license, folders, the source, then
-/// [`folded`] lays it.
+/// [`folded`] lays it. while the folders show, a name wider than half of it takes a line of its
+/// own above its row before anything gives way, so one long name leaves the rest their columns.
 fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
-    let widest = |text: &str| text.lines().map(units::columns).max().unwrap_or_default();
-    let full = columns(datasets, Some(usize::MAX), (Folders::All, true), marks);
+    let names: Vec<Cow<'_, str>> = datasets
+        .iter()
+        .map(|dataset| plain(&dataset.name))
+        .collect();
+    let half = width.unwrap_or(usize::MAX) / 2;
+    let long = |line: &str| units::columns(line) > half && names.iter().any(|name| name == line);
+    let widest = |text: &str| {
+        let rows = text.lines().filter(|line| !long(line));
+        rows.map(units::columns).max().unwrap_or_default()
+    };
+    let full = columns(
+        datasets,
+        (Some(usize::MAX), usize::MAX),
+        (Folders::All, true),
+        marks,
+    );
     let Some(width) = width.filter(|width| widest(&full) > *width) else {
         return full;
     };
@@ -487,24 +502,38 @@ fn table(datasets: &[Listed], width: Option<usize>, marks: Marks) -> String {
         .map(|dataset| units::columns(&source(dataset)))
         .max()
         .unwrap_or_default();
+    let lifts = names.iter().any(|name| units::columns(name) > half)
+        && names.iter().any(|name| units::columns(name) <= half);
     for shown in [
         (Folders::Unusual, true),
         (Folders::Unusual, false),
         (Folders::None, false),
     ] {
-        let whole = columns(datasets, Some(usize::MAX), shown, marks);
-        let over = widest(&whole).saturating_sub(width);
-        if over == 0 {
-            return whole;
-        }
-        if sources.saturating_sub(over) >= SOURCE {
-            let cut = columns(datasets, Some(sources - over), shown, marks);
-            if widest(&cut) <= width {
-                return cut;
+        let lifted: &[usize] = if lifts && shown.0 == Folders::Unusual {
+            &[usize::MAX, half]
+        } else {
+            &[usize::MAX]
+        };
+        for &names in lifted {
+            let whole = columns(datasets, (Some(usize::MAX), names), shown, marks);
+            let over = widest(&whole).saturating_sub(width);
+            if over == 0 {
+                return whole;
+            }
+            if sources.saturating_sub(over) >= SOURCE {
+                let cut = columns(datasets, (Some(sources - over), names), shown, marks);
+                if widest(&cut) <= width {
+                    return cut;
+                }
             }
         }
     }
-    let plain = columns(datasets, None, (Folders::Unusual, false), marks);
+    let plain = columns(
+        datasets,
+        (None, usize::MAX),
+        (Folders::Unusual, false),
+        marks,
+    );
     if widest(&plain) <= width {
         return plain;
     }
@@ -614,10 +643,11 @@ fn source(dataset: &Listed) -> String {
 }
 
 /// the rows, aligned: the source cut in the middle to `source` columns, or left out with none,
-/// then the folders and whether the license shows.
+/// a name wider than `names` on a line of its own above its row, then the folders and whether
+/// the license shows.
 fn columns(
     datasets: &[Listed],
-    source: Option<usize>,
+    (source, names): (Option<usize>, usize),
     (folders, with_license): (Folders, bool),
     marks: Marks,
 ) -> String {
@@ -641,6 +671,10 @@ fn columns(
             row
         })
         .collect();
+    let lifted: Vec<Option<String>> = rows
+        .iter_mut()
+        .map(|row| (units::columns(&row[0]) > names).then(|| std::mem::take(&mut row[0])))
+        .collect();
     // a column every row leaves empty, as the folders once each is the usual one, goes
     let width = rows.first().map_or(0, Vec::len);
     for column in (0..width).rev() {
@@ -660,8 +694,12 @@ fn columns(
         })
         .collect();
     let mut text = String::new();
-    for row in &rows {
+    for (row, name) in rows.iter().zip(&lifted) {
         if !text.is_empty() {
+            text.push('\n');
+        }
+        if let Some(name) = name {
+            text.push_str(name);
             text.push('\n');
         }
         for (column, width) in widths.iter().enumerate() {
@@ -873,6 +911,29 @@ mod tests {
             "a-very-long-dataset-name-for-testing  https://zen…urements.csv  1 file · 4.4 KiB\n\
              tiny                                  zenodo:1                  1 file · 4.4 KiB",
             "every folder gives way before the source does"
+        );
+    }
+
+    /// a name wider than half the terminal takes a line of its own above its row, so the other
+    /// rows keep their sources whole.
+    #[test]
+    fn a_name_wider_than_half_the_terminal_leaves_the_rest_their_columns() {
+        let listed = |name: &str, reference: &str, bytes: u64| Listed {
+            reference: reference.to_owned(),
+            bytes: Some(bytes),
+            ..zenodo(name, None)
+        };
+        let long = "a".repeat(64);
+        let datasets = [
+            listed(&long, "http://127.0.0.1:18871/files/hello.txt", 6),
+            listed("nums", "http://127.0.0.1:18871/files/numbers.txt", 8909),
+        ];
+        assert_eq!(
+            table(&datasets, Some(80), UNICODE),
+            format!(
+                "{long}\n      http://127.0.0.1:18871/files/hello.txt    1 file · 6 B\n\
+                 nums  http://127.0.0.1:18871/files/numbers.txt  1 file · 8.7 KiB"
+            )
         );
     }
 
