@@ -317,7 +317,7 @@ against 5e18256c, each arm a binary of its own, 300 pairs interleaved in a seede
 | musl | 0.996 [0.988, 1.003] | 0.993 [0.985, 0.999] | 1.002 [0.994, 1.009] |
 | glibc | 0.976 [0.972, 0.980] | 0.996 [0.994, 1.001] | 1.002 [0.999, 1.006] |
 
-`bench/recheck.py` with its own fixtures per arm, 100 pairs for the 3-file sync and 20 for the status and settled sync of 100,000 files, against 5e18256c: musl 1.008 [0.995, 1.016] beside an a/a arm at 1.010 [0.994, 1.031], status 1.013 beside 1.013, sync 1.005 beside 0.996; glibc 0.996 [0.988, 1.005] beside 0.995. kept: the sync is back to 6ace5b2d's time on musl and below it on glibc, and the large states, which still go through the index, are flat.
+the release recheck, with its own fixtures per arm, 100 pairs for the 3-file sync and 20 for the status and settled sync of 100,000 files, against 5e18256c: musl 1.008 [0.995, 1.016] beside an a/a arm at 1.010 [0.994, 1.031], status 1.013 beside 1.013, sync 1.005 beside 0.996; glibc 0.996 [0.988, 1.005] beside 0.995. kept: the sync is back to 6ace5b2d's time on musl and below it on glibc, and the large states, which still go through the index, are flat.
 
 ### URL records in shards
 
@@ -429,7 +429,7 @@ below 16 MiB the survey takes the parent's path, the same reads in the same orde
 
 ### the release recheck after part four
 
-`bench/recheck.py` with its own fixtures for each arm on tmpfs, release builds of 6a580e98, the last of part four, against f03ffccd, the commit before it, musl and glibc, a byte-identical copy of f03ffccd's at another path as the a/a arm in the same rounds, the measured commands on cores 12–23 under the measure lock, beside 4 busy training processes as above:
+the release recheck, with its own fixtures for each arm on tmpfs, release builds of 6a580e98, the last of part four, against f03ffccd, the commit before it, musl and glibc, a byte-identical copy of f03ffccd's at another path as the a/a arm in the same rounds, the measured commands on cores 12–23 under the measure lock, beside 4 busy training processes as above:
 
 | case | libc | pairs | base | against the base | a/a arm | against the a/a arm | peak memory | a/a peak memory |
 |---|---|---:|---|---|---|---|---|---|

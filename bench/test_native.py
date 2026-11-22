@@ -205,12 +205,11 @@ if __name__ == "__main__":
 
 
 class RootTests(unittest.TestCase):
-    """native.py and recheck.py delete the src, www and work folders of their root, so they take
-    only a root that is new, empty or made by the same tool."""
+    """native.py deletes the src, www and work folders of its root, so it takes only a root that is
+    new, empty or made by the same tool."""
 
     def test_a_folder_the_tool_did_not_make_is_refused_untouched(self):
-        import recheck
-        for tool, main in [("native.py", native.main), ("recheck.py", recheck.main)]:
+        for tool, main in [("native.py", native.main)]:
             with self.subTest(tool=tool), tempfile.TemporaryDirectory() as folder:
                 root = Path(folder)
                 for name in ["src", "www", "work"]:
@@ -238,4 +237,4 @@ class RootTests(unittest.TestCase):
             (root / "www").mkdir()
             native.claim(root, "native.py")
             with self.assertRaises(SystemExit):
-                native.claim(root, "recheck.py")
+                native.claim(root, "another.py")

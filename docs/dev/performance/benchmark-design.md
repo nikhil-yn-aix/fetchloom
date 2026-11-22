@@ -10,7 +10,6 @@ Each part answers one question, and a case that answers none of them is not meas
 
 | Part | Question | How |
 |---|---|---|
-| A, before and after | How much faster and lighter is this release than the build it started from? | `bench/recheck.py`: fetchloom at the starting build against the candidate, on the same machine and files |
 | B, against other tools | For the jobs researchers do, how does fetchloom compare with the tools they use now, at the same politeness and with the same checked result? | `bench/run.py` in the lab: one shaped link, a local server, every tool in turn |
 | C, real services | Does fetchloom keep up with each repository's own tool against the real service? | `bench/live.py` against zenodo, hugging face, kaggle, figshare and dataverse |
 
@@ -92,14 +91,6 @@ A queue is set in time, not packets: the netem limit holds the profile's queue t
 
 ext4 runs every scenario on every link it applies to. xfs adds s5 and s6 on lan, where reflinks change reuse and no-op work.
 
-## Before and after
-
-Part A's `bench/recheck.py` times what a release must not slow down: a status, a settled sync and a cache check of 100,000 files, `path` beside them, `status --verify` of 512 MiB, placing 40,000 one-file datasets, an `add` of 1,000 links, a zip of 10,000 files, a 1 GiB `get`, a merge and an exclude across 1,000 datasets, and `--version`, `help` and a settled sync of 3 files. With `--links` it adds s1, s2r and s7 at home and on the poor link, through the lab, 10 rounds each.
-
-The arms are the starting build (fetchloom at d168842, main when this release's work began), the candidate, and the starting build's bytes again as the A/A arm; either build would be a valid noise control. Each arm runs a fresh copy of its binary and makes its own projects and caches from the same generated files, so no arm reads another's formats. The copies and each arm's folders go by the ids `arm0`, `arm1` and `arm2`. Every file a run downloads or places is checked after the clock stops and before its folder is cleared. The files it owes come from what it was asked for, read from the harness's own inputs before the clock starts: the links the place case's project was written with, the links given to `add`, the zip and the 1 GiB file. Each must sit at the path fetchloom's layout gives it in its dataset, named for `add` by the arm's own `data.toml`, and hold the bytes its source serves. A requested link with no dataset, a missing, wrong or misplaced file, or an empty expectation fails the run, so exit 0 alone is never a pass.
-
-The summary gives each case's failed runs and its time, CPU and peak memory ratio, arm over the starting build, with its 95% interval, read beside the A/A arm's: a shift both show is the machine. A comparison with a failed run shows no performance at all, and any failed run, a wrong file among them, makes the recheck exit nonzero.
-
 ## Real services
 
 `bench/live.py` fetches public datasets with fetchloom and with each service's own tool, interleaved: 10 rounds, the first in a seeded random order and each after it the other way round (ABBA), every run with empty caches.
@@ -158,7 +149,6 @@ These estimates come from earlier sizes and run times, and the timing pilot may 
 
 | Part | Time |
 |---|---|
-| A, before and after | About 2 hours |
 | B, against other tools | About 5 hours |
 | C, real services | About 1 hour |
 | The timing and noise pilots | About 1.5 hours |
