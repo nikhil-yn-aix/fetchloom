@@ -2016,10 +2016,12 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
         .find_map(|folder| made_by_sync(folder, name));
     match made {
         None => Ok(()),
-        Some(Made::Placed(dataset, alias)) => {
-            let placed = alias.map_or_else(String::new, |placed| {
-                format!(" which some disks take for {},", name::spelled(&placed))
-            });
+        Some(Made::Placed(dataset, recorded)) => {
+            let placed = if typed_as(&target, &recorded) {
+                String::new()
+            } else {
+                format!(" which some disks take for {},", name::spelled(&recorded))
+            };
             Err(Error::new(
                 Kind::Usage,
                 format!(
@@ -2042,9 +2044,8 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
 
 /// what a sync made in a project's data folder, as the project's state records it.
 enum Made {
-    /// a file it placed, by the dataset it placed it for, and the path the state records when
-    /// `-o` spells it another way.
-    Placed(String, Option<String>),
+    /// a file it placed, by the dataset it placed it for and the path the state records.
+    Placed(String, String),
     /// the .gitignore it keeps in a dataset's folder, by that folder's path in the project.
     Marker(String),
 }
@@ -2099,9 +2100,21 @@ fn made_in(project: &Project, folder: &Path, name: &str) -> Option<Made> {
     placed
         .chain(&state.copied.files)
         .next()
-        .map(|(placed, dataset)| {
-            Made::Placed(dataset.clone(), (*placed != path).then(|| placed.clone()))
-        })
+        .map(|(placed, dataset)| Made::Placed(dataset.clone(), placed.clone()))
+}
+
+/// whether `target`, the path `-o` names as typed, ends in `recorded`, a path in a project, spelled
+/// alike: a disk that ignores case finds the typed folder in the recorded spelling.
+fn typed_as(target: &Path, recorded: &str) -> bool {
+    let parts: Vec<&str> = recorded.split('/').collect();
+    let typed: Vec<std::path::Component<'_>> =
+        target.components().rev().take(parts.len()).collect();
+    typed.len() == parts.len()
+        && typed
+            .iter()
+            .rev()
+            .zip(&parts)
+            .all(|(typed, part)| typed.as_os_str() == std::ffi::OsStr::new(part))
 }
 
 /// the folders whose records could hold what `at`, a folder in `project`, names: `at` as written

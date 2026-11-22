@@ -3948,7 +3948,6 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
     let server = crate::support::Routes::start(vec![
         ("/iris.csv".to_owned(), file(b"a,b\n1,2\n", "\"i1\"")),
         ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
-        ("/caf%C3%A9.csv".to_owned(), file(b"dish\nsoup\n", "\"c1\"")),
     ])?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &format!("{}/iris.csv", server.url)])?;
@@ -4018,7 +4017,23 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
         assert_eq!(std::fs::read(work.join(path))?, before?, "{path}");
     }
     std::fs::remove_file(work.join("data/iris/data.toml"))?;
-    // a disk that ignores case and how unicode is composed takes these for the placed café.csv
+    let own = sandbox.run(&["get", &link, "-o", "data/iris/notes.txt"])?;
+    assert_eq!(own.status.code(), Some(0), "{}", text(&own.stderr)?);
+    Ok(())
+}
+
+/// a spelling that a disk ignoring case or how unicode is composed takes for a placed file is
+/// refused as that file is, and the refusal names the file as the state records it.
+#[test]
+fn o_never_writes_over_a_placed_file_spelled_another_way() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
+        ("/caf%C3%A9.csv".to_owned(), file(b"dish\nsoup\n", "\"c1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    let work = sandbox.work();
+    let link = format!("{}/hello.txt", server.url);
     let menu = format!("{}/caf%C3%A9.csv", server.url);
     let added = sandbox.run(&["add", &menu, "--as", "menu"])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
@@ -4040,9 +4055,33 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
             "{spelled}: {document}"
         );
     }
+    // a typed folder that leads to the recorded one, as a disk that ignores case finds `DATA` in
+    // `data`, still names the file as recorded
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink("data", work.join("Data"))?;
+        let args = [
+            "--json",
+            "get",
+            &link,
+            "-o",
+            "Data/menu/caf\u{e9}.csv",
+            "--force",
+        ];
+        let output = sandbox.command(&args).output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{document}");
+        assert!(
+            document["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(
+                    "Data/menu/caf\u{e9}.csv, which some disks take for data/menu/caf\u{e9}.csv"
+                )),
+            "{document}"
+        );
+        std::fs::remove_file(work.join("Data"))?;
+    }
     assert_eq!(server.requests().len(), asked, "nothing was asked for");
     assert_eq!(std::fs::read(work.join("data/menu/caf\u{e9}.csv"))?, placed);
-    let own = sandbox.run(&["get", &link, "-o", "data/iris/notes.txt"])?;
-    assert_eq!(own.status.code(), Some(0), "{}", text(&own.stderr)?);
     Ok(())
 }
