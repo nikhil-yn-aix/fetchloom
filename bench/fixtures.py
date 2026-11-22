@@ -19,16 +19,21 @@ import lab
 WARM = {"s5": "s2r", "s6": "s2r", "s9": "s3"}
 # the links each scenario runs on: the network cases on the links people have, the cases about the
 # machine's own work on lan, where the link adds nothing
-LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("home", "lan"), "s4": ("home",), "s5": ("lan",),
-         "s6": ("lan",), "s7": ("home", "poor"), "s8": ("home",), "s9": ("lan",), "s10": ("home",)}
+LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("lan",), "s4": ("home",), "s5": ("lan",),
+         "s6": ("lan",), "s7": ("home",), "s8": ("home",), "s9": ("lan",), "s10": ("home",)}
 # the scenarios that break into s1's download, by ctrl-c or by the link dropping
 BROKEN = ("s7", "s10")
 ALL_SCENARIOS = tuple(LINKS)
 # the cases whose every link answers with a 302 to the storage host, the commonest shape of a
 # repository's downloads
 REDIRECTED = ("s2r",)
-# the large file and the number of 100 KiB files on each link, sized so a transfer takes 20 to 60 s
-SIZES = {"lan": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (64 * 1024 * 1024, 200)}
+# the large file and the number of 100 KiB files on each link. the poor link's 3% loss slows every
+# tool far below its rate, so its sizes come from the runs measured on it, not from the rate
+SIZES = {"lan": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (4 * 1024 * 1024, 50)}
+# the only cases a claim comes from, as filesystem, link and scenario: each sets fetchloom against one
+# tool frozen from the pilot, and the eight share a 5% error
+HEADLINE = (("ext4", "home", "s1"), ("ext4", "poor", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"),
+            ("ext4", "lan", "s5"), ("ext4", "home", "s7"), ("ext4", "home", "s10"), ("ext4", "home", "s12"))
 # every member written on 2020-01-01, so an archive's bytes depend only on its members
 EPOCH = 1577836800
 
@@ -181,8 +186,7 @@ def build(case, seed):
 
 def prepare_native(case, fetchloom, names):
     """each named tool's project for the case, made outside the clock and kept until the fixture,
-    the harness or the fetchloom build changes; returns the case with the folder they are in. a name
-    such as fetchloom-arm1 is a project of its own that this fetchloom build locks."""
+    the harness or the fetchloom build changes; returns the case with the folder they are in."""
     root = lab.ROOT / "prepared" / case["key"]
     root.mkdir(parents=True, exist_ok=True)
     env = lab.environment()
@@ -192,7 +196,7 @@ def prepare_native(case, fetchloom, names):
                                                      ("key", "files", "members", "fixture_signature")}),
                          harness={name: sha256(Path(__file__).with_name(name)) for name in
                                   ("fixtures.py", "lab.py", "tools.py", "uv.lock")})
-        built = tool == "fetchloom" or tool.startswith("fetchloom-")
+        built = tool == "fetchloom"
         if built:
             signature["executable"] = sha256(fetchloom)
         if read_json(target / ".ready") == signature:

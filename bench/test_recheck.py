@@ -102,16 +102,6 @@ class MeasureTests(unittest.TestCase):
         self.assertIn("| status | candidate | 5 | 0/1 | failed | - | - | - | - |", text)
         self.assertIn("| status | aa | 6 | 0/0 | 1000.0 → 1000.0 ms | 1.000 [1.000, 1.000]", text)
 
-    def test_a_link_case_names_its_link_in_the_summary(self):
-        rows = [dict(kind="lab", tool=arm, scenario="s1", filesystem="ext4", profile=profile, round=n, warmup=False,
-                     status="passed", quick=False, count=1, file_size=8, wall_seconds=wall * (2 if profile == "poor" else 1),
-                     user_seconds=1, sys_seconds=0, maxrss_bytes=1 << 20)
-                for profile in ("home", "poor") for n in range(1, 6)
-                for arm, wall in (("fetchloom", 1.0), ("fetchloom+candidate", .9), ("fetchloom+aa", 1.0))]
-        text = recheck.summary(rows)
-        self.assertIn("| s1 home | candidate | 5 | 0/0 | 1000.0 → 900.0 ms | 0.900 [0.900, 0.900]", text)
-        self.assertIn("| s1 poor | candidate | 5 | 0/0 | 2000.0 → 1800.0 ms | 0.900 [0.900, 0.900]", text)
-
     def test_what_a_run_downloads_or_places_is_checked_after_the_clock_and_before_it_is_cleared(self):
         with tempfile.TemporaryDirectory() as folder:
             out = Path(folder)
@@ -302,60 +292,14 @@ class ServerTests(unittest.TestCase):
         self.assertTrue(all([step for step, _ in done[index:index + 3]] == ["prep", "run", "post"] for index in range(0, 18, 3)))
 
 
-class LinkTests(unittest.TestCase):
-    def test_each_link_case_runs_every_arm_on_a_project_its_own_build_locked(self):
-        prepared, ran, shaped = [], [], []
-
-        def built(spec, seed):
-            return dict(spec, key=f"{spec['profile']}-{spec['id']}", files=[], members=[])
-
-        def prepare(case, binary, names):
-            prepared.append((case["key"], Path(binary).name, names))
-            return case
-
-        def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run_id=None):
-            ran.append((case["profile"], case["id"], number, warmup, tool.name, tool.prepared_as, Path(tool.fetchloom).name, run_id))
-            workdir.mkdir(parents=True, exist_ok=True)
-
-        with tempfile.TemporaryDirectory() as folder:
-            root = Path(folder)
-            binaries = {arm: root / "bin" / recheck.FOLDERS[arm] for arm in recheck.ARMS}
-            with mock.patch.object(recheck.lab, "ROOT", root), mock.patch.object(recheck.lab, "profile", side_effect=shaped.append), \
-                 mock.patch.object(recheck.fixtures, "build", side_effect=built), \
-                 mock.patch.object(recheck.fixtures, "prepare_native", side_effect=prepare), \
-                 mock.patch.object(recheck.run, "one_run", side_effect=one_run), contextlib.redirect_stderr(io.StringIO()):
-                recheck.links(binaries, root / "out", seed=1729, rounds=2, cpus=None, timeout=60)
-            self.assertFalse((root / "fs/ext4/work").exists())
-        cases = [(profile, scenario) for profile in ("home", "poor") for scenario in ("s1", "s2r", "s7")]
-        self.assertEqual(shaped, [step for profile, _ in cases for step in ("lan", profile)])
-        self.assertEqual(prepared, [(f"{profile}-{scenario}", recheck.FOLDERS[arm], [f"fetchloom-{recheck.FOLDERS[arm]}"])
-                                    for profile, scenario in cases for arm in recheck.ARMS])
-        self.assertEqual(len(ran), 6 * 3 * 3)
-        for profile, scenario in cases:
-            runs = [entry for entry in ran if entry[:2] == (profile, scenario)]
-            for number in range(3):
-                self.assertEqual(sorted(entry[4] for entry in runs if entry[2] == number), sorted(recheck.ARMS))
-            self.assertEqual([entry[3] for entry in runs], [entry[2] == 0 for entry in runs])
-        # each arm syncs with its own binary, under its own name of one length
-        self.assertEqual({entry[4:7] for entry in ran},
-                         {(arm, f"fetchloom-{recheck.FOLDERS[arm]}", recheck.FOLDERS[arm]) for arm in recheck.ARMS})
-        self.assertEqual([entry[7] for entry in ran], [f"{n:06}" for n in range(1, len(ran) + 1)])
-
-
 class SettingTests(unittest.TestCase):
-    def test_link_cases_need_root_and_the_lab_before_anything_is_made(self):
+    def test_the_recheck_times_local_cases_alone_and_never_the_labs_links(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            argv = ["--baseline", "a", "--candidate", "b", "--root", str(root / "recheck"), "--links"]
-            with mock.patch.object(recheck.lab.os, "geteuid", return_value=1000), self.assertRaisesRegex(SystemExit, "the lab needs root"):
-                recheck.main(argv)
-            with mock.patch.object(recheck.lab.os, "geteuid", return_value=0), mock.patch.object(recheck.lab, "ROOT", root / "lab"), \
-                 contextlib.redirect_stderr(io.StringIO()) as said, self.assertRaises(SystemExit):
-                recheck.main(argv)
-            self.assertIn("--links needs the lab: run lab.py setup first", said.getvalue())
-            with contextlib.redirect_stderr(io.StringIO()) as said, self.assertRaises(SystemExit):
-                recheck.main(["--baseline", "a", "--candidate", "b", "--root", str(root / "recheck"), "--cases", ""])
-            self.assertIn("choose at least one case, or --links", said.getvalue())
+            for argv, said in ((["--links"], "unrecognized arguments: --links"), (["--cases", ""], "choose at least one case")):
+                with self.subTest(argv=argv), contextlib.redirect_stderr(io.StringIO()) as shown, self.assertRaises(SystemExit):
+                    recheck.main(["--baseline", "a", "--candidate", "b", "--root", str(root / "recheck"), *argv])
+                self.assertIn(said, shown.getvalue())
             self.assertFalse((root / "recheck").exists())
 
     def test_the_measured_environment_has_no_setting_of_the_shell(self):

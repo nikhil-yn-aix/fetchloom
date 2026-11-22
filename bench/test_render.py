@@ -258,15 +258,15 @@ def lab_meta(rows, rounds=None, **changes):
     return dict(dict(kind="lab", quick=False, cases=cases), **changes)
 
 
-def headline_rows(rounds=10, scenario="s1", profile="home", aa=(1,), **walls):
-    """ten full rounds of a case: fetchloom at 1 s, its a/a arm at the given walls in turn, and each
+def headline_rows(rounds=10, scenario="s1", profile="home", control=(1,), **walls):
+    """ten full rounds of a case: fetchloom at 1 s, its control arm at the given walls in turn, and each
     other tool at its own wall."""
     rows = []
     for number in range(1, rounds + 1):
         rows.append(lab_row(scenario=scenario, profile=profile, quick=False, round=number))
-        if aa:
-            rows.append(lab_row(scenario=scenario, profile=profile, quick=False, round=number, tool="fetchloom+aa",
-                                wall_seconds=aa[number % len(aa)]))
+        if control:
+            rows.append(lab_row(scenario=scenario, profile=profile, quick=False, round=number, tool="fetchloom+control",
+                                wall_seconds=control[number % len(control)]))
         rows += [lab_row(scenario=scenario, profile=profile, quick=False, round=number, tool=tool, wall_seconds=wall)
                  for tool, wall in walls.items()]
     return rows
@@ -510,15 +510,15 @@ class PageTests(Quiet):
     def test_a_verdict_gives_the_seconds_before_the_ratio(self):
         rows = headline_rows(curl=2, aria2c=1.5)
         page = self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
-        self.assertIn("| time over fetchloom's, 99.2% interval | verdict |", page)
+        self.assertIn("| time over fetchloom's, 99.375% interval | verdict |", page)
         self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
         # faster in these runs, but not the comparator frozen before them, so it only describes
         self.assertIn("| aria2c | 1.50 s | 1.50 s to 1.50 s | 1.50 [1.50, 1.50] | descriptive |", page)
-        self.assertIn("| fetchloom+aa | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | a/a arm, never a rival |", page)
+        self.assertIn("| fetchloom+control | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | control arm, never a rival |", page)
         # against the comparator frozen before the runs, though aria2c was faster in them
-        self.assertIn("\nverdict (headline, 99.2% interval): fetchloom 1.00 s against 2.00 s for curl, the comparator frozen "
+        self.assertIn("\nverdict (headline, 99.375% interval): fetchloom 1.00 s against 2.00 s for curl, the comparator frozen "
                       "before these runs; curl's time over fetchloom's is 2.00, interval 2.00 to 2.00: fetchloom faster.", page)
-        self.assertIn("the a/a arm, fetchloom against itself, came to 1.00, 95% interval 1.00 to 1.00.", page)
+        self.assertIn("the control arm, fetchloom run again, came to 1.00, 95% interval 1.00 to 1.00.", page)
 
     def test_a_no_op_says_what_each_tool_checks(self):
         page = self.render([lab_row(scenario="s6"), lab_row(scenario="s6", tool="pooch", wall_seconds=3)], dict(kind="lab", quick=True))
@@ -558,22 +558,25 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual((self.judged(rows, comparator="pooch")["rival"], self.judged(rows, comparator="pooch")["reason"]),
                          (None, "pooch, the frozen comparator, failed 1 of 10 runs"))
         self.assertEqual(self.judged(rows, comparator="dvc")["reason"], "dvc, the frozen comparator, did not run")
-        self.assertAlmostEqual(judged["level"], 1 - .05 / 6)
+        self.assertAlmostEqual(judged["level"], 1 - .05 / 8)
         aria2c = judged["comparisons"]["aria2c"]
         self.assertEqual((aria2c["pairs"], aria2c["word"]), (10, "fetchloom faster"))
         self.assertEqual([round(value, 9) for value in (aria2c["median_ratio"], *aria2c["interval"])], [1.5, 1.5, 1.5])
         self.assertEqual((judged["comparisons"]["pooch"]["failed"], judged["comparisons"]["pooch"]["word"]), (1, None))
 
-    def test_the_aa_arm_is_never_a_rival_and_its_noise_withholds_a_verdict_on_lan_and_home(self):
+    def test_the_control_arm_is_never_a_rival_and_its_noise_withholds_a_headline_verdict_without_loss(self):
         # on the poor link fetchloom against itself may spread as the network does, and is still no rival
-        judged = self.judged(headline_rows(scenario="s2r", profile="poor", aa=(.5,), curl=2), scenario="s2r", profile="poor",
+        judged = self.judged(headline_rows(scenario="s2r", profile="poor", control=(.5,), curl=2), scenario="s2r", profile="poor",
                              comparator="curl")
         self.assertEqual((judged["headline"], judged["rival"], judged["reason"]), (True, "curl", None))
-        noisy = self.judged(headline_rows(aa=(.8, 1.25), curl=2))
+        noisy = self.judged(headline_rows(control=(.8, 1.25), curl=2), comparator="curl")
         self.assertIsNone(noisy["rival"])
-        self.assertRegex(noisy["reason"], r"^the a/a arm's 95% interval, 0\.\d\d to 1\.\d\d, is not inside 0\.97 to 1\.03, so the machine was too noisy$")
-        alone = self.judged(headline_rows(scenario="s3", profile="lan", aa=(), curl=2), scenario="s3", profile="lan")
-        self.assertEqual((alone["rival"], alone["reason"]), (None, "no a/a arm measured this machine's noise"))
+        self.assertRegex(noisy["reason"], r"^the control arm's 95% interval, 0\.\d\d to 1\.\d\d, is not inside 0\.97 to 1\.03, so the machine was too noisy$")
+        alone = self.judged(headline_rows(control=(), curl=2), comparator="curl")
+        self.assertEqual((alone["rival"], alone["reason"]), (None, "no control arm measured this machine's noise"))
+        # the control runs in the headline cases alone, so a case that only describes needs none
+        described = self.judged(headline_rows(scenario="s3", profile="lan", control=(), curl=2), scenario="s3", profile="lan")
+        self.assertEqual((described["rival"], described["reason"], described["withheld"]), ("curl", None, None))
 
     def test_a_verdict_needs_ten_paired_rounds_and_a_fetchloom_that_never_failed(self):
         poor = self.judged(headline_rows(rounds=9, scenario="s2r", profile="poor", curl=2), scenario="s2r", profile="poor",
@@ -585,18 +588,18 @@ class VerdictTests(unittest.TestCase):
 
     def test_the_aa_gate_needs_every_round_passed_and_paired_and_withholds_every_verdict_of_its_case(self):
         rows = headline_rows(curl=2)
-        failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+aa", 4) else row for row in rows]
-        missing = [row for row in rows if (row["tool"], row["round"]) != ("fetchloom+aa", 10)]
+        failed = [dict(row, status="failed") if (row["tool"], row["round"]) == ("fetchloom+control", 4) else row for row in rows]
+        missing = [row for row in rows if (row["tool"], row["round"]) != ("fetchloom+control", 10)]
         for changed, planned, said in (
-                (failed, 10, "the a/a arm failed 1 of 10 runs, so it cannot measure this machine's noise"),
-                (missing, 10, "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise"),
-                (headline_rows(rounds=9, curl=2), 9, "the a/a arm has 9 paired rounds, fewer than 10, so it cannot measure this machine's noise")):
+                (failed, 10, "the control arm failed 1 of 10 runs, so it cannot measure this machine's noise"),
+                (missing, 10, "the control arm ran other rounds than fetchloom, so it cannot measure this machine's noise"),
+                (headline_rows(rounds=9, curl=2), 9, "the control arm has 9 paired rounds, fewer than 10, so it cannot measure this machine's noise")):
             judged = self.judged(changed, comparator="curl", planned=planned)
             self.assertEqual((judged["rival"], judged["reason"], judged["withheld"]), (None, said, said))
             # the table's verdicts are withheld too, though curl's interval alone would say fetchloom faster
             self.assertIsNone(judged["comparisons"]["curl"]["word"])
             self.assertEqual(render.said("curl", judged), "withheld")
-        # on the lossy link the a/a arm reports the network's spread and gates nothing
+        # on the lossy link the control arm reports the network's spread and gates nothing
         poor = self.judged([dict(row, scenario="s2r", profile="poor") for row in failed], scenario="s2r", profile="poor",
                            comparator="curl")
         self.assertEqual((poor["rival"], poor["withheld"]), ("curl", None))
@@ -614,10 +617,10 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(self.judged(cut, comparator="curl", planned=None)["reason"],
                          "its campaign's meta.json records no planned rounds for it")
         self.assertEqual(self.judged(cut, comparator="curl", planned=8)["reason"], "fetchloom ran rounds other than the 8 planned")
-        # fetchloom ran its plan, the a/a arm stopped short with the comparator: still no verdict
+        # fetchloom ran its plan, the control arm stopped short with the comparator: still no verdict
         short = [row for row in headline_rows(rounds=20, curl=2) if row["tool"] == "fetchloom" or row["round"] <= 10]
         self.assertEqual(self.judged(short, comparator="curl", planned=20)["withheld"],
-                         "the a/a arm ran other rounds than fetchloom, so it cannot measure this machine's noise")
+                         "the control arm ran other rounds than fetchloom, so it cannot measure this machine's noise")
 
     def test_a_run_over_the_budget_withholds_its_verdict_and_keeps_its_measurements(self):
         rows = headline_rows(curl=2, aria2c=1.5)
@@ -639,8 +642,8 @@ class VerdictTests(unittest.TestCase):
         rows = [dict(row, status="failed") if row["tool"] == "pooch" else dict(row, over_budget=True) if row["tool"] == "dvc" else row
                 for row in rows]
         rows += headline_rows(rounds=1, scenario="s3", profile="lan", datalad=.5)
-        # the a/a arm, faster than all, is fetchloom and never a comparator
-        rows += [lab_row(profile="home", quick=False, tool="fetchloom+aa", wall_seconds=.1, round=1)]
+        # the control arm, faster than all, is fetchloom and never a comparator
+        rows += [lab_row(profile="home", quick=False, tool="fetchloom+control", wall_seconds=.1, round=1)]
         self.assertEqual(render.pick([dict(row, warmup=False) for row in rows]), {"ext4/home/s1": "aria2c"})
 
     def test_campaigns_that_froze_different_comparators_cannot_be_read_as_one(self):
@@ -659,7 +662,7 @@ class VerdictTests(unittest.TestCase):
         rows = headline_rows(curl=2, aria2c=1.5, pooch=.5)
         judged = self.judged(rows, comparator="curl")
         self.assertEqual({tool: comparison["word"] for tool, comparison in judged["comparisons"].items()},
-                         {"fetchloom+aa": None, "curl": "fetchloom faster", "aria2c": None, "pooch": None})
+                         {"fetchloom+control": None, "curl": "fetchloom faster", "aria2c": None, "pooch": None})
         self.assertEqual([render.said(tool, judged) for tool in ("curl", "aria2c", "pooch")], ["fetchloom faster", "descriptive", "descriptive"])
         # a headline case with no comparator frozen before its runs has no verdict at all, nor any row
         unfrozen = self.judged(rows)
@@ -700,10 +703,12 @@ class WordingTests(unittest.TestCase):
             self.assertEqual(render.word(interval, "curl"), said, interval)
         self.assertEqual(render.no_bar(dict(failures=0, timeouts=0)), "skipped")
 
-    def test_six_headline_comparisons_share_a_five_percent_error(self):
-        self.assertEqual(len(render.HEADLINE), 6)
-        self.assertAlmostEqual(render.FAMILY, 1 - .05 / 6)
-        self.assertEqual((render.percent(render.FAMILY), render.percent(.95)), ("99.2%", "95%"))
+    def test_eight_headline_comparisons_share_a_five_percent_error(self):
+        self.assertEqual(sorted(render.HEADLINE), sorted([
+            ("ext4", "home", "s1"), ("ext4", "poor", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"),
+            ("ext4", "lan", "s5"), ("ext4", "home", "s7"), ("ext4", "home", "s10"), ("ext4", "home", "s12")]))
+        self.assertAlmostEqual(render.FAMILY, 1 - .05 / 8)
+        self.assertEqual((render.percent(render.FAMILY), render.percent(.95)), ("99.375%", "95%"))
 
 
 if __name__ == "__main__":

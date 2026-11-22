@@ -326,6 +326,62 @@ class ManyVariantTests(unittest.TestCase):
             self.assertEqual(*snapshots)
 
 
+class CampaignTests(unittest.TestCase):
+    """whole campaigns through run.main, with the lab and every client stood in for."""
+
+    def campaign(self, cases, *arguments):
+        """the meta.json and rows of a fetchloom campaign over these cases, every run passing."""
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        root = Path(folder.name)
+        (root / "owned.json").write_text("{}")
+        (root / "www").mkdir()
+        prepared = root / "prepared" / "fetchloom"
+        prepared.mkdir(parents=True)
+        for name in ("data.toml", "data.lock"):
+            (prepared / name).write_text(name)
+        payload = dict(name="payload.bin", size=3, url="https://lab.flb/payload.bin",
+                       sha256="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+        cases = [dict(dict(base=case["id"], quick=False, count=1, size=3, key=f"{case['profile']}-{case['id']}",
+                           server_dir=str(root / "www"), prepared=str(prepared.parent), members=[], files=[payload]), **case)
+                 for case in cases]
+
+        def measured(argv, cwd, env, logfile, *args, **kwargs):
+            (Path(cwd) / "data" / "f00000").mkdir(parents=True)
+            (Path(cwd) / "data" / "f00000" / "payload.bin").write_bytes(b"abc")
+            return dict(wall_seconds=1, user_seconds=1, sys_seconds=1, maxrss_bytes=1, exit_code=0, timeout=False)
+
+        argv = ["run.py", "--fetchloom", "/not-executed", "--only-tools", "fetchloom", "--fs", "ext4",
+                "--out", str(root / "results"), *arguments]
+        with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
+             mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
+             mock.patch.object(lab, "pin_server", return_value={}), \
+             mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
+             mock.patch.object(run, "metadata", side_effect=lambda *args: dict(commands={}, orders=[], cases=[])), \
+             mock.patch.object(run.os.path, "ismount", return_value=True), \
+             mock.patch.object(run.fixtures, "case_specs", return_value=cases), \
+             mock.patch.object(run.fixtures, "build", side_effect=lambda case, seed: case), \
+             mock.patch.object(run.fixtures, "prepare_native", side_effect=lambda case, *args: case), \
+             mock.patch.object(run, "measure", side_effect=measured), \
+             mock.patch.object(run, "settled_free_bytes", return_value=100), \
+             mock.patch.object(run, "free_bytes", return_value=97), \
+             mock.patch.object(run.lab, "flush"), mock.patch.object(run.time, "sleep"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(run.main(), 0)
+        meta = json.loads((root / "results" / "meta.json").read_text())
+        rows = [json.loads(line) for line in (root / "results" / "runs.jsonl").read_text().splitlines()]
+        return meta, rows
+
+    def test_the_control_arm_runs_in_the_headline_cases_alone(self):
+        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control", "--rounds", "2")
+        ran = {(row["scenario"], row["tool"]) for row in rows}
+        self.assertEqual(ran, {("s1", "fetchloom"), ("s1", "fetchloom+control"), ("s4", "fetchloom")})
+        control = [row for row in rows if row["tool"] == "fetchloom+control"]
+        self.assertEqual([row["round"] for row in control], [0, 1, 2])
+        self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
+        self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
+
+
 class HelperTests(unittest.TestCase):
     def test_a_deadline_is_a_finite_positive_number_of_seconds(self):
         self.assertEqual(run.positive_seconds("2.5"), 2.5)
@@ -825,8 +881,9 @@ class MainRefusalTests(unittest.TestCase):
     def test_a_campaign_that_cannot_be_measured_as_asked_never_starts(self):
         self.assertEqual(self.refused("--rounds", "0"), "run.py: error: rounds and timeout must be positive")
         self.assertEqual(self.refused("--out", "/elsewhere"), f"run.py: error: write results under {self.root}; copy them out after measurement")
-        self.assertEqual(self.refused("--variant", "a:FETCHLOOM_EXP_A=1", "--variant", "a:FETCHLOOM_EXP_B=1"),
-                         "run.py: error: each variant needs its own label")
+        for twice in (["--variant", "a:FETCHLOOM_EXP_A=1", "--variant", "a:FETCHLOOM_EXP_B=1"],
+                      ["--control", "--variant", "control:FETCHLOOM_EXP_A=1"]):
+            self.assertEqual(self.refused(*twice), "run.py: error: each variant needs its own label, and control is the control arm's")
         self.assertEqual(self.refused("--scenarios", "s3", "--profiles", "poor"),
                          "run.py: error: no cases match these scenario/profile combinations")
         self.assertEqual(self.refused(mounted=False), "run.py: error: ext4 is not mounted")

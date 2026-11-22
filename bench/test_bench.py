@@ -77,22 +77,22 @@ class FixtureTests(unittest.TestCase):
     def test_each_scenario_runs_on_the_links_of_the_design(self):
         cases = fixtures.case_specs(list(lab.PROFILES), fixtures.ALL_SCENARIOS, False)
         self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
-                         sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "home"),
-                                 ("s3", "lan"), ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"),
-                                 ("s7", "poor"), ("s8", "home"), ("s9", "lan"), ("s10", "home")]))
+                         sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "lan"),
+                                 ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"), ("s8", "home"),
+                                 ("s9", "lan"), ("s10", "home")]))
         sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
         self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
-        self.assertEqual(sized["s1", "poor"], (1, 64 * 1024 * 1024))
-        self.assertEqual(sized["s7", "poor"], sized["s1", "poor"])
+        # the poor link's sizes come from the runs measured on its loss
+        self.assertEqual(sized["s1", "poor"], (1, 4 * 1024 * 1024))
+        self.assertEqual(sized["s7", "home"], sized["s1", "home"])
         self.assertEqual(sized["s10", "home"], sized["s1", "home"])
         self.assertEqual(sized["s2r", "home"], (1000, 102400))
-        self.assertEqual(sized["s2r", "poor"], (200, 102400))
-        self.assertEqual(sized["s3", "home"], (10000, 4096))
-        # the resume keeps its whole file in a smoke run, on every link it runs on
+        self.assertEqual(sized["s2r", "poor"], (50, 102400))
+        self.assertEqual(sized["s3", "lan"], (10000, 4096))
+        # the resume keeps its whole file in a smoke run
         quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7", "s10"], True)}
         self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,
-                                 ("s7", "home"): 256 * 1024 * 1024, ("s7", "poor"): 64 * 1024 * 1024,
-                                 ("s10", "home"): 256 * 1024 * 1024})
+                                 ("s7", "home"): 256 * 1024 * 1024, ("s10", "home"): 256 * 1024 * 1024})
 
     def test_the_compressed_archive_runs_at_home_and_the_large_no_op_on_lan(self):
         cases = fixtures.case_specs(["lan", "home"], ["s8", "s9"], False)

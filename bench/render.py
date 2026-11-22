@@ -9,6 +9,7 @@ import re
 from statistics import median
 
 import ab
+import fixtures
 
 # what each network profile stands for, in words a reader knows from their own connection, in the
 # order the results lead with: the links most people have before the lab's own
@@ -181,15 +182,15 @@ def ordered(summaries):
 # the analysis plan, fixed before any data: a ratio is another tool's time over fetchloom's in the same
 # round, and its interval decides. even means the whole interval sits inside EVEN
 EVEN = (.95, 1.05)
-# fetchloom against itself, never a rival; on lan and home its interval must sit inside AA_GATE, or the
-# machine was too noisy for a verdict. on the lossy link its width is the network's own
-AA = "fetchloom+aa"
-AA_GATE = (.97, 1.03)
-GATED = ("lan", "home")
+# the control arm, the same fetchloom run again in each headline case, never a rival; on the links
+# without loss its interval must sit inside CONTROL_GATE, or the machine was too noisy for a verdict.
+# on the lossy link its width is the network's own
+CONTROL = "fetchloom+control"
+CONTROL_GATE = (.97, 1.03)
+GATED = ("lan", "home", "local")
 # the only cases a claim comes from, each fetchloom against one tool frozen from the pilot before
-# the runs: six comparisons sharing a 5% error, so 99.2% intervals each
-HEADLINE = (("ext4", "home", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"), ("ext4", "lan", "s5"),
-            ("ext4", "home", "s7"), ("ext4", "home", "s10"))
+# the runs: comparisons sharing a 5% error, bonferroni-adjusted
+HEADLINE = fixtures.HEADLINE
 FAMILY = 1 - .05 / len(HEADLINE)
 SEED = 1729
 
@@ -231,7 +232,7 @@ def standing(base, measured, comparison):
 
 def judge(case, runs, comparator=None):
     """a case's comparisons and verdict: each other tool's time over fetchloom's, rounds paired, at
-    99.2% in a headline case and 95% elsewhere; the a/a arm's 95% interval; and the one verdict, a
+    FAMILY in a headline case and 95% elsewhere; the control arm's 95% interval; and the one verdict, a
     headline case's against the comparator frozen before its runs, or the reason there is none. every
     other comparison only describes, as a case outside the headline set does against the fastest
     other tool that passed every run. a reason that holds for the whole case, such as a noisy
@@ -247,10 +248,10 @@ def judge(case, runs, comparator=None):
     for tool, measured in rounds.items():
         if tool == ab.BASE:
             continue
-        comparison = ab.paired(base, measured, level=.95 if tool == AA else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
+        comparison = ab.paired(base, measured, level=.95 if tool == CONTROL else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
         comparisons[tool] = dict(comparison, failed=sum(row.get("status") != "passed" for row in measured.values()),
                                  rounds=len(measured), unmet=standing(base, measured, comparison))
-    aa = comparisons.get(AA)
+    control = comparisons.get(CONTROL)
     own_failed = sum(row.get("status") != "passed" for row in base.values())
     if not base:
         withheld = "fetchloom did not run"
@@ -262,14 +263,16 @@ def judge(case, runs, comparator=None):
                     else f"fetchloom ran rounds other than the {planned} planned")
     elif own_failed:
         withheld = f"fetchloom failed {own_failed} of {len(base)} runs"
-    elif over_budget(base) or (AA in rounds and over_budget(rounds[AA])):
-        withheld = f"fetchloom {over_budget(base) or over_budget(rounds[AA])}, so no comparison is at the same politeness"
-    elif case["profile"] in GATED and aa is None:
-        withheld = "no a/a arm measured this machine's noise"
-    elif case["profile"] in GATED and aa["unmet"]:
-        withheld = f"the a/a arm {aa['unmet']}, so it cannot measure this machine's noise"
-    elif case["profile"] in GATED and not (AA_GATE[0] <= aa["interval"][0] and aa["interval"][1] <= AA_GATE[1]):
-        withheld = f"the a/a arm's 95% interval, {bounds(aa)}, is not inside {AA_GATE[0]} to {AA_GATE[1]}, so the machine was too noisy"
+    elif over_budget(base) or (CONTROL in rounds and over_budget(rounds[CONTROL])):
+        withheld = f"fetchloom {over_budget(base) or over_budget(rounds[CONTROL])}, so no comparison is at the same politeness"
+    elif headline and case["profile"] in GATED and control is None:
+        withheld = "no control arm measured this machine's noise"
+    elif headline and case["profile"] in GATED and control["unmet"]:
+        withheld = f"the control arm {control['unmet']}, so it cannot measure this machine's noise"
+    elif headline and case["profile"] in GATED and not (CONTROL_GATE[0] <= control["interval"][0]
+                                                         and control["interval"][1] <= CONTROL_GATE[1]):
+        withheld = (f"the control arm's 95% interval, {bounds(control)}, is not inside {CONTROL_GATE[0]} to {CONTROL_GATE[1]}, "
+                    "so the machine was too noisy")
     elif headline and comparator is None:
         withheld = "no comparator was frozen for it before its runs"
     else:
@@ -290,10 +293,10 @@ def judge(case, runs, comparator=None):
         reason = f"{named} {comparisons[rival]['unmet']}"
     else:
         reason = None
-    # only the frozen comparator's verdict is one of the six the 5% family error covers
+    # only the frozen comparator's verdict is one of the headline comparisons the 5% family error covers
     for tool, comparison in comparisons.items():
         comparison["word"] = word(comparison["interval"], tool) if headline and reason is None and tool == rival else None
-    return dict(headline=headline, level=level, comparisons=comparisons, aa=aa, reason=reason, withheld=withheld,
+    return dict(headline=headline, level=level, comparisons=comparisons, control=control, reason=reason, withheld=withheld,
                 rival=rival if reason is None else None, comparator=comparator if headline else None)
 
 
@@ -322,7 +325,7 @@ def frozen(metas):
 
 def pick(rows):
     """the comparator to freeze for each headline case a pilot measured: the fastest other tool that
-    passed every run within the budget, the a/a arm and fetchloom's variants never among them."""
+    passed every run within the budget, the control arm and fetchloom's variants never among them."""
     runs = defaultdict(lambda: defaultdict(list))
     for row in rows:
         if row.get("kind") == "lab" and not row.get("warmup") and "tool" in row:
@@ -344,8 +347,8 @@ def bounds(comparison):
 
 
 def percent(level):
-    """a confidence level as the page says it, such as 95% or 99.2%."""
-    return f"{100 * level:.1f}".removesuffix(".0") + "%"
+    """a confidence level as the page says it, such as 95% or 99.375%."""
+    return f"{100 * level:.3f}".rstrip("0").removesuffix(".") + "%"
 
 
 def hero(case):
@@ -773,8 +776,8 @@ def said(tool, judged):
     comparison = judged["comparisons"].get(tool)
     if comparison is None or comparison["failed"]:
         return ""
-    if tool == AA:
-        return "a/a arm, never a rival"
+    if tool == CONTROL:
+        return "control arm, never a rival"
     if tool.startswith(ab.BASE + "+"):
         return "fetchloom variant, never a rival"
     if judged["withheld"]:
@@ -785,7 +788,7 @@ def said(tool, judged):
 
 
 def verdict_lines(case):
-    """the case's verdict, the seconds before the ratio, or why it has none, and what the a/a arm saw;
+    """the case's verdict, the seconds before the ratio, or why it has none, and what the control arm saw;
     a case outside the headline set describes its fastest other tool instead, with no verdict."""
     judged = case["judged"]
     rival = judged["rival"]
@@ -799,10 +802,10 @@ def verdict_lines(case):
                     f"interval {bounds(comparison)}")
         lines = [f"\nverdict (headline, {percent(judged['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
                  else f"\ndescriptive, {percent(judged['level'])} interval, no verdict: {compared}."]
-    aa = judged["aa"]
-    if aa is not None and aa["interval"] is not None:
+    control = judged["control"]
+    if control is not None and control["interval"] is not None:
         noise = "" if case["profile"] in GATED else ", on this lossy link the network's own randomness"
-        lines.append(f"the a/a arm, fetchloom against itself, came to {aa['median_ratio']:.2f}, 95% interval {bounds(aa)}{noise}.")
+        lines.append(f"the control arm, fetchloom run again, came to {control['median_ratio']:.2f}, 95% interval {bounds(control)}{noise}.")
     return lines
 
 

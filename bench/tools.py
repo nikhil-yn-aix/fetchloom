@@ -12,6 +12,9 @@ import lab
 NOOP = ("s6", "s9")
 # the most requests any tool may have in flight to one host, fetchloom's own default
 BUDGET = 4
+# the control arm's label and settings: the same fetchloom again, under a setting it never reads, so
+# the spread between the two is the machine's own noise
+CONTROL = ("control", {"FETCHLOOM_EXP_NONE": "1"})
 
 
 def shell(argv):
@@ -170,20 +173,6 @@ class Variant(Fetchloom):
 
     def env(self, workdir):
         return {**super().env(workdir), **self.settings}
-
-
-class Build(Fetchloom):
-    """another fetchloom executable as an arm of its own, syncing a project its own build locked, as
-    the release recheck's baseline, candidate and a/a arms do; `folder` is its fixed-length id."""
-
-    def __init__(self, fetchloom, name, folder):
-        super().__init__(fetchloom)
-        self.name = name
-        self.folder = folder
-
-    @property
-    def prepared_as(self):
-        return f"fetchloom-{self.folder}"
 
 
 def variant(value):

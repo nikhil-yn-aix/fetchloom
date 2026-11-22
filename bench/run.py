@@ -578,6 +578,8 @@ def arguments():
                         help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
     parser.add_argument("--comparators", type=comparators_choice, default={},
                         help="the comparator each headline case froze from the pilot, from render.py --comparators")
+    parser.add_argument("--control", action="store_true",
+                        help="run fetchloom again in each headline case, as the control arm that measures this machine's noise")
     return parser
 
 
@@ -590,11 +592,12 @@ def campaign(parser, args):
         parser.error(f"write results under {lab.ROOT}; copy them out after measurement")
     if not (lab.ROOT / "owned.json").exists():
         parser.error("run lab.py setup first")
-    if len({label for label, _ in args.variant}) != len(args.variant):
-        parser.error("each variant needs its own label")
+    variants = args.variant + ([tools.CONTROL] if args.control else [])
+    if len({label for label, _ in variants}) != len(variants):
+        parser.error("each variant needs its own label, and control is the control arm's")
     lock = lab.exclusive()
     args.fetchloom = args.fetchloom.resolve()
-    adapters = tools.available(args.fetchloom, args.variant, args.only_tools)
+    adapters = tools.available(args.fetchloom, variants, args.only_tools)
     cases = [case for case in fixtures.case_specs(args.profiles, args.scenarios, args.quick)
              if any(tool.supports(case) for tool in adapters.values())]
     if not cases:
@@ -618,14 +621,23 @@ def rounds_of(args, profile):
     return 1 if args.quick else args.rounds or ROUNDS[profile]
 
 
+def eligible(adapters, fs, case):
+    """the adapters that measure a case: each tool that supports it, the control arm in a headline
+    case alone."""
+    control = f"{tools.Fetchloom.name}+{tools.CONTROL[0]}"
+    headline = (fs, case["profile"], case["id"]) in fixtures.HEADLINE
+    return {name: tool for name, tool in adapters.items() if tool.supports(case) and (headline or name != control)}
+
+
 def estimate(args, adapters, cases):
     """seconds of timed work plus warmups, for planning: a minute a run, 30 s an interrupted one and
     3 s a smoke run."""
     total = 0
-    for case in cases:
-        runs = (rounds_of(args, case["profile"]) + 1) * sum(tool.supports(case) for tool in adapters.values())
-        total += runs * (30 if case["id"] == "s7" else 3 if args.quick else 60)
-    return total * len(args.fs)
+    for fs in args.fs:
+        for case in cases:
+            runs = (rounds_of(args, case["profile"]) + 1) * len(eligible(adapters, fs, case))
+            total += runs * (30 if case["id"] == "s7" else 3 if args.quick else 60)
+    return total
 
 
 def measure_case(args, fs, specification, adapters, meta):
@@ -634,12 +646,12 @@ def measure_case(args, fs, specification, adapters, meta):
     meta_path = args.out / "meta.json"
     lab.profile("lan")
     case = fixtures.build(specification, args.seed)
-    eligible = {name: tool for name, tool in adapters.items() if tool.supports(case)}
+    measured = eligible(adapters, fs, case)
     print(f"preparing {fs}/{case['profile']}/{case['id']}", flush=True)
     preparation_errors = {}
-    for name in eligible:
+    for name in measured:
         try:
-            case = fixtures.prepare_native(case, args.fetchloom, [eligible[name].prepared_as])
+            case = fixtures.prepare_native(case, args.fetchloom, [measured[name].prepared_as])
         except Exception as error:
             preparation_errors[name] = f"native preparation failed: {error}"
     rounds = rounds_of(args, case["profile"])
@@ -650,7 +662,7 @@ def measure_case(args, fs, specification, adapters, meta):
     rng = case_rng(args.seed, fs, case)
     failures = 0
     for number in range(rounds + 1):
-        order = list(eligible)
+        order = list(measured)
         rng.shuffle(order)
         meta["orders"].append(dict(filesystem=fs, profile=case["profile"], scenario=case["id"], round=number, tools=order))
         write_metadata(meta_path, meta)
@@ -664,7 +676,7 @@ def measure_case(args, fs, specification, adapters, meta):
                 append(args.out / "runs.jsonl", row)
             else:
                 meta["runs"] = meta.get("runs", 0) + 1
-                row = one_run(eligible[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus,
+                row = one_run(measured[name], case, workdir, args.out, number, number == 0, args.timeout, cpus=args.cpus,
                               run_id=f"{meta['runs']:06}")
             meta["commands"][f"{fs}/{case['profile']}/{case['id']}/{name}"] = row.get("command")
             failures += row["status"] != "passed"
