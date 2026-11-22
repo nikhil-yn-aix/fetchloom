@@ -96,6 +96,9 @@ pub(crate) struct Output {
     /// what this run said once, by key: a line many paths reach, such as each open of the cache,
     /// that a run says only the first time.
     once: Mutex<std::collections::HashSet<String>>,
+    /// lines told only once another line follows, as a dry run's `Would start`, which a run that
+    /// fails first never says.
+    pending: Mutex<Vec<String>>,
     /// every line told, in the order it went out, for tests.
     #[cfg(test)]
     said: Mutex<Vec<String>>,
@@ -403,6 +406,7 @@ impl Output {
             moment: progress::moment(),
             closing: Mutex::new((None, false)),
             once: Mutex::default(),
+            pending: Mutex::default(),
             #[cfg(test)]
             said: Mutex::new(Vec::new()),
             #[cfg(test)]
@@ -440,6 +444,18 @@ impl Output {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .contains(key)
+    }
+
+    /// [`Output::step`] told only once another line follows, before it, so a run that fails
+    /// first never says it: what a dry run would do before what it would do first.
+    pub(crate) fn step_before_next(&self, verb: &str, text: &str) {
+        if self.tells(Level::Normal) {
+            let line = verb_line(verb, text, verb_color(verb), self.style.color);
+            self.pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(line);
+        }
     }
 
     /// a finished step: a right-aligned verb, then the facts.
@@ -713,6 +729,18 @@ impl Output {
         }
     }
 
+    /// [`Output::hint`] told only once another line follows, after the lines waiting so, as
+    /// [`Output::step_before_next`] tells them.
+    pub(crate) fn hint_before_next(&self, text: &str) {
+        if self.shows_hints() {
+            let line = hint_line(text, self.style.color);
+            self.pending
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(line);
+        }
+    }
+
     /// whether a hint would print, so work done only to find one can be skipped.
     pub(crate) fn shows_hints(&self) -> bool {
         self.hints && self.tells(Level::Normal)
@@ -947,6 +975,11 @@ impl Output {
     /// a failure: the sentence, its supporting lines, and what to do next. a cancel the person
     /// chose, or a stop they asked for, is one line of what was cancelled or where it stopped.
     pub(crate) fn error(&self, error: &Error) {
+        // what a step told before the next line would have led to never came
+        self.pending
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clear();
         if !self.json {
             self.line(&failure_text(error, self.level, self.style.color));
         }
@@ -1599,10 +1632,15 @@ impl Output {
     }
 
     fn line(&self, text: &str) {
+        let pending =
+            std::mem::take(&mut *self.pending.lock().unwrap_or_else(PoisonError::into_inner));
         // a name withheld from a command that reached a line no help went through is named under it
         let (text, named) = crate::suggested::withheld(text);
         let text = crate::suggested::marks_written_out(&text);
-        let lines: Vec<String> = std::iter::once(self.prepared(&text))
+        let lines: Vec<String> = pending
+            .iter()
+            .map(|line| self.prepared(line))
+            .chain(std::iter::once(self.prepared(&text)))
             .chain(
                 named
                     .iter()

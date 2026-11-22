@@ -666,12 +666,14 @@ fn tell_would_start(context: &Context, root: &Path, home: Option<&Path>) {
         };
         format!(", around {projects} in {}", units::listed(&named, "and"))
     };
-    output.step(
+    // a dry run that fails first, as on a typo, would start nothing, so it says so only with what
+    // it would do next
+    output.step_before_next(
         "Would start",
         &format!("a project in {}{around}", units::path(root)),
     );
     if let Some((_, question)) = start_asked(root, home, &below).filter(|_| !context.yes) {
-        output.hint(&format!(
+        output.hint_before_next(&format!(
             "without --dry-run, the add asks first: {} [y/N]",
             question.replace('\n', " ")
         ));

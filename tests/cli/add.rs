@@ -2015,6 +2015,24 @@ fn get_with_a_typo_in_an_id_gets_the_command_meant_too() -> Result {
     Ok(())
 }
 
+/// a dry run that fails first, as on a typo, says nothing of a project it would have started.
+#[cfg(debug_assertions)]
+#[test]
+fn a_dry_run_that_fails_first_never_says_it_would_start_a_project() -> Result {
+    let sandbox = Sandbox::new()?;
+    let (hub, kaggle) = typo_sources("401 Unauthorized")?;
+    let output = sandbox
+        .command(&["add", "hf:datasets/scikit-learn/irsi", "--dry-run"])
+        .env("FETCHLOOM_TEST_HF_API", &hub.url)
+        .env("FETCHLOOM_TEST_KAGGLE_API", &kaggle.url)
+        .output()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(10), "{stderr}");
+    assert!(stderr.contains("did you mean"), "{stderr}");
+    assert!(!stderr.contains("Would start"), "{stderr}");
+    Ok(())
+}
+
 /// a typo of a public name ends with the command meant at a terminal, and asks nothing.
 #[cfg(all(debug_assertions, target_os = "linux"))]
 #[test]
