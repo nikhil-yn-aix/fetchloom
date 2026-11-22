@@ -15,7 +15,7 @@ import lab
 
 SCENARIOS = ("s3", "s5", "s6")
 DEFAULT_CASES = tuple(f"ext4/lan/{scenario}" for scenario in SCENARIOS)
-# the variant an a/a campaign compares with the plain build, as campaign_command names it
+# the variant an a/a run compares with the plain build, as aa_command names it
 AA = "fetchloom+aa"
 
 
@@ -35,8 +35,8 @@ def case_choice(value):
     return value
 
 
-def campaign_command(binary, output, cpus, rounds, seed, case=None):
-    """the run.py command of an a/a campaign: plain fetchloom against itself under a setting
+def aa_command(binary, output, cpus, rounds, seed, case=None):
+    """the run.py command of an a/a run: plain fetchloom against itself under a setting
     nothing reads."""
     fs, profile, scenarios = case.split("/") if case else ("ext4", "lan", ",".join(SCENARIOS))
     return [sys.executable, "-B", str(Path(__file__).with_name("run.py")), "--fetchloom", str(binary),
@@ -97,10 +97,10 @@ def stop(process, signum=signal.SIGTERM):
     lab.end_group(process.pid)
 
 
-def campaign_case(args, output, load=None, case=None):
-    """one case's a/a campaign, failing when it fails or the compiler load ends during it; returns
+def aa_case(args, output, load=None, case=None):
+    """one case's a/a run, failing when it fails or the compiler load ends during it; returns
     its ab.compare results."""
-    command = campaign_command(args.fetchloom, output, args.cpus, args.rounds, args.seed, case)
+    command = aa_command(args.fetchloom, output, args.cpus, args.rounds, args.seed, case)
     log_path = args.out / f"{output.parent.name}-{output.name}.log"
     with log_path.open("w") as log:
         process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -123,20 +123,20 @@ def campaign_case(args, output, load=None, case=None):
     return ab.compare(rows, seed=args.seed)
 
 
-def campaign(args, output, load=None):
-    """every chosen case's a/a campaign, each in its own folder under output."""
+def aa_runs(args, output, load=None):
+    """every chosen case's a/a run, each in its own folder under output."""
     results = []
     for case in args.cases:
         print(f"{output.name}: {case}", flush=True)
-        results.extend(campaign_case(args, output / case.replace("/", "-"), load, case))
+        results.extend(aa_case(args, output / case.replace("/", "-"), load, case))
     return results
 
 
 def noise_reference(noise):
-    """each case's a/a result in the noise file, which is `ab.py --json` output of a quiet a/a campaign."""
+    """each case's a/a result in the noise file, which is `ab.py --json` output of a quiet a/a run."""
     results = noise.get("results") if isinstance(noise, dict) else None
     if not isinstance(results, list):
-        raise ValueError("the noise file must be ab.py --json output of a quiet a/a campaign")
+        raise ValueError("the noise file must be ab.py --json output of a quiet a/a run")
     return {r["case"]: r for r in results if r.get("variant") == AA}
 
 
@@ -144,13 +144,13 @@ def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=
     """each case's quiet and loaded a/a results judged against the noise file; a case passes with
     no reasons against it."""
     reference = noise_reference(noise)
-    campaigns = [{r["case"]: r for r in records if r["variant"] == AA}
+    sides = [{r["case"]: r for r in records if r["variant"] == AA}
                  for records in (quiet, loaded)]
     results = []
     for key in cases:
         if key not in reference:
             raise ValueError(f"the noise file has no a/a result for {key}")
-        results.append(judge(key, reference[key]["metrics"]["wall"], [records[key] for records in campaigns],
+        results.append(judge(key, reference[key]["metrics"]["wall"], [records[key] for records in sides],
                              effect=effect, noise_multiple=noise_multiple, rounds=rounds))
     return results
 
@@ -217,7 +217,7 @@ def bias(wall):
 
 
 def check(args):
-    """an a/a campaign per case on a quiet island, then beside a compiler load, both judged against
+    """an a/a run per case on a quiet island, then beside a compiler load, both judged against
     the noise file into island.json; 0 only when every case passes."""
     lab.require_root()
     args.cases = args.cases or list(DEFAULT_CASES)
@@ -256,7 +256,7 @@ def check(args):
                   build_commands=build_commands(args.cargo, args.target, args.jobs), passed=False)
     load = None
     try:
-        quiet = campaign(args, args.out / "quiet-island")
+        quiet = aa_runs(args, args.out / "quiet-island")
         ready = args.out / "build-ready.json"
         command = [sys.executable, "-B", str(Path(__file__).resolve()), "build-load", "--cpus",
                    ",".join(map(str, args.build_cpus)), "--worktree", str(args.worktree),
@@ -273,7 +273,7 @@ def check(args):
             report["build_start"] = json.loads(ready.read_text())
             if report["build_start"]["cpu_affinity"] != list(args.build_cpus):
                 raise RuntimeError("compiler load has the wrong CPU affinity")
-            loaded = campaign(args, args.out / "loaded-island", load)
+            loaded = aa_runs(args, args.out / "loaded-island", load)
             report["build_end"] = json.loads(ready.read_text())
         report["cases"] = compare_noise(quiet, loaded, noise, effect=args.effect,
                                        noise_multiple=args.noise_multiple, rounds=args.rounds, cases=args.cases)

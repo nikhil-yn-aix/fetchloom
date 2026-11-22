@@ -378,11 +378,11 @@ class ManyVariantTests(unittest.TestCase):
             self.assertEqual(*snapshots)
 
 
-class CampaignTests(unittest.TestCase):
-    """whole campaigns through run.main, with the lab and every client stood in for."""
+class WholeRunTests(unittest.TestCase):
+    """whole runs through run.main, with the lab and every client stood in for."""
 
-    def campaign(self, cases, *arguments, comparators=None, pinned=None):
-        """the meta.json and rows of a campaign over these cases, fetchloom's alone unless --only-tools
+    def whole_run(self, cases, *arguments, comparators=None, pinned=None):
+        """the meta.json and rows of a whole run over these cases, fetchloom's alone unless --only-tools
         says otherwise, every run passing."""
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
@@ -434,7 +434,7 @@ class CampaignTests(unittest.TestCase):
         return meta, rows
 
     def test_the_control_arm_runs_in_the_headline_cases_alone(self):
-        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control", "--rounds", "2")
+        meta, rows = self.whole_run([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control", "--rounds", "2")
         ran = {(row["scenario"], row["tool"]) for row in rows}
         self.assertEqual(ran, {("s1", "fetchloom"), ("s1", "fetchloom+control"), ("s4", "fetchloom")})
         control = [row for row in rows if row["tool"] == "fetchloom+control"]
@@ -442,19 +442,19 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
 
-    def test_a_campaign_records_what_each_run_and_each_case_cost_and_shrinks_the_poor_link_as_asked(self):
+    def test_a_whole_run_records_what_each_run_and_each_case_cost_and_shrinks_the_poor_link_as_asked(self):
         with mock.patch.object(run.time, "monotonic", side_effect=(float(n) for n in range(10_000))):
-            meta, rows = self.campaign([dict(id="s1", profile="poor")], "--rounds", "1", "--no-warmup")
+            meta, rows = self.whole_run([dict(id="s1", profile="poor")], "--rounds", "1", "--no-warmup")
         self.assertTrue(all(row["run_seconds"] > 0 for row in rows))
         self.assertGreater(meta["cases"][0]["prepared_seconds"], 0)
-        self.campaign([dict(id="s1", profile="poor")], "--rounds", "1", "--poor-scale", ".5")
+        self.whole_run([dict(id="s1", profile="poor")], "--rounds", "1", "--poor-scale", ".5")
         self.assertEqual(self.specs.call_args.args[3], .5)
         for bad in ("0", "1.5", "nan", "half"):
             with self.subTest(bad=bad), self.assertRaises(argparse.ArgumentTypeError):
                 run.scale_choice(bad)
 
     def test_a_pilot_runs_one_round_of_every_case_and_tool_with_no_warmup(self):
-        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
+        meta, rows = self.whole_run([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
                                    "--only-tools", "fetchloom,curl", "--rounds", "1", "--no-warmup")
         self.assertEqual(sorted((row["scenario"], row["tool"], row["round"], row["warmup"]) for row in rows),
                          [("s1", "curl", 1, False), ("s1", "fetchloom", 1, False), ("s1", "fetchloom+control", 1, False),
@@ -463,13 +463,13 @@ class CampaignTests(unittest.TestCase):
 
     def test_the_lab_server_runs_on_cpus_apart_from_the_measured_commands(self):
         pinned = mock.Mock(return_value={"41": [0]})
-        meta, rows = self.campaign([dict(id="s4", profile="home")], "--rounds", "1", "--cpus", "1", "--server-cpus", "0", pinned=pinned)
+        meta, rows = self.whole_run([dict(id="s4", profile="home")], "--rounds", "1", "--cpus", "1", "--server-cpus", "0", pinned=pinned)
         pinned.assert_called_once_with((0,))
         self.assertEqual({tuple(row["cpu_affinity"]) for row in rows if "cpu_affinity" in row} | {tuple(meta["cpu_affinity"])}, {(1,)})
         self.assertEqual(meta["nginx_cpu_affinity"], {"41": [0]})
 
     def test_every_arm_runs_five_rounds_and_a_headline_verdicts_arms_ten(self):
-        meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
+        meta, rows = self.whole_run([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
                                    "--only-tools", "fetchloom,curl,aria2c", comparators={"ext4/home/s1": "curl"})
         ran = {}
         for row in rows:
@@ -484,11 +484,11 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s1" and order["round"] > 5},
                          {("curl", "fetchloom", "fetchloom+control")})
         # two comparators frozen within 5% of each other both run on
-        meta, rows = self.campaign([dict(id="s1", profile="home")], "--control", "--only-tools", "fetchloom,curl,aria2c",
+        meta, rows = self.whole_run([dict(id="s1", profile="home")], "--control", "--only-tools", "fetchloom,curl,aria2c",
                                    comparators={"ext4/home/s1": ["aria2c", "curl"]})
         self.assertEqual(meta["cases"][0]["arm_rounds"], {"fetchloom": 10, "curl": 10, "aria2c": 10, "fetchloom+control": 10})
         # --rounds sets every arm's count alike
-        meta, rows = self.campaign([dict(id="s1", profile="home")], "--control", "--rounds", "3")
+        meta, rows = self.whole_run([dict(id="s1", profile="home")], "--control", "--rounds", "3")
         self.assertEqual(sorted({(row["tool"], max(r["round"] for r in rows if r["tool"] == row["tool"])) for row in rows}),
                          [("fetchloom", 3), ("fetchloom+control", 3)])
 
@@ -1101,7 +1101,7 @@ class ComparatorTests(unittest.TestCase):
             with self.assertRaisesRegex(argparse.ArgumentTypeError, "cannot read the frozen comparators"):
                 run.comparators_choice(str(Path(folder) / "absent.json"))
 
-    def test_the_frozen_comparators_are_in_the_campaign_record(self):
+    def test_the_frozen_comparators_are_in_the_run_record(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             (root / "owned.json").write_text("{}")
@@ -1131,7 +1131,7 @@ class MainRefusalTests(unittest.TestCase):
         self.assertEqual(stopped.exception.code, 2)
         return said.getvalue().splitlines()[-1]
 
-    def test_a_campaign_that_cannot_be_measured_as_asked_never_starts(self):
+    def test_a_run_that_cannot_be_measured_as_asked_never_starts(self):
         self.assertEqual(self.refused("--rounds", "0"), "run.py: error: rounds and timeout must be positive")
         self.assertEqual(self.refused("--out", "/elsewhere"), f"run.py: error: write results under {self.root}; copy them out after measurement")
         for twice in (["--variant", "a:FETCHLOOM_EXP_A=1", "--variant", "a:FETCHLOOM_EXP_B=1"],

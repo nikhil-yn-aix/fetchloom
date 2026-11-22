@@ -16,7 +16,7 @@ fixtures are generated under `ROOT/www` and served from `127.0.0.1` over HTTP wi
 
 preparation locks each scenario once per build, outside timing, then removes that preparation cache. each round runs both builds in a seeded random order, with an empty cache per build:
 
-| phase | command and state |
+| step | command and state |
 |---|---|
 | cold | `fetchloom -q --yes sync` in a fresh project |
 | warm | the same command in a second fresh project, with the cache retained |
@@ -46,7 +46,7 @@ the child environment is inherited, apart from `FETCHLOOM_CACHE` and removal of 
 
 ## results and limits
 
-`native.json` retains phase wall times, settings, machine information and executable SHA-256s. `native.md` contains the summary table. filesystem and Defender probes are best effort; unavailable or localized system output can leave fields empty, so record the actual volume and protection settings separately.
+`native.json` retains each step's wall time, settings, machine information and executable SHA-256s. `native.md` contains the summary table. filesystem and Defender probes are best effort; unavailable or localized system output can leave fields empty, so record the actual volume and protection settings separately.
 
 the ratio is the exponential of the median paired log ratio, candidate over baseline. its 95% percentile bootstrap interval uses 20,000 resamples through `bench/ab.py`. with at least three positive pairs, an interval wholly below 1 says `candidate faster`, wholly above 1 says `candidate slower`, and otherwise says `no clear difference`. this is not the linux a/b runner's minimum-pair or effect-size acceptance gate.
 

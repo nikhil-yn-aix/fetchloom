@@ -10,7 +10,7 @@ def lab(scenario, profile, tool, seconds, filesystem="ext4"):
 
 
 class ProjectionTests(unittest.TestCase):
-    def test_each_pilot_run_counts_as_many_times_as_the_campaign_runs_its_arm(self):
+    def test_each_pilot_run_counts_as_many_times_as_the_real_run_runs_its_arm(self):
         rows = [lab("s1", "home", "fetchloom", 36), lab("s1", "home", "fetchloom+control", 36), lab("s1", "home", "curl", 72),
                 lab("s1", "home", "pooch", 144), lab("s3", "lan", "fetchloom", 36), lab("s13", "local", "pooch", 360),
                 dict(kind="live", service="zenodo", tool="fetchloom", round=1, status="passed", run_seconds=36),

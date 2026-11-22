@@ -246,7 +246,7 @@ def judge(case, runs, comparators=None, level=FAMILY):
     `level` in a headline case and 95% elsewhere; the control arm's 95% interval; and a headline case's
     verdict against each comparator frozen before its runs, or the reason there is none. every other
     comparison only describes, as a case outside the headline set does against the fastest other tool
-    that passed every run. a reason that holds for the whole case, such as a noisy machine, a campaign
+    that passed every run. a reason that holds for the whole case, such as a noisy machine, a run
     cut short of the rounds it planned or no frozen comparator, withholds every verdict."""
     if isinstance(comparators, str):
         comparators = [comparators]
@@ -270,9 +270,9 @@ def judge(case, runs, comparators=None, level=FAMILY):
     if not base:
         withheld = "fetchloom did not run"
     elif plan is None:
-        withheld = "its campaign's meta.json records no planned rounds for it"
+        withheld = "its run's meta.json records no planned rounds for it"
     elif base.keys() != plan:
-        # a campaign stopped early stops every arm alike, so its rounds still pair; only the plan shows it
+        # a run stopped early stops every arm alike, so its rounds still pair; only the plan shows it
         withheld = (f"fetchloom ran {len(base)} of the {planned} planned rounds" if base.keys() < plan
                     else f"fetchloom ran rounds other than the {planned} planned")
     elif own_failed:
@@ -318,7 +318,7 @@ def judge(case, runs, comparators=None, level=FAMILY):
 
 
 def planned(metas):
-    """the measured rounds each case's campaign planned before its runs, from its meta.json, as
+    """the measured rounds each case's whole run planned before its runs, from its meta.json, as
     fs/profile/scenario."""
     return {f"{case['filesystem']}/{case['profile']}/{case['id']}": case.get("rounds")
             for meta in metas for case in meta.get("cases") or []}
@@ -326,8 +326,8 @@ def planned(metas):
 
 def frozen(metas):
     """the comparators each headline case was frozen with before its runs, from the meta.json of the
-    lab campaign that measured it, so one a later chunk recorded never judges it; ValueError when
-    two campaigns froze different ones for a case."""
+    lab run that measured it, so one a later chunk recorded never judges it; ValueError when
+    two runs froze different ones for a case."""
     chosen, recorded = {}, {}
     for meta in metas:
         cases = meta.get("cases")
@@ -335,7 +335,7 @@ def frozen(metas):
         for case, tools in (meta.get("comparators") or {}).items():
             tools = [tools] if isinstance(tools, str) else list(tools)
             if recorded.setdefault(case, tools) != tools:
-                raise ValueError(f"lab campaigns froze different comparators for {case}; render them separately")
+                raise ValueError(f"lab runs froze different comparators for {case}; render them separately")
             if not cases or case in own:
                 chosen[case] = tools
     return chosen
@@ -475,8 +475,8 @@ def load_results(results):
     all_rows, metas = [], []
     live_origins = {}
     for path in paths:
-        meta, records = read_campaign(path)
-        # a case's plan is read from the campaign that lists it, so its rows must be that campaign's
+        meta, records = read_whole_run(path)
+        # a case's plan is read from the run that lists it, so its rows must be that run's
         listed = {(case.get("filesystem"), case.get("profile"), case.get("id")) for case in meta.get("cases") or []}
         datasets = {dataset["service"]: dataset for dataset in meta.get("datasets", [])}
         if len(datasets) != len(meta.get("datasets", [])):
@@ -488,7 +488,7 @@ def load_results(results):
             if row.get("kind") != meta["kind"] or row.get("quick") != meta["quick"]:
                 raise ValueError(f"mixed benchmark conditions in {path}")
             if listed and row["kind"] == "lab" and (row.get("filesystem"), row.get("profile"), row.get("scenario")) not in listed:
-                raise ValueError(f"a row of a case its campaign never listed in {path}")
+                raise ValueError(f"a row of a case its run never listed in {path}")
             if "tool" not in row:
                 if meta["kind"] == "live" and row.get("status") == "skipped":
                     continue
@@ -506,7 +506,7 @@ def load_results(results):
     return all_rows, sorted(metas, key=lambda meta: meta.get("date", ""))
 
 
-def read_campaign(path):
+def read_whole_run(path):
     """the metadata beside a runs.jsonl and its rows; ValueError when the metadata is missing or
     names no kind and no quick setting."""
     meta_path = path.with_name("meta.json")
@@ -514,16 +514,16 @@ def read_campaign(path):
         raise ValueError(f"missing metadata for {path}")
     meta = json.loads(meta_path.read_text())
     if not isinstance(meta, dict) or meta.get("kind") not in ("lab", "live") or not isinstance(meta.get("quick"), bool):
-        raise ValueError(f"invalid campaign metadata in {meta_path}")
+        raise ValueError(f"invalid run metadata in {meta_path}")
     return meta, [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
 
 
 def check_live(row, path, datasets, origins):
-    """ValueError unless a live row comes from the one campaign of its service and matches that
-    campaign's reference dataset; records the campaign in origins."""
+    """ValueError unless a live row comes from the one run of its service and matches that
+    run's reference dataset; records the run in origins."""
     service = row["service"]
     if service in origins and origins[service] != path:
-        raise ValueError(f"live service {service} was measured twice; render campaigns separately")
+        raise ValueError(f"live service {service} was measured twice; render runs separately")
     origins[service] = path
     dataset = datasets.get(service)
     if dataset is None or not dataset.get("expected_sha256"):
@@ -551,13 +551,13 @@ def group(rows, metas):
         key = (row["scenario"], row["profile"], row["filesystem"])
         condition = (row.get("quick"), row.get("count"), row.get("file_size"))
         if conditions.setdefault(key, condition) != condition:
-            raise ValueError(f"mixed benchmark conditions for {key}; render campaigns separately")
+            raise ValueError(f"mixed benchmark conditions for {key}; render runs separately")
         lab[key][row["tool"]].append(row)
-    campaigns = [meta for meta in metas if meta.get("kind") == "lab"]
-    check_chunks(campaigns)
-    comparators = frozen(campaigns)
+    lab_runs = [meta for meta in metas if meta.get("kind") == "lab"]
+    check_chunks(lab_runs)
+    comparators = frozen(lab_runs)
     level = family(comparators)
-    plans = planned(campaigns)
+    plans = planned(lab_runs)
     shaping = network_profiles(metas)
     cases = []
     for scenario, profile, fs in sorted(lab, key=lambda key: (lead(key[1]), key)):
@@ -581,7 +581,7 @@ def group(rows, metas):
 
 def live_ratios(service, runs):
     """a live service's own tool's time over fetchloom's, rounds paired, with its 95% interval: a
-    ratio that holds for that campaign alone, so it gets no verdict."""
+    ratio that holds for that run alone, so it gets no verdict."""
     rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
     base = rounds.get(ab.BASE, {})
     return dict(comparisons={tool: dict(ab.paired(base, measured, seed=f"{SEED}/live/{service}/{tool}"), rounds=len(measured),
@@ -589,14 +589,14 @@ def live_ratios(service, runs):
                              for tool, measured in rounds.items() if tool != ab.BASE})
 
 
-def check_chunks(campaigns):
-    """ValueError unless lab campaigns read as one: a campaign may be measured in chunks, as long
+def check_chunks(lab_runs):
+    """ValueError unless lab runs read as one: a run may be measured in chunks, as long
     as each lists its cases, no case is measured twice and none mixes smoke and full runs."""
-    measured = [(case["filesystem"], case["profile"], case["id"]) for meta in campaigns for case in meta.get("cases") or []]
-    if len(campaigns) > 1 and (any(not meta.get("cases") for meta in campaigns)
+    measured = [(case["filesystem"], case["profile"], case["id"]) for meta in lab_runs for case in meta.get("cases") or []]
+    if len(lab_runs) > 1 and (any(not meta.get("cases") for meta in lab_runs)
                                or len(measured) != len(set(measured))
-                               or len({meta.get("quick") for meta in campaigns}) > 1):
-        raise ValueError("lab campaigns measure a case twice or mix smoke and full runs; render them separately")
+                               or len({meta.get("quick") for meta in lab_runs}) > 1):
+        raise ValueError("lab runs measure a case twice or mix smoke and full runs; render them separately")
 
 
 def summaries(runs):
@@ -618,7 +618,7 @@ def subtitle(case):
 
 
 def network_profiles(metas):
-    """each profile's recorded shaping, delay, loss and rate first, from the first campaign that
+    """each profile's recorded shaping, delay, loss and rate first, from the first whole run that
     records them."""
     return next((meta["network_profiles"] for meta in metas if meta.get("network_profiles")), {})
 
@@ -704,7 +704,7 @@ def page(rows, metas, cases, services):
         lines += ["## live services, on this machine's datacenter link\n",
                   "each service's own tool runs beside fetchloom in every round, in alternating order (ABBA), so a service's "
                   "slow minute meets both alike, and its time over fetchloom's pairs the rounds. the ratios hold for that "
-                  "campaign alone, so they get no verdict and confirm none of the lab's. file comparisons retain layout and "
+                  "run alone, so they get no verdict and confirm none of the lab's. file comparisons retain layout and "
                   "content differences, and a content difference fails the run.\n"]
     for service, measured in services.items():
         lines += live_section(service, measured)
@@ -741,7 +741,7 @@ def notes(rows):
 
 
 def machines(metas):
-    """each campaign's machine, versions and cases as list lines; chunks of one campaign share a
+    """each whole run's machine, versions and cases as list lines; chunks of one share a
     machine and versions, which are shown once."""
     lines = []
     shared = None
@@ -944,7 +944,7 @@ def live_section(service, measured):
 
 
 def render(results, repo):
-    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md from every campaign
+    """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md from every whole run
     under results; ValueError, before any card already there goes, for results that do not read as one."""
     rows, metas = load_results(results)
     cases, services = group(rows, metas)

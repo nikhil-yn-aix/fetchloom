@@ -150,7 +150,7 @@ def fresh_project(template, path):
 
 
 def measure_round(binary, template, work):
-    """one build's four phases from an empty cache; returns seconds per phase."""
+    """one build's four steps from an empty cache; returns seconds per step."""
     cache = work / "cache"
     remove(cache)
     env = environment(cache)
@@ -260,14 +260,14 @@ def remove(path):
 
 
 def table(summary):
-    lines = ["scenario | phase | baseline s | candidate s | candidate/baseline | 95% interval | verdict",
+    lines = ["scenario | step | baseline s | candidate s | candidate/baseline | 95% interval | verdict",
              "--- | --- | ---: | ---: | ---: | --- | ---"]
     for key, item in summary.items():
-        scenario, phase = key.split("/")
+        scenario, step = key.split("/")
         bounds = item["interval"]
         interval = f"[{bounds[0]:.3f}, {bounds[1]:.3f}]" if bounds else "-"
         ratio = f"{item['ratio']:.3f}" if item["ratio"] is not None else "-"
-        lines.append(f"{scenario} | {phase} | {item['baseline_median']:.3f} | {item['candidate_median']:.3f} | "
+        lines.append(f"{scenario} | {step} | {item['baseline_median']:.3f} | {item['candidate_median']:.3f} | "
                      f"{ratio} | {interval} | {item['verdict']}")
     return "\n".join(lines)
 
@@ -310,8 +310,8 @@ def main(argv=None):
                 order.shuffle(labels)
                 for label in labels:
                     times = measure_round(binaries[label], templates[label], root / "work" / "run")
-                    for phase, seconds in times.items():
-                        raw.setdefault(f"{scenario}/{phase}", {}).setdefault(label, []).append(seconds)
+                    for step, seconds in times.items():
+                        raw.setdefault(f"{scenario}/{step}", {}).setdefault(label, []).append(seconds)
                 print(f"{scenario}: round {number} of {args.rounds} done", file=sys.stderr)
     finally:
         server.shutdown()

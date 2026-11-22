@@ -400,7 +400,7 @@ def binary_identity(path):
 
 
 def metadata(args, adapters):
-    """the campaign record: machine, kernel, filesystems, versions of every tool and package, the
+    """the whole run's record: machine, kernel, filesystems, versions of every tool and package, the
     fetchloom build and the run settings."""
     cpu = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                 if line.startswith("model name")), platform.machine())
@@ -567,7 +567,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
             tree.close()
         if (workdir / "prepare.log").exists():
             shutil.copyfile(workdir / "prepare.log", out / f"{run_id}-prepare.log")
-    # what the run cost the campaign, its untimed work included, for projecting a campaign's hours
+    # what the run cost the whole run, its untimed work included, for projecting the whole run's hours
     row["run_seconds"] = time.monotonic() - begun
     append(out / "runs.jsonl", row)
     return row
@@ -656,7 +656,7 @@ def variant_choice(value):
 
 
 def arguments():
-    """the command line of a lab campaign."""
+    """the command line of a lab run."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
     parser.add_argument("--profiles", type=lambda x: csv_choices(x, lab.PROFILES), default=list(lab.PROFILES))
@@ -686,9 +686,9 @@ def arguments():
     return parser
 
 
-def campaign(parser, args):
-    """the lab lock, the tool adapters and the cases a campaign measures; exits through the parser,
-    before the server is pinned, when the campaign cannot be measured as asked."""
+def whole_run(parser, args):
+    """the lab lock, the tool adapters and the cases a whole run measures; exits through the parser,
+    before the server is pinned, when the run cannot be measured as asked."""
     if (args.rounds is not None and args.rounds < 1) or args.timeout <= 0:
         parser.error("rounds and timeout must be positive")
     if not args.out.resolve().is_relative_to(lab.ROOT):
@@ -772,13 +772,13 @@ def measure_case(args, fs, specification, adapters, meta):
             case = fixtures.prepare_native(case, args.fetchloom, [measured[name].prepared_as])
         except Exception as error:
             preparation_errors[name] = f"native preparation failed: {error}"
-    # the plan is on record before the first run, so a campaign cut short shows it
+    # the plan is on record before the first run, so a run cut short shows it
     arms = rounds_of(args, fs, case, measured)
     rounds = arms.get(tools.Fetchloom.name, max(arms.values(), default=0))
     meta["cases"].append(dict(filesystem=fs, **case, rounds=rounds, arm_rounds=arms, warmup=not args.no_warmup,
                               prepared_seconds=time.monotonic() - begun))
     lab.profile(case["profile"])
-    # each case draws its own orders, so a campaign split into chunks shuffles as one run
+    # each case draws its own orders, so a whole run split into chunks shuffles as one would
     # would, rather than every chunk replaying the same sequence
     rng = case_rng(args.seed, fs, case)
     failures = 0
@@ -812,7 +812,7 @@ def main():
     parser = arguments()
     args = parser.parse_args()
     lab.require_root()
-    lock, adapters, cases = campaign(parser, args)
+    lock, adapters, cases = whole_run(parser, args)
     server_cpus = lab.pin_server(args.server_cpus or args.cpus)
     meta = metadata(args, adapters)
     meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)

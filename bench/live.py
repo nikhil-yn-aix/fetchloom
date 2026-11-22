@@ -19,7 +19,7 @@ import run
 import tools
 
 SERVICES = ("zenodo", "huggingface", "kaggle", "figshare", "dataverse")
-# rounds of a full campaign; quick runs one
+# rounds of a full run; quick runs one
 ROUNDS = 10
 PYTHON = str(lab.VENV / "bin" / "python")
 
@@ -299,7 +299,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fetchloom", required=True, type=Path)
     parser.add_argument("--quick", action="store_true")
-    parser.add_argument("--rounds", type=int, help=f"rounds per service, instead of a full campaign's {ROUNDS}")
+    parser.add_argument("--rounds", type=int, help=f"rounds per service, instead of a full run's {ROUNDS}")
     parser.add_argument("--services", type=lambda x: run.csv_choices(x, SERVICES), default=list(SERVICES))
     parser.add_argument("--seed", type=int, default=1729)
     parser.add_argument("--out", type=Path, default=lab.ROOT / "results" / "live")

@@ -181,7 +181,7 @@ class RoundTests(unittest.TestCase):
         self.assertEqual((self.root / "bench/www/large/file-00000.bin").stat().st_size, 1 << 20)
         table = (self.root / "bench/results/native.md").read_text()
         self.assertEqual(shown.getvalue(), table)
-        self.assertEqual(table.splitlines()[:2], ["scenario | phase | baseline s | candidate s | candidate/baseline | 95% interval | verdict",
+        self.assertEqual(table.splitlines()[:2], ["scenario | step | baseline s | candidate s | candidate/baseline | 95% interval | verdict",
                                                   "--- | --- | ---: | ---: | ---: | --- | ---"])
 
     def test_the_command_refuses_unknown_scenarios_and_sizes_that_are_not_positive(self):
@@ -192,7 +192,7 @@ class RoundTests(unittest.TestCase):
 
 
 class TableTests(unittest.TestCase):
-    def test_a_phase_without_pairs_shows_dashes(self):
+    def test_a_step_without_pairs_shows_dashes(self):
         summary = {"small/cold": dict(baseline_median=2, candidate_median=1, ratio=.5, interval=[.4, .6], verdict="candidate faster"),
                    "zip/path": dict(baseline_median=1, candidate_median=1, ratio=None, interval=None, verdict="too few rounds")}
         self.assertEqual(native.table(summary).splitlines()[2:],

@@ -105,7 +105,7 @@ class RenderTests(Quiet):
         finally:
             shutil.rmtree(root)
 
-    def test_renderer_joins_campaigns_that_measure_different_cases(self):
+    def test_renderer_joins_runs_that_measure_different_cases(self):
         import json
         from pathlib import Path
         import shutil
@@ -164,7 +164,7 @@ class RenderTests(Quiet):
             shutil.rmtree(root)
 
 
-class CampaignTests(Quiet):
+class WholeRunTests(Quiet):
     def write_live(self, root, chunk, service="huggingface", ref="dataset-one", size=4, quick=False):
         import json
         folder = root / chunk
@@ -207,13 +207,13 @@ class CampaignTests(Quiet):
             self.assertTrue((report / "docs" / "assets" / "bench" / "live-zenodo.svg").is_file())
             self.assertTrue((report / "docs" / "assets" / "bench" / "live-kaggle.svg").is_file())
 
-    def test_missing_metadata_cannot_be_rendered_as_a_full_campaign(self):
+    def test_missing_metadata_cannot_be_rendered_as_a_full_run(self):
         from pathlib import Path
         import render
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            campaign = self.write_live(root, "one", quick=True)
-            (campaign / "meta.json").unlink()
+            folder = self.write_live(root, "one", quick=True)
+            (folder / "meta.json").unlink()
             report = root / "report"
             (report / "docs" / "dev" / "performance").mkdir(parents=True)
             with self.assertRaisesRegex(ValueError, "metadata"):
@@ -226,8 +226,8 @@ class CampaignTests(Quiet):
         import render
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            campaign = self.write_live(root, "one")
-            path = campaign / "runs.jsonl"
+            folder = self.write_live(root, "one")
+            path = folder / "runs.jsonl"
             row = json.loads(path.read_text())
             row["count"] = 2
             path.write_text(json.dumps(row))
@@ -248,7 +248,7 @@ def lab_row(**changes):
 
 
 def lab_meta(rows, rounds=None, **changes):
-    """a full lab campaign's meta.json for these rows, each case planned for `rounds` measured
+    """a full lab run's meta.json for these rows, each case planned for `rounds` measured
     rounds, by default as many as its rows ran."""
     ran = {}
     for row in rows:
@@ -273,38 +273,38 @@ def headline_rows(rounds=10, scenario="s1", profile="home", control=(1,), **wall
 
 
 class LoadResultsTests(Quiet):
-    def campaign(self, root, rows, meta):
+    def whole_run(self, root, rows, meta):
         root.mkdir(parents=True, exist_ok=True)
         (root / "runs.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
         if meta is not None:
             (root / "meta.json").write_text(json.dumps(meta))
 
-    def test_results_that_cannot_be_read_as_one_campaign_are_refused(self):
+    def test_results_that_cannot_be_read_as_one_run_are_refused(self):
         live = dict(kind="live", quick=True, datasets=[dict(service="zenodo", bytes=3, expected_sha256={"a": "1"})])
         live_row = dict(kind="live", service="zenodo", tool="fetchloom", round=1, quick=True, count=1, file_size=3,
                         status="passed", files={"a": "1"})
         cases = [
             ("no runs", None, None, "no runs.jsonl found"),
-            ("a list for metadata", [lab_row()], [], "invalid campaign metadata"),
-            ("another kind", [lab_row()], dict(kind="native", quick=True), "invalid campaign metadata"),
-            ("quick unsaid", [lab_row()], dict(kind="lab"), "invalid campaign metadata"),
+            ("a list for metadata", [lab_row()], [], "invalid run metadata"),
+            ("another kind", [lab_row()], dict(kind="native", quick=True), "invalid run metadata"),
+            ("quick unsaid", [lab_row()], dict(kind="lab"), "invalid run metadata"),
             ("a service twice", [live_row], dict(live, datasets=live["datasets"] * 2), "live metadata repeats a service"),
-            ("a full run in a smoke campaign", [lab_row(quick=False)], dict(kind="lab", quick=True), "mixed benchmark conditions in"),
+            ("a full row in a smoke run", [lab_row(quick=False)], dict(kind="lab", quick=True), "mixed benchmark conditions in"),
             ("no tool", [{k: v for k, v in lab_row().items() if k != "tool"}], dict(kind="lab", quick=True), "a measured row has no tool"),
             ("a round twice", [lab_row(), lab_row()], dict(kind="lab", quick=True), "duplicate measured row"),
             ("a case not planned", [lab_row(), lab_row(scenario="s3")], lab_meta([lab_row()], quick=True),
-             "a row of a case its campaign never listed"),
+             "a row of a case its run never listed"),
             ("no reference", [dict(live_row, service="kaggle")], live, "live metadata has no reference dataset for kaggle"),
             ("other bytes", [dict(live_row, files={"a": "2"})], live, "live checked bytes do not match metadata for zenodo"),
         ]
         for case, rows, meta, said in cases:
             with self.subTest(case), tempfile.TemporaryDirectory() as folder:
                 if rows is not None:
-                    self.campaign(Path(folder), rows, meta)
+                    self.whole_run(Path(folder), rows, meta)
                 with self.assertRaisesRegex(ValueError, said):
                     render.load_results(Path(folder))
 
-    def test_skips_and_comparisons_of_a_live_campaign_are_kept_apart_from_its_timings(self):
+    def test_skips_and_comparisons_of_a_live_run_are_kept_apart_from_its_timings(self):
         meta = dict(kind="live", quick=True, datasets=[dict(service="zenodo", bytes=3, expected_sha256={"a": "1"})])
         rows = [dict(kind="live", service="zenodo", tool="fetchloom", round=1, quick=True, count=1, file_size=3,
                      status="passed", wall_seconds=1, files={"a": "1"}),
@@ -312,7 +312,7 @@ class LoadResultsTests(Quiet):
                 dict(kind="comparison", service="zenodo", round=1, comparison=dict(status="identical"))]
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
-            self.campaign(root / "live", rows, meta)
+            self.whole_run(root / "live", rows, meta)
             loaded, metas = render.load_results(root)
             self.assertEqual((loaded, metas), (rows, [meta]))
             (root / "report/docs/dev/performance").mkdir(parents=True)
@@ -400,7 +400,7 @@ class PageTests(Quiet):
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
 
-    def test_a_campaign_cut_short_of_its_planned_rounds_publishes_no_verdict(self):
+    def test_a_run_cut_short_of_its_planned_rounds_publishes_no_verdict(self):
         # every arm stopped after 10 of the 20 planned rounds, so each still pairs with fetchloom
         rows = headline_rows(curl=2)
         page = self.render(rows, lab_meta(rows, rounds=20, comparators={"ext4/home/s1": "curl"}))
@@ -657,7 +657,7 @@ class VerdictTests(unittest.TestCase):
                            comparator="curl")
         self.assertEqual((poor["rival"], poor["withheld"]), ("curl", None))
 
-    def test_every_arm_must_run_the_rounds_its_campaign_planned(self):
+    def test_every_arm_must_run_the_rounds_its_run_planned(self):
         # cut short together after 10 of 20 planned rounds, every arm still pairs with fetchloom
         cut = headline_rows(curl=2)
         judged = self.judged(cut, comparator="curl", planned=20)
@@ -668,7 +668,7 @@ class VerdictTests(unittest.TestCase):
         self.assertEqual(self.judged(cut, comparator="curl")["rival"], "curl")
         # no plan on record, or rounds the plan never had, keep no plan either
         self.assertEqual(self.judged(cut, comparator="curl", planned=None)["reason"],
-                         "its campaign's meta.json records no planned rounds for it")
+                         "its run's meta.json records no planned rounds for it")
         self.assertEqual(self.judged(cut, comparator="curl", planned=8)["reason"], "fetchloom ran rounds other than the 8 planned")
         # fetchloom ran its plan, the control arm stopped short with the comparator: still no verdict
         short = [row for row in headline_rows(rounds=20, curl=2) if row["tool"] == "fetchloom" or row["round"] <= 10]
@@ -704,12 +704,12 @@ class VerdictTests(unittest.TestCase):
             rows = headline_rows(rounds=1, curl=curl, aria2c=1.5, pooch=1.7)
             self.assertEqual(render.pick([dict(row, warmup=False) for row in rows]), {"ext4/home/s1": frozen}, curl)
 
-    def test_campaigns_that_froze_different_comparators_cannot_be_read_as_one(self):
+    def test_runs_that_froze_different_comparators_cannot_be_read_as_one(self):
         self.assertEqual(render.frozen([dict(comparators={"ext4/home/s1": "curl"}), dict(comparators={"ext4/home/s1": ["curl"]}), {}]),
                          {"ext4/home/s1": ["curl"]})
         with self.assertRaisesRegex(ValueError, "froze different comparators for ext4/home/s1"):
             render.frozen([dict(comparators={"ext4/home/s1": "curl"}), dict(comparators={"ext4/home/s1": "aria2c"})])
-        # a comparator counts only from the campaign that measured its case, never from a later chunk's record
+        # a comparator counts only from the run that measured its case, never from a later chunk's record
         def measured(scenario):
             return [dict(filesystem="ext4", profile="home", id=scenario)]
         self.assertEqual(render.frozen([dict(cases=measured("s1")),

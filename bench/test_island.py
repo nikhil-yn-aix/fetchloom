@@ -117,9 +117,9 @@ class IslandCheckTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 island.disjoint(first, second)
 
-    def test_campaign_is_only_the_requested_full_aa_cases(self):
+    def test_an_aa_run_is_only_the_requested_full_aa_cases(self):
         import island
-        command = island.campaign_command(Path("/binary"), Path("/results"), (0, 2), 20, 17)
+        command = island.aa_command(Path("/binary"), Path("/results"), (0, 2), 20, 17)
         self.assertIn("s3,s5,s6", command)
         self.assertIn("aa:FETCHLOOM_EXP_NONE=1", command)
         self.assertIn("0,2", command)
@@ -135,7 +135,7 @@ class IslandCheckTests(unittest.TestCase):
         for case in cases:
             self.assertEqual(island.case_choice(case), case)
             fs, profile, scenario = case.split("/")
-            command = island.campaign_command(Path("/binary"), Path("/results"), (0, 1), 10, 17, case)
+            command = island.aa_command(Path("/binary"), Path("/results"), (0, 1), 10, 17, case)
             self.assertEqual(command[command.index("--fs") + 1], fs)
             self.assertEqual(command[command.index("--profiles") + 1], profile)
             self.assertEqual(command[command.index("--scenarios") + 1], scenario)
@@ -185,7 +185,7 @@ class IslandCheckTests(unittest.TestCase):
         results = island.compare_noise(quiet, loaded, noise)
         self.assertEqual([r["passed"] for r in results], [False, False, True])
 
-    def test_the_noise_file_is_ab_json_output_of_a_quiet_aa_campaign(self):
+    def test_the_noise_file_is_ab_json_output_of_a_quiet_aa_run(self):
         import island
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
@@ -254,50 +254,50 @@ class CheckRefusalTests(unittest.TestCase):
                          "island.py: error: measurement and build CPU lists must be nonempty and disjoint")
 
 
-class CampaignTests(unittest.TestCase):
+class AaRunTests(unittest.TestCase):
     def setUp(self):
         folder = tempfile.TemporaryDirectory()
         self.addCleanup(folder.cleanup)
         self.root = Path(folder.name)
         self.args = SimpleNamespace(fetchloom=Path("/fl"), cpus=(0,), rounds=10, seed=1729, out=self.root)
 
-    def campaign(self, program, load=None):
+    def aa_run(self, program, load=None):
         output = self.root / "quiet-island" / "ext4-lan-s2"
         output.mkdir(parents=True)
         command = [sys.executable, "-c", program, str(output)]
-        with mock.patch.object(island, "campaign_command", return_value=command):
-            return island.campaign_case(self.args, output, load, "ext4/lan/s2")
+        with mock.patch.object(island, "aa_command", return_value=command):
+            return island.aa_case(self.args, output, load, "ext4/lan/s2")
 
-    def test_a_campaign_returns_the_a_a_comparison_of_its_runs(self):
+    def test_an_aa_run_returns_the_a_a_comparison_of_its_runs(self):
         rows = [dict(kind="lab", tool=tool, filesystem="ext4", profile="lan", scenario="s2", round=n, warmup=False,
                      status="passed", quick=False, count=1, file_size=1, wall_seconds=1) for n in range(1, 11)
                 for tool in ("fetchloom", "fetchloom+aa")]
         program = f"import sys\nfrom pathlib import Path\nPath(sys.argv[1], 'runs.jsonl').write_text({''.join(json.dumps(r) + chr(10) for r in rows)!r})\n"
-        [result] = self.campaign(program)
+        [result] = self.aa_run(program)
         self.assertEqual((result["case"], result["variant"], result["rounds"]), ("ext4/lan/s2", "fetchloom+aa", 10))
 
-    def test_a_failed_campaign_or_a_load_that_ended_is_refused(self):
+    def test_a_failed_aa_run_or_a_load_that_ended_is_refused(self):
         with self.assertRaisesRegex(RuntimeError, f"benchmark command failed with exit 3; see {self.root / 'quiet-island-ext4-lan-s2.log'}"):
-            self.campaign("raise SystemExit(3)")
+            self.aa_run("raise SystemExit(3)")
         ended = subprocess.Popen([sys.executable, "-c", "raise SystemExit(1)"])
         ended.wait()
         (self.root / "quiet-island").rename(self.root / "first")
         finished = self.root / "finished"
         with self.assertRaisesRegex(RuntimeError, "compiler load ended during measurement; exit 1"):
-            self.campaign(f"import time\ntime.sleep(1)\nopen({str(finished)!r}, 'w').close()", load=ended)
-        # stopped as soon as the load was seen to end, not when the campaign was done
+            self.aa_run(f"import time\ntime.sleep(1)\nopen({str(finished)!r}, 'w').close()", load=ended)
+        # stopped as soon as the load was seen to end, not when the run was done
         self.assertFalse(finished.exists())
         (self.root / "quiet-island").rename(self.root / "second")
-        # the load ends as the campaign ends, after the last look while the campaign ran
+        # the load ends as the run ends, after the last look while the run ran
         late = mock.Mock(returncode=4)
         late.poll.side_effect = lambda: 4 if finished.exists() else None
         with self.assertRaisesRegex(RuntimeError, "compiler load ended during measurement; exit 4"):
-            self.campaign(f"import time\ntime.sleep(.3)\nopen({str(finished)!r}, 'w').close()", load=late)
+            self.aa_run(f"import time\ntime.sleep(.3)\nopen({str(finished)!r}, 'w').close()", load=late)
 
     def test_a_process_that_will_not_stop_is_killed(self):
         island.stop(None)
         process = mock.Mock(pid=4242)
-        process.wait.side_effect = [subprocess.TimeoutExpired("campaign", 5), 0]
+        process.wait.side_effect = [subprocess.TimeoutExpired("aa run", 5), 0]
         with mock.patch.object(island.os, "killpg", side_effect=[ProcessLookupError, None]) as kill, \
              mock.patch.object(lab, "end_group") as ended:
             island.stop(process)
@@ -327,7 +327,7 @@ class CampaignTests(unittest.TestCase):
 
 
 class CheckTests(unittest.TestCase):
-    """a whole check, from the quiet campaigns to island.json, with each case's campaign and the
+    """a whole check, from the quiet runs to island.json, with each case's run and the
     compiler load stood in."""
 
     def setUp(self):
@@ -341,14 +341,14 @@ class CheckTests(unittest.TestCase):
         self.noise.write_text(json.dumps(dict(results=[aa(case) for case in island.DEFAULT_CASES])))
 
     def check(self, name, ready=None, ended=None, loaded=aa, monotonic=None):
-        """the check's exit, report, campaigns and load, the load writing ``ready`` as its state or
+        """the check's exit, report, runs and load, the load writing ``ready`` as its state or
         having exited with ``ended``."""
         args = SimpleNamespace(cases=None, cpus=(0, 1), build_cpus=(2, 3), rounds=20, jobs=2, effect=.03, noise_multiple=2,
                                out=self.root / "lab" / name, target=self.root / f"target-{name}", worktree=self.root / "source",
                                fetchloom=self.root / "fetchloom", noise=self.noise, seed=1729, cargo="cargo")
         measured = []
 
-        def campaign_case(args, output, load=None, case=None):
+        def aa_case(args, output, load=None, case=None):
             measured.append((output.relative_to(args.out).as_posix(), load))
             return [(aa if load is None else loaded)(case)]
 
@@ -371,7 +371,7 @@ class CheckTests(unittest.TestCase):
 
         clock = mock.patch.object(island.time, "monotonic", side_effect=monotonic) if monotonic else contextlib.nullcontext()
         with mock.patch.object(lab, "require_root"), mock.patch.object(lab, "ROOT", self.root / "lab"), \
-             mock.patch.object(island, "campaign_case", side_effect=campaign_case), \
+             mock.patch.object(island, "aa_case", side_effect=aa_case), \
              mock.patch.object(island.subprocess, "Popen", side_effect=start), \
              mock.patch.object(island, "stop") as stopped, clock, contextlib.redirect_stdout(io.StringIO()) as shown:
             code = island.check(args)

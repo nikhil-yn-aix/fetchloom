@@ -161,18 +161,18 @@ def audit(repo, binary, fixtures, root):
 
             command('lock', template, work / 'prepare-cache', ['lock'])
             cache = work / 'cache'
-            for phase in ('cold', 'warm', 'settled'):
-                project = work / ('warm' if phase == 'settled' else phase)
-                if phase != 'settled':
+            for step in ('cold', 'warm', 'settled'):
+                project = work / ('warm' if step == 'settled' else step)
+                if step != 'settled':
                     project.mkdir()
                     for name in ('data.toml', 'data.lock'):
                         shutil.copyfile(template / name, project / name)
-                args = ['sync', '--locked'] + ([] if phase == 'cold' else ['--offline'])
-                answer = command(phase, project, cache, args)
+                args = ['sync', '--locked'] + ([] if step == 'cold' else ['--offline'])
+                answer = command(step, project, cache, args)
                 if answer['result']['placement']['kept']:
                     raise RuntimeError('sync kept a conflict')
-                if phase != 'cold' and answer['work']['requests']:
-                    raise RuntimeError('offline phase made requests')
+                if step != 'cold' and answer['work']['requests']:
+                    raise RuntimeError('an offline step made requests')
                 verify(project, expected)
             answer = command('path', project, cache, ['path', 'f00000', '--offline'])
             if Path(answer['result']) != project / 'data' / 'f00000':

@@ -1,7 +1,7 @@
-"""project a campaign's hours from its pilot, and apply the pilot's rules the design declares.
+"""project the real run's hours from its pilot, and apply the pilot's rules the design declares.
 
 the pilot runs one round of every case and tool, with no warmup, and one live round. each row's
-run_seconds is what the run cost the campaign, its untimed work included. the campaign runs every arm
+run_seconds is what the run cost the whole run, its untimed work included. the real run gives every arm
 5 rounds and a warmup, and fetchloom, its control and each comparator the pilot freezes 5 rounds more
 in a headline case; a live service costs its reference download once and 10 rounds of both tools. a
 poor run's timed part is taken as proportional to the size that shrinks in it, its untimed work as
@@ -25,7 +25,7 @@ APART = ("s3", "s9")
 
 
 def part(profile):
-    """the part of the campaign a link belongs to: home, poor, or lan, with this machine's disk."""
+    """the part of the real run a link belongs to: home, poor, or lan, with this machine's disk."""
     return "lan" if profile in ("lan", "local") else profile
 
 
@@ -37,8 +37,8 @@ def shrink(scenario, scale):
 
 
 def hours(rows, metas, comparators, scale=1):
-    """the projected hours of each part of the campaign, from what each pilot run cost and how many
-    runs the campaign gives its arm, the poor link's at the sizes `scale` gives."""
+    """the projected hours of each part of the real run, from what each pilot run cost and how many
+    runs the real run gives its arm, the poor link's at the sizes `scale` gives."""
     seconds = defaultdict(float)
     references = {dataset["service"]: dataset.get("reference_seconds") or 0 for meta in metas
                   for dataset in meta.get("datasets") or []}
@@ -93,7 +93,7 @@ def decide(rows, metas):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("pilot", type=Path, help="the pilot's lab and live campaigns, under one folder")
+    parser.add_argument("pilot", type=Path, help="the pilot's lab and live runs, under one folder")
     args = parser.parse_args()
     rows, metas = render.load_results(args.pilot.resolve())
     print(json.dumps(decide(rows, metas), indent=2, sort_keys=True))

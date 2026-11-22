@@ -115,7 +115,7 @@ class RecordTests(unittest.TestCase):
             self.assertEqual(rows[0]["status"], "passed")
             self.assertEqual(len(json.loads((out / "meta.json").read_text())["commands"]), 2)
 
-    def campaign(self, root, argv, **patches):
+    def whole_run(self, root, argv, **patches):
         """live.main with the lab, the services and the measuring stood in; its exit and output."""
         import contextlib
         import io
@@ -145,7 +145,7 @@ class RecordTests(unittest.TestCase):
                 code = stopped.code
         return code, shown.getvalue(), told.getvalue()
 
-    def test_a_campaign_skips_a_service_it_cannot_reach_and_compares_each_round(self):
+    def test_a_run_skips_a_service_it_cannot_reach_and_compares_each_round(self):
         import json
         from pathlib import Path
         from unittest import mock
@@ -165,7 +165,7 @@ class RecordTests(unittest.TestCase):
             root = Path(folder).resolve()
             (root / "owned.json").write_text("{}")
             out = root / "results"
-            code, shown, _ = self.campaign(root, ["--quick", "--services", "kaggle,zenodo", "--out", str(out)],
+            code, shown, _ = self.whole_run(root, ["--quick", "--services", "kaggle,zenodo", "--out", str(out)],
                                            catalog=mock.patch.object(live, "catalog", side_effect=catalog),
                                            reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
                                            measure=mock.patch.object(run, "measure", side_effect=measured),
@@ -183,7 +183,7 @@ class RecordTests(unittest.TestCase):
         self.assertEqual([dataset["service"] for dataset in meta["datasets"]], ["zenodo"])
         self.assertEqual([order["tools"] for order in meta["orders"]], [[row["tool"] for row in rows[1:3]]])
 
-    def test_a_full_campaign_runs_ten_rounds_in_alternating_order(self):
+    def test_a_full_run_has_ten_rounds_in_alternating_order(self):
         import json
         from pathlib import Path
         import random
@@ -198,7 +198,7 @@ class RecordTests(unittest.TestCase):
             root = Path(folder).resolve()
             (root / "owned.json").write_text("{}")
             out = root / "results"
-            code, _, _ = self.campaign(root, ["--services", "zenodo", "--out", str(out)],
+            code, _, _ = self.whole_run(root, ["--services", "zenodo", "--out", str(out)],
                                        catalog=mock.patch.object(live, "catalog", return_value=self.dataset()),
                                        reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
                                        measure=mock.patch.object(run, "measure", side_effect=measured),
@@ -216,7 +216,7 @@ class RecordTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder).resolve()
             (root / "owned.json").write_text("{}")
-            code, _, _ = self.campaign(root, ["--services", "zenodo", "--rounds", "1", "--out", str(root / "results")],
+            code, _, _ = self.whole_run(root, ["--services", "zenodo", "--rounds", "1", "--out", str(root / "results")],
                                        catalog=mock.patch.object(live, "catalog", return_value=self.dataset()),
                                        reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
                                        measure=mock.patch.object(run, "measure", side_effect=measured),
@@ -224,13 +224,13 @@ class RecordTests(unittest.TestCase):
             once = [json.loads(line) for line in (root / "results/runs.jsonl").read_text().splitlines()]
             recorded = json.loads((root / "results/meta.json").read_text())
         self.assertEqual((code, sorted(row["tool"] for row in once if row["kind"] == "live")), (0, ["fetchloom", "zenodo_get"]))
-        # what each run and the reference cost the campaign, for projecting its hours
+        # what each run and the reference cost the whole run, for projecting its hours
         self.assertTrue(all(row["run_seconds"] >= 0 for row in once if row["kind"] == "live"))
         self.assertGreaterEqual(recorded["datasets"][0]["reference_seconds"], 0)
         # which tool starts comes from the seed, not from the code
         self.assertEqual({live.abba(("a", "b"), 2, random.Random(seed))[0][0] for seed in range(20)}, {"a", "b"})
 
-    def test_a_campaign_that_cannot_be_kept_apart_never_starts(self):
+    def test_a_run_that_cannot_be_kept_apart_never_starts(self):
         from pathlib import Path
         from unittest import mock
         import live
@@ -247,7 +247,7 @@ class RecordTests(unittest.TestCase):
                         out.mkdir()
                         (out / "runs.jsonl").write_text("")
                     with mock.patch.object(live, "catalog") as catalog:
-                        code, _, told = self.campaign(root, ["--out", str(changes.get("out", out))])
+                        code, _, told = self.whole_run(root, ["--out", str(changes.get("out", out))])
                     self.assertEqual((code, told.splitlines()[-1]), (2, f"live.py: error: {said}"))
                     catalog.assert_not_called()
 
