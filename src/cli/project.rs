@@ -2031,7 +2031,7 @@ fn refuse_named(
         return Err(Error::new(
             Kind::Usage,
             format!(
-                "-o names {}, inside {part}, which {keeper} keeps for itself, so fetchloom never writes there",
+                "-o names {}, inside {part}, which {keeper} keeps for itself, so -o never writes there",
                 path.display()
             ),
         )
@@ -2051,7 +2051,7 @@ fn refuse_named(
             Err(Error::new(
                 Kind::Usage,
                 format!(
-                    "-o names {},{placed} a file sync placed for {dataset}, and fetchloom never writes over the files it placed",
+                    "-o names {},{placed} a file sync placed for {dataset}, and -o never writes over a file sync placed",
                     name::spelled(&path.to_string_lossy())
                 ),
             )
@@ -2060,7 +2060,7 @@ fn refuse_named(
         Some(Made::Marker(at)) => Err(Error::new(
             Kind::Usage,
             format!(
-                "-o names {}, the .gitignore that keeps the dataset files in {at} out of git, and fetchloom never writes over it",
+                "-o names {}, the .gitignore that keeps the dataset's files in {at} out of git, and -o never writes over it",
                 path.display()
             ),
         )
@@ -2225,7 +2225,7 @@ fn refuse_pins(
     Err(Error::new(
         Kind::Usage,
         format!(
-            "-o names {}, and fetchloom never writes over a project's {own}",
+            "-o names {}, and -o never writes over a project's {own}",
             path.display()
         ),
     )

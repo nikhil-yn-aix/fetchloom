@@ -4086,6 +4086,32 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
     }
     assert!(!work.join(".fetchloom/x").exists());
     assert!(!elsewhere.join(".git").exists());
+    // it is -o that never writes there; fetchloom keeps its own files there
+    for (target, said) in [
+        (
+            ".fetchloom/x",
+            "which fetchloom keeps for itself, so -o never writes there",
+        ),
+        (
+            "data/iris/iris.csv",
+            "and -o never writes over a file sync placed",
+        ),
+        (
+            "data/iris/.gitignore",
+            "keeps the dataset's files in data/iris out of git",
+        ),
+    ] {
+        let output = sandbox
+            .command(&["--json", "get", &link, "-o", target, "--force"])
+            .output()?;
+        let document = json(&output)?;
+        assert!(
+            document["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(said)),
+            "{target}: {document}"
+        );
+    }
     // a data.toml in the dataset's folder hides no record of the project that placed its files
     let guarded = ["data/iris/.gitignore", "data/iris/iris.csv"];
     let held = guarded.map(|path| std::fs::read(work.join(path)));

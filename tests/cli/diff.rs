@@ -316,6 +316,10 @@ fn diff_reads_a_revision_as_one_and_needs_a_repository() -> Result {
         stderr.contains("is not in a git repository, and diff compares its commits"),
         "{stderr}"
     );
+    assert!(
+        stderr.contains("if git keeps this one, `git status` says why git cannot read it"),
+        "{stderr}"
+    );
     Ok(())
 }
 

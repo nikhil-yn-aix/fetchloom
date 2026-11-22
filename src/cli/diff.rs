@@ -323,7 +323,7 @@ fn commit(git: &Path, root: &Path, revision: &str) -> Result<String, Error> {
             ),
         )
         .help(format!(
-            "run it in a project git keeps; `{}` says whether git reads the repository, which it refuses to while another user owns it",
+            "run it in a project git keeps; if git keeps this one, `{}` says why git cannot read it, as when another user owns the folder",
             crate::suggested::git(root, "status")
         )),
         Unnamed::NoCommit => {

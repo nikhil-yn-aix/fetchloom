@@ -451,6 +451,12 @@ fn exclude_refuses_what_it_cannot_leave_out_and_changes_nothing() -> Result {
         assert_eq!(output.status.code(), Some(code), "{arguments:?}");
         assert_eq!(json(&output)?["errors"][0]["message"], message);
     }
+    let named = json(&sandbox.run(&["--json", "exclude", "data/pets/notes.txt"])?)?;
+    assert_eq!(
+        named["errors"][0]["help"],
+        "check the path: exclude leaves out files data.lock places, and a file of your own you delete yourself if you do not need it",
+        "{named}"
+    );
     let stale = String::from_utf8(before.0.clone())?.replace(
         "[datasets.set]\nref = \"local\"\n",
         "[datasets.set]\nref = \"local\"\nexclude = \"*.tmp\"\n",

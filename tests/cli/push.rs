@@ -96,7 +96,7 @@ fn a_push_says_how_teammates_name_the_mirror() -> Result {
     };
     assert!(
         screen.contains(&format!(
-            "next: teammates run `fetchloom settings set mirrors {}`, naming any mirrors they use already too\n",
+            "next: teammates run `fetchloom settings set mirrors {}`, plus any mirrors they already use\n",
             root.display()
         )),
         "{screen}"

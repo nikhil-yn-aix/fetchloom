@@ -63,7 +63,7 @@ a typed link to this machine or your network, such as a lab server, is trusted f
   hint: scripts can find it with `fetchloom path cows`
 warning: a later run downloads from http://127.0.0.1:19450, a private address, only once allowed_origins lists it
   help: save it with `fetchloom settings set allowed_origins http://127.0.0.1:19450`, or put `FETCHLOOM_ALLOWED_ORIGINS=http://127.0.0.1:19450` before the command for that run alone
-  next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, with any origins they list already, then `fetchloom sync`
+  next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins http://127.0.0.1:19450`, plus any origins they already allow, then `fetchloom sync`
 ```
 
 a link-local or cloud metadata address, such as `169.254.169.254`, where a cloud machine gives out its own keys, gets the warning without a line to write, and the closing line asks a clone nothing about it: a cloned project may ask for such an address to read those keys, so no message offers a command that lists one.

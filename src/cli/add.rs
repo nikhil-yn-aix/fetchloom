@@ -1827,7 +1827,7 @@ fn close(work: &Loop<'_>, private: &[url::Origin], list: Option<&str>, imported:
         .map(|origin| crate::suggested::shell_word(&origin.ascii_serialization()).into_owned())
         .collect();
     context.output.next(&format!(
-        "commit {committed}; anyone who clones runs `fetchloom settings set allowed_origins {}`, with any origins they list already, then `fetchloom sync`",
+        "commit {committed}; anyone who clones runs `fetchloom settings set allowed_origins {}`, plus any origins they already allow, then `fetchloom sync`",
         words.join(" ")
     ));
 }

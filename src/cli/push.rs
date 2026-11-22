@@ -1831,7 +1831,7 @@ fn tell(context: &Context, planned: &Planned, report: &Report) {
         }
     }
     output.next(&format!(
-        "teammates run `fetchloom settings set mirrors {}`, naming any mirrors they use already too",
+        "teammates run `fetchloom settings set mirrors {}`, plus any mirrors they already use",
         crate::suggested::shell_word(&target.to_string())
     ));
 }

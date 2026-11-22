@@ -1693,7 +1693,7 @@ fn a_private_link_is_told_before_the_closing_line() -> Result {
         "warning: a later run downloads from {origin}, a private address"
     ));
     let next = screen.find(&format!(
-        "next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, with any origins they list already, then `fetchloom sync`\n"
+        "next: commit data.toml and data.lock; anyone who clones runs `fetchloom settings set allowed_origins {origin}`, plus any origins they already allow, then `fetchloom sync`\n"
     ));
     assert!(
         warned.zip(next).is_some_and(|(warned, next)| warned < next),
