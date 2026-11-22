@@ -747,7 +747,8 @@ def case_section(case):
     # in a headline case fetchloom, its control and the frozen rival run more rounds than the rest
     rounds = " or ".join(str(count) for count in sorted({item["rounds"] for item in summaries.values()}))
     judged = case["judged"]
-    floor = max(item.get("in_flight_floor_ms") or 0 for item in summaries.values())
+    # a case no tool asked the server anything in has no requests in flight to estimate
+    floor = max((item.get("in_flight_floor_ms") or 0 for item in summaries.values() if item.get("requests")), default=0)
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
              f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | largest process | written | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
@@ -802,7 +803,7 @@ def case_section(case):
                      "downloads every file again. the dataset is the new version, so a tool that fetches only what changed asks "
                      "for about 0.1 of it.\n")
     if case["scenario"] in ("s7", "s10", "s12"):
-        lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
+        lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the dataset's files, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]
 

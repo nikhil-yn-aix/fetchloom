@@ -480,10 +480,16 @@ class PageTests(Quiet):
         self.assertIn("peak memory is the most anonymous memory those processes held at once, read from the cgroup every 20 ms", page)
 
     def test_the_most_in_flight_on_lan_is_called_an_estimate_with_its_floor(self):
-        rows = [lab_row(peak_in_flight={"lab.flb": 3}, in_flight_floor_ms=2), lab_row(tool="curl", peak_in_flight={"lab.flb": 4}),
-                lab_row(profile="home", peak_in_flight={"lab.flb": 4}, in_flight_floor_ms=0)]
+        rows = [lab_row(peak_in_flight={"lab.flb": 3}, in_flight_floor_ms=2, requests=3),
+                lab_row(tool="curl", peak_in_flight={"lab.flb": 4}, requests=4),
+                lab_row(profile="home", peak_in_flight={"lab.flb": 4}, in_flight_floor_ms=0, requests=4),
+                # a check that asked the server nothing has no requests in flight to estimate
+                lab_row(scenario="s13", profile="local", peak_in_flight={}, in_flight_floor_ms=2, requests=0)]
         page = self.render(rows, dict(kind="lab", quick=True, budget=4))
         cases = {part.splitlines()[0]: part for part in page.split("\n## ")[1:]}
+        check = next(part for heading, part in cases.items() if heading.startswith("s13: "))
+        self.assertIn("| connections | most in flight to a host | failures |", check)
+        self.assertNotIn("an estimate", check)
         lan = next(part for heading, part in cases.items() if heading.startswith("s1: ") and render.LINKS["lan"] in heading)
         home = next(part for heading, part in cases.items() if heading.startswith("s1: ") and render.LINKS["home"] in heading)
         self.assertIn("| connections | most in flight to a host, estimated | failures |", lan)
@@ -575,7 +581,7 @@ class PageTests(Quiet):
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)
-        self.assertIn("server body bytes / dataset size counts the body bytes of the server's whole and partial answers for the file, "
+        self.assertIn("server body bytes / dataset size counts the body bytes of the server's whole and partial answers for the dataset's files, "
                       "so it says what a tool asked for again; the server cannot see packets the network sent twice.", page)
 
     def test_the_command_renders_its_results_into_this_repository(self):
