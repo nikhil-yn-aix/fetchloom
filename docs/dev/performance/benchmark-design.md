@@ -186,6 +186,8 @@ A live service's speed changes from minute to minute, but a slow minute slows bo
 |---|---|
 | Linux x86_64 | ext4 for every scenario, and xfs for s5 and s6 on lan, each a dedicated loop-mounted image |
 
+The images sit on the machine's local SSD, as on a researcher's laptop or workstation, never on a network-attached OS disk that the machine's logs, caches and temporary files also write to: an fsync inside an image ends in one of the image file, which waits on whatever that disk holds unwritten. Each run's `meta.json` names the disk under the lab and under each image, and the results page names it too.
+
 The harness gives no Windows or macOS numbers: namespaces, `tc`, loop mounts and cgroups need Linux, and WSL results describe its Linux filesystem, not NTFS or Defender. [The native comparison](native.md) measures Windows, macOS and other filesystems on the machine itself, labelled as such.
 
 ## Results and presentation

@@ -982,6 +982,48 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(dvc.command(dict(id="s1"), workdir), ["dvc", "pull", "-j", "4"])
 
 
+class DiskTests(unittest.TestCase):
+    LSBLK = json.dumps({"blockdevices": [
+        {"name": "loop2", "maj:min": "7:2", "model": None, "rota": True, "tran": None, "type": "loop", "pkname": None},
+        {"name": "sdb", "maj:min": "8:16", "model": "Virtual Disk", "rota": True, "tran": None, "type": "disk", "pkname": None,
+         "children": [{"name": "sdb1", "maj:min": "8:17", "model": None, "rota": True, "tran": None, "type": "part", "pkname": "sdb"}]},
+        {"name": "nvme0n1", "maj:min": "259:1", "model": "Microsoft NVMe Direct Disk", "rota": False, "tran": "nvme", "type": "disk",
+         "pkname": None, "children": [{"name": "nvme0n1p1", "maj:min": "259:2", "model": None, "rota": "0", "tran": "nvme",
+                                       "type": "part", "pkname": "nvme0n1"}]}]})
+
+    def disks(self, lsblk, devices):
+        with tempfile.TemporaryDirectory() as folder:
+            loop = Path(folder) / "loop2" / "loop"
+            loop.mkdir(parents=True)
+            (loop / "backing_file").write_text("/lab/images/ext4.img\n")
+            (loop / "dio").write_text("0\n")
+            with mock.patch.object(lab, "ROOT", Path("/lab")), mock.patch.object(lab, "SYS_BLOCK", Path(folder)), \
+                 mock.patch.object(lab.subprocess, "check_output", side_effect=lsblk), \
+                 mock.patch.object(lab.os.path, "ismount", side_effect=lambda path: str(path) in devices), \
+                 mock.patch.object(lab.os, "stat", side_effect=lambda path: mock.Mock(st_dev=os.makedev(*devices[str(path)]))):
+                return lab.disks(["ext4", "xfs"])
+
+    def test_a_run_names_the_disk_under_the_lab_and_under_each_image(self):
+        nvme = dict(disk="nvme0n1", model="Microsoft NVMe Direct Disk", rotational=False, transport="nvme")
+        found = self.disks(lambda *args, **kwargs: self.LSBLK,
+                           {"/lab": (259, 2), "/lab/fs/ext4": (7, 2), "/lab/images/ext4.img": (259, 2)})
+        self.assertEqual(found, dict(
+            root=dict(path="/lab", device="/dev/nvme0n1p1", **nvme),
+            ext4=dict(path="/lab/fs/ext4", device="/dev/loop2", disk="loop2", model=None, rotational=True, transport=None,
+                      backing_file="/lab/images/ext4.img", direct_io=False,
+                      backing=dict(path="/lab/images/ext4.img", device="/dev/nvme0n1p1", **nvme))))
+        # a partition of a network-attached disk is named with its disk's model too
+        found = self.disks(lambda *args, **kwargs: self.LSBLK, {"/lab": (8, 17)})
+        self.assertEqual(found["root"], dict(path="/lab", device="/dev/sdb1", disk="sdb", model="Virtual Disk",
+                                             rotational=True, transport=None))
+
+    def test_a_disk_lsblk_cannot_name_is_kept_by_its_numbers(self):
+        def missing(*args, **kwargs):
+            raise FileNotFoundError("lsblk")
+        found = self.disks(missing, {"/lab": (259, 2)})
+        self.assertEqual(found["root"], dict(path="/lab", device="259:2"))
+
+
 class LabHelperTests(unittest.TestCase):
     def test_cpu_lists_name_available_cpus(self):
         self.assertEqual(lab.cpu_list(" ", available=[3, 1]), (1, 3))

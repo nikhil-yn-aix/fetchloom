@@ -53,6 +53,8 @@ UV_PROJECT_ENVIRONMENT="$FL_BENCH_VENV" UV_PYTHON_DOWNLOADS=never uv sync --proj
 python3 -m unittest discover -s bench -p 'test_*.py'
 ```
 
+Put `FL_BENCH_ROOT` on the machine's local SSD, never on a network-attached OS disk: the test filesystems are images in it, so every fsync a tool makes ends in an fsync of its image file there, which waits on whatever else that disk holds unwritten, and a cloud machine's OS disk also takes its logs, caches and temporary files. `meta.json` records the disk under the lab and under each image, with its model, transport and whether it is rotational.
+
 Set `FL_BENCH_LAB_CHECKS=1` on the test command, as root inside a set-up lab, to check that switching network profiles leaves no earlier rate cap behind, that each capped link holds its queue limit, and that a run's cgroup counts every process it starts. Set `FL_BENCH_LIVE_CHECKS=1` on the test command, inside a set-up lab, to also check that the hugging face and kaggle wrappers reject deliberately wrong expected hashes, using tiny public files. `FL_BENCH_FETCHLOOM` names the binary they use, `/home/fl/bin/fetchloom` by default. CI runs the other checks on every pull request.
 
 Setup creates `flb-srv`, `flb-client` and `flb-server`, adds `lab.flb` and `store.flb` to `/etc/hosts` on one line marked `# fl-bench`, installs a disposable CA for both names, starts nginx and mounts two 12 GiB sparse images. The server answers each path under `https://lab.flb/r/` with a 302 to the same path on `store.flb`, as a repository sends its downloads to a storage host. Setup replaces only a lab with its ownership marker. It refuses conflicting unowned resources. Setup also checks that HTTPS answers on both names, through the redirect.

@@ -431,6 +431,57 @@ class Tree:
             pass
 
 
+# where the kernel tells a loop device's backing file and whether it reads it with direct I/O
+SYS_BLOCK = Path("/sys/block")
+
+
+def block_devices():
+    """every block device lsblk lists, by major:minor, each partition beside its disk; none when
+    lsblk cannot say, which leaves a disk named by its numbers alone."""
+    try:
+        listed = json.loads(subprocess.check_output(
+            ["lsblk", "-J", "-o", "NAME,MAJ:MIN,MODEL,ROTA,TRAN,TYPE,PKNAME"], text=True))["blockdevices"]
+    except (OSError, subprocess.CalledProcessError, ValueError, KeyError, TypeError):
+        return {}
+    found = {}
+
+    def walk(devices):
+        for device in devices:
+            found[str(device.get("maj:min", "")).strip()] = device
+            walk(device.get("children") or [])
+    walk(listed)
+    return found
+
+
+def disk(path, devices):
+    """the block device under the filesystem holding path: its name, the disk it is part of with
+    that disk's model and transport, and whether it is rotational. a loop device also names its
+    backing file, whether it reads it with direct I/O, and the disk under that file."""
+    number = os.stat(path).st_dev
+    key = f"{os.major(number)}:{os.minor(number)}"
+    device = devices.get(key)
+    if device is None:
+        return dict(path=str(path), device=key)
+    names = {entry.get("name"): entry for entry in devices.values()}
+    whole = names.get(device.get("pkname")) or device
+    found = dict(path=str(path), device=f"/dev/{device['name']}", disk=whole.get("name"), model=whole.get("model"),
+                 rotational=device.get("rota") in (True, 1, "1"), transport=whole.get("tran"))
+    if device.get("type") == "loop":
+        loop = SYS_BLOCK / device["name"] / "loop"
+        backing = (loop / "backing_file").read_text().strip()
+        found.update(backing_file=backing, direct_io=(loop / "dio").read_text().strip() == "1",
+                     backing=disk(backing, devices))
+    return found
+
+
+def disks(fs):
+    """the disk under the lab's root and under each mounted test filesystem among fs, so a result
+    names what it was measured on."""
+    devices = block_devices()
+    mounted = [name for name in fs if os.path.ismount(ROOT / "fs" / name)]
+    return dict(root=disk(ROOT, devices), **{name: disk(ROOT / "fs" / name, devices) for name in mounted})
+
+
 DROP = Path("/proc/sys/vm/drop_caches")
 
 

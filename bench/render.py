@@ -740,6 +740,22 @@ def notes(rows):
     return lines
 
 
+def disk_line(disks):
+    """the disk under the lab, by device, model, kind and transport, and the test filesystems whose
+    images sit on it."""
+    root = disks.get("root") or {}
+    line = f"- disk: `{root.get('device', 'unknown')}`"
+    if root.get("model"):
+        kind = "rotational" if root.get("rotational") else "solid-state"
+        line += ", " + ", ".join(part for part in (root["model"], kind, root.get("transport")) if part)
+    images = sorted(name for name, found in disks.items() if name != "root" and found.get("backing_file"))
+    under = {(disks[name].get("backing") or {}).get("device") for name in images}
+    if images:
+        place = "there" if under == {root.get("device")} else "on " + " and ".join(f"`{device}`" for device in sorted(map(str, under)))
+        line += f"; {' and '.join(images)} on {'a loop image' if len(images) == 1 else 'loop images'} {place}"
+    return line
+
+
 def machines(metas):
     """each whole run's machine, versions and cases as list lines; chunks of one share a
     machine and versions, which are shown once."""
@@ -751,6 +767,8 @@ def machines(metas):
                    f"- kernel: `{meta.get('kernel', 'unknown')}`; seed: `{meta.get('seed', 'unknown')}`",
                    f"- fetchloom: `{meta.get('tool_versions', {}).get('fetchloom', 'unknown')}`; repository: `{meta.get('repo_head', 'unknown')}`",
                    "- versions: " + "; ".join(f"{name} `{version}`" for name, version in meta.get("tool_versions", {}).items())]
+        if meta.get("disks"):
+            setting.append(disk_line(meta["disks"]))
         if meta.get("cpu_affinity") is not None:
             setting.append(f"- measured CPUs: `{meta['cpu_affinity']}`; nginx threads: `{meta.get('nginx_cpu_affinity', {})}`")
         if meta.get("fetchloom_binary"):

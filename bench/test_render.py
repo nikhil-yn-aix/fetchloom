@@ -360,10 +360,15 @@ class PageTests(Quiet):
         return page.read_text()
 
     def test_the_conditions_name_the_machine_the_binary_and_each_network(self):
+        nvme = dict(device="/dev/nvme0n1p1", disk="nvme0n1", model="Microsoft NVMe Direct Disk", rotational=False, transport="nvme")
         meta = dict(kind="lab", quick=False, cpu_affinity=[2, 3], nginx_cpu_affinity={"41": [4]},
                     fetchloom_binary=dict(path="/home/fl/bin/fetchloom", sha256="a" * 64), filesystems={"ext4": "ext4 rw"},
-                    network_profiles=dict(lan=shape(0, 0, None), poor=shape(300, 3, 10, 1000, 959)))
+                    network_profiles=dict(lan=shape(0, 0, None), poor=shape(300, 3, 10, 1000, 959)),
+                    disks=dict(root=dict(path="/lab", **nvme),
+                               ext4=dict(path="/lab/fs/ext4", device="/dev/loop2", backing_file="/lab/images/ext4.img",
+                                         direct_io=False, backing=dict(path="/lab/images/ext4.img", **nvme))))
         page = self.render([lab_row(quick=False), lab_row(quick=False, round=0, warmup=True, status="failed")], meta)
+        self.assertIn("- disk: `/dev/nvme0n1p1`, Microsoft NVMe Direct Disk, solid-state, nvme; ext4 on a loop image there", page)
         self.assertIn("- measured CPUs: `[2, 3]`; nginx threads: `{'41': [4]}`", page)
         self.assertIn(f"- supplied executable: `/home/fl/bin/fetchloom`; SHA-256: `{'a' * 64}`", page)
         self.assertIn('- recorded `unknown`: lab run on `{"ext4": "ext4 rw"}`', page)

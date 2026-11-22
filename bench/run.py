@@ -414,6 +414,7 @@ def metadata(args, adapters):
                                                             "-o", "FSTYPE,SOURCE,OPTIONS"], text=True).strip(),
                 filesystems={fs: subprocess.check_output(["findmnt", "-n", "-o", "FSTYPE,OPTIONS", str(lab.ROOT / "fs" / fs)], text=True).strip()
                              for fs in args.fs},
+                disks=lab.disks(args.fs),
                 tool_versions={name: tool.version() for name, tool in adapters.items()},
                 repo_head=repo_head(),
                 fetchloom_binary=binary_identity(args.fetchloom) if any(
