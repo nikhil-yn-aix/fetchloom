@@ -520,7 +520,7 @@ fn a_data_toml_too_big_for_its_container_is_refused_before_it_is_read() -> Resul
         // 1,000 datasets take less than 4.4 MB to read, but hold more than 0.5 MB after
         with(1_000, quote)?;
         let room = base + 4_400_000;
-        refused(&list(room)?, "data.toml, read already, holds about")?;
+        refused(&list(room)?, "data.toml takes about")?;
         answered(&list(room + (4 << 20))?, "roomy")?;
     }
     Ok(())

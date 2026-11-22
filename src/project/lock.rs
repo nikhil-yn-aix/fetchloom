@@ -134,16 +134,27 @@ fn manifest_need(read: u64, room: u64) -> u64 {
 }
 
 /// `error`, a read refused for the room, with what data.toml's manifest holds of the memory it
-/// names.
+/// names, when that is enough to matter.
 fn beside_manifest(error: Error) -> Error {
-    match HELD.load(Ordering::Relaxed) {
-        0 => error,
-        held => error.detail(format!(
-            "data.toml, read already, holds about {} of it",
-            crate::units::size(held)
-        )),
+    match manifest_held(HELD.load(Ordering::Relaxed)) {
+        Some(said) => error.detail(said),
+        None => error,
     }
 }
+
+/// what a refusal says of the `held` bytes data.toml's manifest takes of the room: nothing below
+/// [`HELD_TOLD`], which changes no limit a person would set.
+fn manifest_held(held: u64) -> Option<String> {
+    (held >= HELD_TOLD).then(|| {
+        format!(
+            "data.toml takes about {} of that already",
+            crate::units::size(held)
+        )
+    })
+}
+
+/// the least of the room data.toml's manifest takes that a refusal names.
+const HELD_TOLD: u64 = 64 << 10;
 
 /// refuses, before any list is read, a lock whose files take more memory than `room`, so a run
 /// too big for its container says so instead of being killed partway.
@@ -2010,6 +2021,17 @@ impl Lock {
 mod tests {
     use super::*;
     use crate::project::manifest::Manifest;
+
+    /// a refusal names what data.toml takes of the room only when it is enough to change the
+    /// limit a person sets, never a few kilobytes.
+    #[test]
+    fn a_refusal_names_data_toml_s_share_only_when_it_matters() {
+        assert_eq!(manifest_held(1 << 10), None);
+        assert_eq!(
+            manifest_held(512 << 10).as_deref(),
+            Some("data.toml takes about 512.0 KiB of that already")
+        );
+    }
 
     fn sample() -> Lock {
         let file = |path: &str, bytes: &[u8]| LockedFile {
