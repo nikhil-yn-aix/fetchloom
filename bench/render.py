@@ -786,9 +786,9 @@ def case_section(case):
     if case["scenario"] == "s13":
         lines.append("\neach tool runs its documented check of every file: fetchloom `fetchloom status --verify`, sha256sum "
                      "`sha256sum -c` over the files curl downloaded, pooch its `retrieve` of each file, which hashes the copy it "
-                     "has against its known hash, and datalad `git annex fsck`. DVC has no command that hashes every file again, "
-                     "and aria2c's `--check-integrity` runs only inside a download, asking the server for each file first, so "
-                     "neither is here.\n")
+                     "has against its known hash, and datalad `git annex fsck`. aria2c's `--check-integrity` asks the server for "
+                     "each file before it checks it, so it is not a local integrity check, and DVC has no command that hashes every "
+                     "file again; neither is here.\n")
     if case["scenario"] in ("s7", "s12"):
         lines += ["", f"| tool | {REFETCH} |", "|---|---:|"]
         for tool, entry in summaries.items():
