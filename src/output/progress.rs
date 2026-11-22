@@ -673,6 +673,7 @@ fn style(
                         let timed = moved.timed(verb, left);
                         measure((done, total), rate, state.elapsed(), timed, quiet, stopping)
                     });
+                parted(verb, &mut counters);
                 // a transfer's counters keep the room they grow to, so its name's cut stays put
                 if bar.is_some() {
                     counters.steady(total);
@@ -700,6 +701,18 @@ fn told_below(counters: &mut Counters, stopping: bool) {
         .filter(|_| !counters.timed && !stopping)
     {
         then.push_str(" so far");
+    }
+}
+
+/// `counters` of a bar that waits for its server, parted from the host the line names, as in
+/// `Connecting to example.org · 6 s`.
+fn parted(verb: &str, counters: &mut Counters) {
+    if let Some(then) = counters
+        .then
+        .as_mut()
+        .filter(|_| verb == "Connecting" && !counters.timed)
+    {
+        then.insert_str(0, "· ");
     }
 }
 
@@ -1664,6 +1677,23 @@ mod tests {
         bar.start(Some(10), 0);
         bar.moved.heard_at(born);
         assert_eq!(line(&bar), "no data for 5 s");
+    }
+
+    /// a download no server answered yet reads as a wait for its host, its time parted from the
+    /// host, never a bare number beside a file.
+    #[test]
+    fn a_bar_waiting_for_its_server_names_the_host_and_its_time() {
+        let six = Duration::from_secs(6);
+        let timed = Timed {
+            left: None,
+            foreseen: None,
+        };
+        let mut counters = measure((0, None), 0.0, six, timed, None, false);
+        parted("Connecting", &mut counters);
+        assert_eq!(
+            render("to 192.0.2.1", "Connecting", None, &counters, 80, false),
+            "Connecting to 192.0.2.1 · 6 s"
+        );
     }
 
     type Heard = Arc<Mutex<Vec<String>>>;

@@ -490,10 +490,7 @@ impl Overall {
                 units::count(downloads as u64, "file", "files"),
             );
             let (total, unknown) = sized(sizes());
-            // a length, not a start: no server answered the batch yet
-            if unknown == 0 {
-                bar.length(total);
-            }
+            bar.start((unknown == 0).then_some(total), 0);
             if unknown == 0 {
                 foresee(&bar, &hosts, limits(context));
             }
@@ -1031,13 +1028,14 @@ impl<'a> Watch<'a> {
     /// at once and says about how long it takes until it can tell its own.
     fn bar(&self) -> &Bar {
         self.bar.get_or_init(|| {
-            let label = self.job.label.clone();
+            // until its server answers, a download says whom it waits for; the answer names it
+            let host = format!("to {}", host_of(self.job));
             if self.overall.bar.is_some() {
-                let bar = self.output.bar_after("Downloading", label, FILE_BAR_AFTER);
+                let bar = self.output.bar_after("Connecting", host, FILE_BAR_AFTER);
                 bar.untimed();
                 return bar;
             }
-            let bar = self.output.bar("Downloading", label);
+            let bar = self.output.bar("Connecting", host);
             if let Some(time) = self.overall.time() {
                 bar.foreseen(time);
             }
@@ -4183,10 +4181,10 @@ mod tests {
         }
     }
 
-    /// a batch's bar hears nothing until bytes come, so while its downloads wait for their
-    /// servers, as checks of cached files do, it waits rather than stalls.
+    /// a download's bar names the host it waits for until its server answers, and then the file;
+    /// a batch's bar counts a stall from its start, so a batch with no bytes yet says no data.
     #[test]
-    fn a_batch_waits_for_its_servers_before_it_can_stall() {
+    fn a_bar_says_whom_it_waits_for_until_its_server_answers() {
         let context = Context::new(Output::new(
             Style {
                 color: false,
@@ -4211,12 +4209,22 @@ mod tests {
                 again: None,
             }
         };
-        let overall = Overall::new(&context, &[job("one.csv"), job("two.csv")]);
-        let bar = overall.bar.as_ref().unwrap();
-        assert_eq!(bar.total(), Some(20));
-        assert!(!bar.heard());
-        bar.advance(1);
-        assert!(bar.heard());
+        let batch = Overall::new(&context, &[job("one.csv"), job("two.csv")]);
+        assert!(batch.bar.as_ref().is_some_and(Bar::heard));
+        let lone = [job("one.csv")];
+        let overall = Overall::new(&context, &lone);
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        let watch = Watch::new(&lone[0], &context.output, &overall, &approval, false, &held);
+        assert_eq!(watch.bar().told().as_deref(), Some("to example.org"));
+        watch
+            .on(&Event::Started {
+                total: Some(10),
+                resumed: 0,
+                resumable: Resumable::Maybe,
+            })
+            .unwrap();
+        assert_eq!(watch.bar().told().as_deref(), Some("a/one.csv"));
     }
 
     /// an archive needs room for what is left to transfer plus its files again, at least its size
