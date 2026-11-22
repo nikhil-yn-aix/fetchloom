@@ -32,7 +32,7 @@ on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloo
   fetchloom exclude data/pets/images/blurry --dry-run
   fetchloom exclude data/eeg/sub-07 --json
 
-on disk: edits data.toml, and data.lock for files a source lists, and deletes the unchanged files it names from data/. --dry-run writes nothing";
+on disk: writes a pattern for each file into data.toml, takes a file its source lists out of data.lock too, and deletes the unchanged files it names from data/. to bring a file back, delete its pattern from data.toml and run `fetchloom sync`. --dry-run writes nothing";
 
     pub(super) const DROP: &str = "examples:
   fetchloom drop pets    # free its space here; data.toml and data.lock keep it
@@ -43,14 +43,14 @@ on disk: deletes the unchanged files fetchloom placed for the datasets in data/ 
     pub(super) const SYNC: &str = "examples:
   fetchloom sync    # put every file data.lock lists in the data folder
   fetchloom sync iris    # only iris
-  fetchloom sync --locked --verify    # for ci, checking every file's SHA-256
+  fetchloom sync --locked --verify    # for CI, checking every file's SHA-256
   fetchloom sync --force iris --dry-run    # what --force would replace in iris
 
 on disk: updates the data folder from data.lock, writing data.lock first if needed unless --locked, and keeps each dataset's folder out of git with a .gitignore in it. given names, it changes only those datasets' entries and files. reports files it cannot replace without --force. --dry-run writes nothing";
 
     pub(super) const LOCK: &str = "examples:
   fetchloom lock    # write data.lock from data.toml, leaving data/ alone
-  fetchloom lock --check    # fail if data.lock is out of date, as ci does
+  fetchloom lock --check    # fail if data.lock is out of date, as CI does
   fetchloom lock --upgrade iris    # record the newest data iris's source has
   fetchloom lock --theirs iris    # after a git merge, keep their side of iris
 
@@ -67,7 +67,7 @@ on disk: nothing. it reads data.toml, data.lock and data/, and asks no server";
     pub(super) const AUDIT: &str = "examples:
   fetchloom audit
   fetchloom audit iris
-  fetchloom audit --check    # for ci: fail if a source lost a file or changed
+  fetchloom audit --check    # for CI: fail if a source lost a file or changed
   fetchloom audit --json
 
 on disk: nothing. it reads data.toml and data.lock and asks each source and mirror over the network: one small request a file, and one or two a dataset";
@@ -125,7 +125,7 @@ on disk: nothing. it reads the FETCHLOOM_* variables and the settings file. `set
   fetchloom settings set push_to /mnt/lab/fetchloom
   fetchloom settings set mirrors /mnt/lab/fetchloom https://data.lab.example
 
-on disk: writes the one setting into the settings file, which FETCHLOOM_SETTINGS names, else settings.toml in fetchloom's folder, making both when missing. comments and other settings stay. a value runs would refuse writes nothing";
+on disk: writes the one setting into your settings file: the file FETCHLOOM_SETTINGS names, else settings.toml in fetchloom's settings folder, ~/.config/fetchloom on linux, making the file and its folder when missing. comments and other settings stay. a value fetchloom would refuse is not written";
 
     pub(super) const UNSET: &str = "examples:
   fetchloom settings unset jobs
@@ -204,7 +204,7 @@ on disk: nothing";
   fetchloom completions fish > ~/.config/fish/completions/fetchloom.fish
   fetchloom completions powershell | Out-String | Invoke-Expression
 
-the script completes fl too, the short name the installers make, when fl runs this fetchloom.
+the script completes fl too, the short name the installers make, when fl runs this fetchloom
 
 on disk: nothing. it prints the script on stdout, for a file your shell loads";
 }
@@ -481,8 +481,8 @@ fn linked(root: clap::Command) -> clap::Command {
     let mut root = append(
         root,
         format!(
-            "help topics: `fetchloom help concepts`, `environment` or `exit-codes`\n\
-             for agents and scripts: `fetchloom help agents`, what --json and exit codes say\n\
+            "help topics: `fetchloom help <topic>` for concepts, environment, exit-codes, or \
+             agents, what --json and exit codes tell scripts\n\
              {}\ndocs: {SITE}\nreport a bug: {}",
             helpers(),
             crate::error::ISSUES
@@ -660,7 +660,7 @@ pub(crate) enum Command {
     Completions(Completions),
 
     /// explain the ideas behind fetchloom, or one command
-    #[command(override_usage = "fetchloom help [topic]", help_template = TEMPLATE, after_help = examples::HELP)]
+    #[command(override_usage = "fetchloom help [topic]...", help_template = TEMPLATE, after_help = examples::HELP)]
     Help(Help),
 }
 
@@ -1083,7 +1083,7 @@ pub(crate) struct Audit {
     pub(crate) names: Vec<String>,
 
     /// fail when a source no longer serves a file data.lock lists, lists a newer version, or
-    /// changed a dataset's title, license or access, naming each, so ci can run it on a fresh
+    /// changed a dataset's title, license or access, naming each, so CI can run it on a fresh
     /// clone
     #[arg(long, help_heading = "options")]
     pub(crate) check: bool,
@@ -1123,7 +1123,7 @@ pub(crate) struct Settings {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum SettingsAction {
-    /// save a setting in the settings file, for every run on this machine
+    /// save a setting in your settings file, for every run of yours on this machine
     #[command(override_usage = "fetchloom settings set [options] <key> <value>...", help_template = TEMPLATE, after_help = examples::SET)]
     Set(SetSetting),
 
@@ -1208,11 +1208,11 @@ pub(crate) struct Export {
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 
-    /// sha256 for each file in the data folder, as `sha256sum -c` reads them; links for each
-    /// file downloaded, with its SHA-256; aria2 for an `aria2c -i` input file; bibtex, csl or ris
-    /// for a citation of each dataset, from the record of its DOI at doi.org where it has one,
-    /// else from data.lock; statement for a data availability paragraph with the SHA-256 of each
-    /// file
+    /// what to write, sha256 when not given. sha256: the SHA-256 of each file in the data
+    /// folder, as sha256sum -c reads them. links: the link of each file downloaded, with its
+    /// SHA-256. aria2: an input file for aria2c -i. bibtex, csl or ris: a citation of each
+    /// dataset, from the record of its DOI at doi.org where it has one, else from data.lock.
+    /// statement: a data availability paragraph with the SHA-256 of each file
     #[arg(long, value_enum, value_name = "format", default_value_t = Format::Sha256, hide_default_value = true, hide_possible_values = true, help_heading = "options")]
     pub(crate) format: Format,
 
@@ -1228,8 +1228,8 @@ pub(crate) struct Export {
 /// copy the files data.lock lists into a folder or S3 bucket mirror
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Push {
-    /// the datasets to push, by their names in data.toml; every dataset sync places when none
-    /// is named, leaving out one no sync downloaded yet
+    /// the datasets to push, by their names in data.toml; all of them when none is named, but
+    /// for any not downloaded yet, which a warning names
     #[arg(value_name = "name", help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 

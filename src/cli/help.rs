@@ -565,7 +565,7 @@ const SHORT_ARGUMENTS: [(&str, &[(&str, &str)]); 4] = [
             ("force", "replace files that were edited or are in the way"),
             (
                 "locked",
-                "fail when data.lock is out of date with data.toml, for ci",
+                "fail when data.lock is out of date with data.toml, for CI",
             ),
             (
                 "verify",
@@ -637,13 +637,25 @@ pub(super) fn short(topic: &[String]) -> Option<String> {
                 .to_owned();
             command.after_help(examples)
         });
-        if let Some((_, shown)) = SHORT_ARGUMENTS
+        let mut hidden = false;
+        if let Some((name, shown)) = SHORT_ARGUMENTS
             .iter()
             .find(|(name, _)| topic.len() == 1 && topic[0] == *name)
         {
+            hidden = root.find_subcommand(name).is_some_and(|command| {
+                command
+                    .get_arguments()
+                    .filter(|arg| !arg.is_global_set() && !arg.is_hide_set())
+                    .any(|arg| !shown.iter().any(|(id, _)| arg.get_id().as_str() == *id))
+            });
             root = mut_command(root, topic, &|command| shortened(command, shown));
         }
-        format!("`fetchloom {} --help` lists every option", topic.join(" "))
+        let more = if hidden {
+            "lists every option"
+        } else {
+            "adds the global options and what it changes on disk"
+        };
+        format!("`fetchloom {} --help` {more}", topic.join(" "))
     };
     let line = std::iter::once("fetchloom")
         .chain(topic.iter().map(String::as_str))
@@ -728,11 +740,35 @@ pub(super) fn examples_first(text: &str) -> String {
         .join("\n")
 }
 
+/// `text` with a switch counted on repeat, which clap writes as `-v, --verbose...`, listed by its
+/// name alone, since the dots read as part of it; its help says what a second one adds.
+fn uncounted(text: &str) -> String {
+    text.split('\n')
+        .map(|line| {
+            let row = line.trim_start();
+            match row.split_once("  ") {
+                Some((name, _))
+                    if row.starts_with('-') && !name.contains('<') && name.ends_with("...") =>
+                {
+                    line.replacen(
+                        &format!("{name}  "),
+                        &format!("{}     ", name.trim_end_matches("...")),
+                        1,
+                    )
+                }
+                _ => line.to_owned(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// `text` with each argument listed as the usage above it writes it: clap brackets an argument
 /// it is not told is required, as `[link]...`, though the command reports it missing itself.
 fn agreed(text: &str) -> String {
+    let text = uncounted(text);
     let Some((usage, listed)) = text.split_once("\narguments:\n") else {
-        return text.to_owned();
+        return text;
     };
     let mut lines: Vec<String> = Vec::new();
     let mut entries = true;

@@ -14,7 +14,7 @@ fetchloom push --to /media/usb/fetchloom --json
 fetchloom push [options] [name]...
 ```
 
-`name` is a dataset in `data.toml`; with none, every dataset is pushed. an unknown name is a usage error, exit 2, that suggests the closest name.
+`name` is a dataset in `data.toml`; with none, every dataset is pushed but for any not downloaded yet, which a `push.left_out` warning names. an unknown name is a usage error, exit 2, that suggests the closest name.
 
 | option | effect |
 |---|---|

@@ -34,7 +34,7 @@ commands:
 
 global options:
   -q, --quiet         print only the answer, warnings and errors
-  -v, --verbose...    say more: -v adds detail and counters, -vv adds debug logs
+  -v, --verbose       say more: -v adds detail and counters, -vv adds debug logs
       --json          print one JSON document on stdout, not the usual output
       --progress      with --json, keep plain progress lines on stderr
       --offline       use only what is already on this machine
@@ -49,8 +49,8 @@ global options:
   -h, --help          print help: -h the common part, --help all of it
   -V, --version       print the version
 
-help topics: `fetchloom help concepts`, `environment` or `exit-codes`
-for agents and scripts: `fetchloom help agents`, what --json and exit codes say
+help topics: `fetchloom help <topic>` for concepts, environment, exit-codes, or
+agents, what --json and exit codes tell scripts
 R and python helpers: https://nikhil-yn-aix.github.io/fetchloom/user/reference/
 docs: https://nikhil-yn-aix.github.io/fetchloom/
 report a bug: https://github.com/nikhil-yn-aix/fetchloom/issues
