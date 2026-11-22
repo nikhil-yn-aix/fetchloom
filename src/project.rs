@@ -1419,7 +1419,7 @@ impl Project {
         }
         let ignore = folder.join(".gitignore");
         if created {
-            let finished = write_atomically(&ignore, b"*\n")
+            let finished = ignore_new(&ignore, |file| fill(file, b"*\n"))
                 .map_err(|err| {
                     Error::io(format_args!("could not write {}", folder.display()), &err)
                 })
@@ -1702,7 +1702,8 @@ fn read_only(folder: &Path, err: &io::Error) -> bool {
 }
 
 /// whether `file`, a name in `.fetchloom`, is how [`write_atomically_with`] stages data.toml,
-/// data.lock, the state or a list's part: a dot, the name, a dot and 8 hex digits, then `.tmp`.
+/// data.lock, the state, the folder's own .gitignore or a list's part: a dot, the name, a dot and
+/// 8 hex digits, then `.tmp`.
 fn is_staged(file: &str) -> bool {
     file.strip_prefix('.')
         .and_then(|rest| rest.strip_suffix(".tmp"))
@@ -1710,9 +1711,24 @@ fn is_staged(file: &str) -> bool {
         .is_some_and(|(name, random)| {
             random.len() == 8
                 && random.bytes().all(|byte| byte.is_ascii_hexdigit())
-                && (matches!(name, manifest::FILE | lock::FILE | "state")
+                && (matches!(name, manifest::FILE | lock::FILE | "state" | ".gitignore")
                     || lock::lists::is_part(name))
         })
+}
+
+/// writes `ignore`, the .gitignore of a .fetchloom folder this run made, through `write`. a
+/// command that found the folder first makes the file itself and, once it holds the project,
+/// removes this run's stage as a stopped write's: the file it made stands in for this one.
+fn ignore_new(ignore: &Path, write: impl FnOnce(File) -> io::Result<()>) -> io::Result<()> {
+    match write_atomically_with(ignore, write) {
+        Err(err)
+            if err.kind() == io::ErrorKind::NotFound
+                && fs::symlink_metadata(ignore).is_ok_and(|found| found.is_file()) =>
+        {
+            Ok(())
+        }
+        written => written,
+    }
 }
 
 /// replaces `path` in one step, so a reader sees the old file or the new one, never half.
@@ -2761,13 +2777,15 @@ mod tests {
 
     /// what a run killed between staging a file and naming it left in `.fetchloom`, a part of
     /// tens of megabytes as like as data.lock or the state, goes once a command holds the
-    /// project; anything else there stays.
+    /// project; anything else there stays. a power cut as the folder is made leaves the stage of
+    /// its .gitignore.
     #[test]
     fn holding_the_project_sweeps_what_a_killed_write_staged() {
         let left = [
             ".data.lock.0123abcd.tmp",
             ".data.toml.89abcdef.tmp",
             ".state.deadbeef.tmp",
+            "..gitignore.b7d491c5.tmp",
             ".clean.0123456789ab.tsv.zst.0badf00d.tmp",
         ];
         let kept = [
@@ -2813,6 +2831,38 @@ mod tests {
         for name in kept {
             assert!(own.join(name).exists(), "{name}");
         }
+    }
+
+    /// a command that found .fetchloom before its .gitignore makes the file, and sweeps the stage
+    /// of the command that made the folder once it holds the project; that command then takes the
+    /// file made for its own. with no file made, a lost stage still fails.
+    #[test]
+    fn a_swept_stage_of_the_folders_gitignore_takes_the_file_made_meanwhile() {
+        let dir = tempfile::tempdir().unwrap();
+        let folder = dir.path().join(FOLDER);
+        fs::create_dir(&folder).unwrap();
+        let ignore = folder.join(".gitignore");
+        let sweep = || {
+            for entry in fs::read_dir(&folder).unwrap() {
+                let entry = entry.unwrap();
+                assert!(is_staged(&entry.file_name().to_string_lossy()));
+                fs::remove_file(entry.path()).unwrap();
+            }
+        };
+        ignore_new(&ignore, |file| {
+            sweep();
+            fs::write(&ignore, b"*\n")?;
+            fill(file, b"*\n")
+        })
+        .unwrap();
+        assert_eq!(fs::read(&ignore).unwrap(), b"*\n");
+        fs::remove_file(&ignore).unwrap();
+        let lost = ignore_new(&ignore, |file| {
+            sweep();
+            fill(file, b"*\n")
+        })
+        .unwrap_err();
+        assert_eq!(lost.kind(), io::ErrorKind::NotFound);
     }
 
     /// a write stopped as it named a read-only file leaves its staged copy read-only, and a person
