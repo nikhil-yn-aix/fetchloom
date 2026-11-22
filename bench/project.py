@@ -18,8 +18,10 @@ import render
 import run
 
 # past this many hours the poor link's sizes shrink, and past the second the live part moves to a
-# separate daytime run
+# separate daytime run, and then the tiny files to a block of their own
 SHRINK_ABOVE, DEFER_ABOVE = 8, 9
+# the cases of 10,000 tiny files, which leave the run as one block when it is still too long
+APART = ("s3", "s9")
 
 
 def part(profile):
@@ -63,8 +65,9 @@ def hours(rows, metas, comparators, scale=1):
 
 def decide(rows, metas):
     """the pilot's rules applied: the comparators it freezes; the largest scale, in hundredths, that
-    brings the projection to SHRINK_ABOVE, or the poor link's floor; and whether the live part still
-    fits under DEFER_ABOVE or moves to a daytime run."""
+    brings the projection to SHRINK_ABOVE, or the poor link's floor; whether the live part still fits
+    under DEFER_ABOVE or moves to a daytime run; and, when it moves and the rest is still over
+    DEFER_ABOVE, the APART cases that become their own block on the same build."""
     comparators = render.pick(rows)
     before = hours(rows, metas, comparators)
     scale = 1
@@ -74,11 +77,18 @@ def decide(rows, metas):
             if sum(hours(rows, metas, comparators, scale).values()) <= SHRINK_ABOVE:
                 break
     after = hours(rows, metas, comparators, scale)
-    deferred = sum(after.values()) > DEFER_ABOVE
+    total = sum(after.values())
+    deferred = total > DEFER_ABOVE
+    if deferred:
+        total -= after.get("live", 0)
+    block = sum(hours([row for row in rows if row.get("scenario") in APART], metas, comparators, scale).values())
+    apart = deferred and total > DEFER_ABOVE
+    if apart:
+        total -= block
     large, many = fixtures.scaled("poor", scale)
     return dict(comparators=comparators, hours=before, scale=scale, poor_sizes=dict(large_bytes=large, files=many),
                 hours_after=after, live="daytime" if deferred else "with the run",
-                total_hours=sum(after.values()) - (after.get("live", 0) if deferred else 0))
+                apart=list(APART) if apart else [], apart_hours=block, total_hours=total)
 
 
 def main():

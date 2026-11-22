@@ -61,5 +61,25 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((late["poor_sizes"], late["live"]), (dict(large_bytes=fixtures.POOR_FLOOR[0], files=fixtures.POOR_FLOOR[1]), "daytime"))
         self.assertAlmostEqual(late["total_hours"], sum(late["hours_after"].values()) - late["hours_after"]["live"])
 
+    def test_still_over_9_hours_without_the_live_part_s3_and_s9_become_their_own_block(self):
+        def rows(tiny_seconds):
+            # the poor case costs 2.2 hours, and 1.375 at the floor, and the live part 3
+            return [lab("s1", "poor", "curl", 720), lab("s3", "lan", "aria2c", tiny_seconds), lab("s9", "lan", "pooch", tiny_seconds),
+                    dict(kind="live", service="kaggle", tool="kagglehub", round=1, status="passed", run_seconds=1080)]
+
+        # 6 hours of tiny files: moving the live part out is enough, so they stay
+        enough = project.decide(rows(1800), [])
+        self.assertEqual((enough["scale"], enough["live"], enough["apart"]), (.01, "daytime", []))
+        self.assertAlmostEqual(enough["total_hours"], 1.375 + 6)
+        # 9 hours of them: still over 9 hours without the live part, so s3 and s9 run as their own block,
+        # each arm still 5 rounds and a warmup
+        over = project.decide(rows(2700), [])
+        self.assertEqual((over["scale"], over["live"], over["apart"]), (.01, "daytime", ["s3", "s9"]))
+        self.assertAlmostEqual(over["apart_hours"], 2 * 2700 * 6 / 3600)
+        self.assertAlmostEqual(over["total_hours"], 1.375)
+        # within 9 hours after the poor sizes shrink, neither moves
+        short = project.decide(rows(600), [])
+        self.assertEqual((short["live"], short["apart"]), ("with the run", []))
+
 if __name__ == "__main__":
     unittest.main()

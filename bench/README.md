@@ -91,11 +91,11 @@ python3 bench/project.py "$FL_BENCH_ROOT/results/pilot" > plan.json
 python3 -c 'import json; print(json.dumps(json.load(open("plan.json"))["comparators"]))' > comparators.json
 ```
 
-Each row's `run_seconds` is what its run cost the campaign, untimed work included, and each case in `meta.json` keeps its `prepared_seconds`. `plan.json` holds the projected `hours` of home, poor, lan and live, the `comparators` frozen for each headline case, the `scale` for the poor link's sizes with the `poor_sizes` it gives, the hours after it, and whether the `live` part runs with the lab or moves to a daytime run. `render.py --comparators "$FL_BENCH_ROOT/results/pilot"` gives the same comparators: for each headline case the pilot measured, the fastest other tool that passed every run within the budget, and the next fastest too when its time is within 5% of it.
+Each row's `run_seconds` is what its run cost the campaign, untimed work included, and each case in `meta.json` keeps its `prepared_seconds`. `plan.json` holds the projected `hours` of home, poor, lan and live, the `comparators` frozen for each headline case, the `scale` for the poor link's sizes with the `poor_sizes` it gives, the hours after it, whether the `live` part runs with the lab or moves to a daytime run, and `apart`, the cases that leave the run as a block of their own, with their `apart_hours`; `total_hours` is the run's without what moved. `render.py --comparators "$FL_BENCH_ROOT/results/pilot"` gives the same comparators: for each headline case the pilot measured, the fastest other tool that passed every run within the budget, and the next fastest too when its time is within 5% of it.
 
 ### The real run
 
-Give every run the pilot's comparators, and the scale from `plan.json` as `--poor-scale` when it is below 1; leave the live campaign for a daytime run when `plan.json` says so:
+Give every run the pilot's comparators, and the scale from `plan.json` as `--poor-scale` when it is below 1; leave the live campaign for a daytime run when `plan.json` says so. When `apart` lists s3 and s9, the ext4 campaign takes `--scenarios s1,s2r,s4,s5,s6,s7,s8,s10,s11,s12,s13`, and the two run later as their own block on the same build, with the same comparators:
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --control --comparators comparators.json \
@@ -106,6 +106,9 @@ python3 bench/run.py --fetchloom "$benchmark_binary" --control --comparators com
   --out "$FL_BENCH_ROOT/results/full/lab-xfs"
 python3 bench/live.py --fetchloom "$benchmark_binary" --services zenodo,huggingface,kaggle,dataverse \
   --seed 1729 --out "$FL_BENCH_ROOT/results/full/live"
+python3 bench/run.py --fetchloom "$benchmark_binary" --control --comparators comparators.json \
+  --profiles lan --scenarios s3,s9 --fs ext4 --seed 1729 --cpus 12-23 --server-cpus 6-11 \
+  --out "$FL_BENCH_ROOT/results/full/lab-apart"
 ```
 
 `--control` runs fetchloom a second time in each headline case, under `FETCHLOOM_EXP_NONE=1`, a setting it never reads: this control arm measures the machine's own noise, and its interval decides whether a headline case on a link without loss may have a verdict. `--comparators comparators.json`, given to every run of the campaign, records the frozen rivals in `meta.json`. A campaign refuses a comparator it does not measure, and the renderer takes a case's comparator only from the `meta.json` of the campaign that measured it, so one recorded by a later chunk never judges it.

@@ -143,9 +143,10 @@ This plan is fixed before any data is seen.
     - Each headline case's rival is the fastest other tool that passed every run within the budget.
     - If the next fastest tool's time is within 5% of that rival's, both are frozen: both join the 10-round tier, and the bonferroni family grows to the real number of headline comparisons.
     - If the projection is still over 9 hours after the poor sizes shrink, the live part moves to a separate daytime run.
+    - If it is still over 9 hours without the live part, s3 and s9, the 10,000 tiny files, move to a separate block on the same frozen build.
 
-    `bench/render.py --comparators` reads the pilot and writes the frozen rivals, and every run of the real campaign gets them. Rounds and tools never shrink after seeing data.
-3. The real run, started right after the pilot on the same frozen build, with nothing else running on the machine.
+    `bench/render.py --comparators` reads the pilot and writes the frozen rivals, and every run of the real campaign gets them. Rounds and tools never shrink after seeing data: descriptive arms keep their 5 rounds, and only the poor sizes shrink.
+3. The real run, started right after the pilot on the same frozen build, with nothing else running on the machine. The live part and the s3 and s9 block, when the rules move them out, run later on the same build.
 
 ## Budget
 
