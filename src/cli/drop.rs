@@ -322,11 +322,19 @@ fn tell_back(
         }
     }
     if !sourced.is_empty() {
-        let them = if sourced.len() == 1 { "it" } else { "them" };
-        output.next(&format!(
-            "`{}` brings {them} back",
-            super::project::command(&format!("sync {}", sourced.join(" ")))
-        ));
+        let sync = super::project::command(&format!("sync {}", sourced.join(" ")));
+        // a script's path brings one back too, downloading it again, which a job may not expect
+        let path = match sourced.as_slice() {
+            [one] => format!(
+                "it back, and so does `{}`",
+                super::project::command(&format!("path {one}"))
+            ),
+            _ => format!(
+                "them back, and so does `{}` for each",
+                super::project::command("path <name>")
+            ),
+        };
+        output.next(&format!("`{sync}` brings {path}"));
     }
 }
 

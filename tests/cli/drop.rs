@@ -20,6 +20,36 @@ fn iris(sandbox: &Sandbox) -> Result<Routes> {
     Ok(source)
 }
 
+/// drop's next line names path as a way back too, since a script's path brings a dropped dataset
+/// back, downloading it again, which path says before it does.
+#[test]
+fn a_dropped_dataset_s_path_says_it_brings_it_back() -> Result {
+    let sandbox = Sandbox::new()?;
+    let _source = iris(&sandbox)?;
+    let placed = sandbox.work().join("data/iris/iris.csv");
+    #[cfg(target_os = "linux")]
+    if let Some(screen) = sandbox.on_a_terminal(&["--yes", "drop", "iris"])? {
+        assert!(
+            screen.contains(
+                "`fetchloom sync iris` brings it back, and so does `fetchloom path iris`"
+            ),
+            "{screen}"
+        );
+    }
+    if placed.exists() {
+        ok(&sandbox.run(&["--yes", "drop", "iris"])?)?;
+    }
+    let output = sandbox.run(&["path", "iris"])?;
+    ok(&output)?;
+    let told = text(&output.stderr)?;
+    assert!(
+        told.contains("Restoring iris, which `fetchloom drop` freed on this machine"),
+        "{told}"
+    );
+    assert_eq!(fs::read(&placed)?, IRIS);
+    Ok(())
+}
+
 #[test]
 fn a_dropped_dataset_is_left_out_until_a_sync_names_it() -> Result {
     let sandbox = Sandbox::new()?;

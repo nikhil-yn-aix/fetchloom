@@ -89,6 +89,12 @@ pub(super) async fn path(context: &Context, args: args::Path) -> Result<Report, 
                             &scope,
                         )?;
                     }
+                    if project.dropped().contains(name) {
+                        context.output.step(
+                            "Restoring",
+                            &format!("{name}, which `fetchloom drop` freed on this machine"),
+                        );
+                    }
                     // the ready check only peeked at the cache; a sync opens it, made if missing
                     drop(cache.take());
                     let work = Loop::new(context, &project, Arc::new(context.net()), open_cache()?)
