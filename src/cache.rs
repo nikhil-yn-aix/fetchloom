@@ -1218,8 +1218,8 @@ impl Cache {
         if err.raw_os_error().is_none() {
             return err;
         }
-        if crate::error::out_of_files(&err, folder) {
-            return crate::error::files_ran_out(err, folder, crate::error::FEWER_FILES);
+        if crate::volume::out_of_files(&err, folder) {
+            return crate::volume::files_ran_out(err, folder, crate::error::FEWER_FILES);
         }
         let mut taken = None;
         let words = match err.kind() {
@@ -1956,7 +1956,7 @@ pub(crate) mod tests {
             "could not write to the cache",
             &cache.explained(&partial, full()),
         );
-        let member = crate::error::files_ran_out(full(), &partial, crate::error::FEWER_MEMBERS);
+        let member = crate::volume::files_ran_out(full(), &partial, crate::error::FEWER_MEMBERS);
         let unpacked =
             crate::error::Error::io("could not write \"d02/f0205.txt\" into the cache", &member);
         let denied = cache.explained(&partial, io::Error::from_raw_os_error(13));

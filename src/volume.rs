@@ -362,6 +362,28 @@ pub(crate) fn no_files_left(path: &Path) -> bool {
     }
 }
 
+/// whether `err`, the system's own full disk, came from the disk at `path` running out of files
+/// with bytes to spare, as a disk of many small files does.
+pub(crate) fn out_of_files(err: &io::Error, path: &Path) -> bool {
+    err.kind() == io::ErrorKind::StorageFull && err.raw_os_error().is_some() && no_files_left(path)
+}
+
+/// `err` as it is, or, when [`out_of_files`] says the disk at `path` ran out of files, an error
+/// that says so, with `help`.
+pub(crate) fn files_ran_out(err: io::Error, path: &Path, help: &str) -> io::Error {
+    if !out_of_files(&err, path) {
+        return err;
+    }
+    io::Error::new(
+        err.kind(),
+        crate::error::Explained {
+            words: crate::error::NO_FILES.to_owned(),
+            help: Some(help.to_owned()),
+            cause: err,
+        },
+    )
+}
+
 #[cfg(test)]
 thread_local! {
     /// what [`no_files_left`] answers in a test that sets it.
