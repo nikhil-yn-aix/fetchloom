@@ -1503,15 +1503,7 @@ impl Project {
                 None,
             )
         };
-        if found.len() > most {
-            return Err(too_large());
-        }
-        let mut bytes = Vec::with_capacity(usize::try_from(found.len()).unwrap_or_default());
-        file.take(most + 1).read_to_end(&mut bytes)?;
-        if bytes.len() as u64 > most {
-            return Err(too_large());
-        }
-        Ok(bytes)
+        capped(file, found.len(), most, too_large)
     }
 
     /// the text of the project file `name`, as [`Project::read_own`] reads it, or none when it
@@ -1519,6 +1511,26 @@ impl Project {
     pub(crate) fn own_text(&self, name: &str) -> Option<String> {
         String::from_utf8(self.read_own(name).ok()?).ok()
     }
+}
+
+/// the bytes of `file`, `length` of them as its metadata says, refused with `too_large` past
+/// `most`: one longer is refused before a byte is read, and one that grows past it while read is
+/// read no further than one byte past it.
+fn capped(
+    file: impl Read,
+    length: u64,
+    most: u64,
+    too_large: impl Fn() -> io::Error,
+) -> io::Result<Vec<u8>> {
+    if length > most {
+        return Err(too_large());
+    }
+    let mut bytes = Vec::with_capacity(usize::try_from(length).unwrap_or_default());
+    file.take(most + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > most {
+        return Err(too_large());
+    }
+    Ok(bytes)
 }
 
 /// what stands where a project file should be, when it is no plain file.
@@ -3187,6 +3199,24 @@ mod tests {
             "{}",
             mistake.message
         );
+    }
+
+    /// a project file is read whole up to its cap, data.toml's or data.lock's, and refused one
+    /// byte past it: by the length it states, before a byte is read, or by the bytes read, for a
+    /// file that grew past the cap once its length was taken. a small cap stands for both.
+    #[test]
+    fn a_project_file_is_read_to_its_cap_and_refused_one_byte_past() {
+        let refused = || io::Error::new(io::ErrorKind::FileTooLarge, "past the cap");
+        let at = capped(&[b'x'; 8][..], 8, 8, refused).unwrap();
+        assert_eq!(at, [b'x'; 8], "a file at its cap is read whole");
+        for (bytes, stated) in [(9, 9), (9, 8)] {
+            let read = capped(&vec![b'x'; bytes][..], stated, 8, refused);
+            assert_eq!(
+                read.map_err(|err| err.kind()),
+                Err(io::ErrorKind::FileTooLarge),
+                "{bytes} bytes, stating {stated}"
+            );
+        }
     }
 
     /// data.toml and data.lock are read only as plain files: a link, which a clone can hold to any
