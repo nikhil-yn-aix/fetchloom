@@ -653,7 +653,7 @@ fn walk_import(
         )
     })?;
     let output = &context.output;
-    tell_left_out(output, shown, &walked);
+    tell_left_out(output, shown, &walked, supplied.is_some());
     if supplied.is_none()
         && source.extract
         && output.shows_hints()
@@ -702,11 +702,17 @@ fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
 
 /// says what an import left out of `walked`: links and special files, and what the system or a
 /// tool keeps beside files, such as finder's `.DS_Store` and vim's swap files, and warns of each
-/// exclude pattern that left nothing out.
-pub(super) fn tell_left_out(output: &Output, shown: &str, walked: &Walked) {
+/// exclude pattern that left nothing out, one data.toml gave when `from_toml` says so.
+pub(super) fn tell_left_out(output: &Output, shown: &str, walked: &Walked, from_toml: bool) {
     tell_skipped(output, shown, &walked.skipped);
-    for (message, help) in &walked.unmatched {
-        output.warn_with(Warning::SourceExcludeUnmatched, message, help);
+    for (pattern, help) in &walked.unmatched {
+        let named = if from_toml {
+            format!("the exclude pattern \"{pattern}\" in data.toml")
+        } else {
+            format!("--exclude \"{pattern}\"")
+        };
+        let said = super::sync::unmatched_said(&named, shown);
+        output.warn_with(Warning::SourceExcludeUnmatched, &said, help);
     }
     let kept_beside = [
         (
@@ -1105,8 +1111,8 @@ pub(super) struct Walked {
     pub(super) system: Vec<String>,
     /// what tools keep beside the files they work on, such as vim's swap files, left out.
     pub(super) dropped: Vec<String>,
-    /// the warning, and its help, for each exclude pattern that matches no file found.
-    unmatched: Vec<(String, String)>,
+    /// each exclude pattern that matches no file found, with the help its warning gives.
+    pub(super) unmatched: Vec<(String, String)>,
 }
 
 impl Walked {
@@ -1266,8 +1272,8 @@ fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> 
             .iter()
             .filter(|glob| !paths().any(|path| glob.matches(path)))
             .map(|glob| {
-                let named = format!("--exclude \"{}\"", glob.as_str());
-                super::sync::unmatched_exclude(&named, glob, shown, paths)
+                let (_, help) = super::sync::unmatched_exclude("", glob, shown, paths);
+                (glob.as_str().to_owned(), help)
             })
             .collect();
     }

@@ -262,7 +262,7 @@ fn read<'m>(
         HashSet::new()
     };
     leave_out(&mut walked, &source, &markers);
-    tell_left_out(&context.output, shown, &walked);
+    tell_left_out(&context.output, shown, &walked, entry.is_some());
     Ok(Read {
         name,
         entry,

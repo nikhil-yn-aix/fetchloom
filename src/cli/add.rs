@@ -2738,6 +2738,35 @@ mod tests {
         assert!(start_here(&context, dir.path(), None).is_ok());
     }
 
+    /// an exclude pattern data.toml gave an import, as a supply of its files takes it, is named
+    /// as data.toml's, never as an `--exclude` nobody typed.
+    #[test]
+    fn an_import_s_unmatched_exclude_is_named_where_it_was_written() {
+        let style = Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        };
+        for (from_toml, named) in [
+            (true, "the exclude pattern \"*tmp*\" in data.toml"),
+            (false, "--exclude \"*tmp*\""),
+        ] {
+            let output = Output::new(style, Level::Normal, false, false);
+            let mut walked = Walked::default();
+            walked.unmatched = vec![("*tmp*".to_owned(), "try \"**/*tmp*\"".to_owned())];
+            tell_left_out(&output, "../photos", &walked, from_toml);
+            assert_eq!(
+                output.warned(),
+                [format!(
+                    "{named} matched no file of ../photos, so it leaves nothing out; try \"**/*tmp*\""
+                )]
+            );
+        }
+    }
+
     /// the counts are of system files an import skips and links one add with `--as` was given.
     #[test]
     fn counts_in_add_lines_have_their_thousands_apart() {
@@ -2753,7 +2782,7 @@ mod tests {
         let output = Output::new(style, Level::Normal, false, false);
         let mut walked = Walked::default();
         walked.system = (0..1001).map(|n| format!("f{n}/.DS_Store")).collect();
-        tell_left_out(&output, "../photos", &walked);
+        tell_left_out(&output, "../photos", &walked, false);
         assert_eq!(
             output.said(),
             ["    Skipped f0/.DS_Store and 1,000 more the system makes in ../photos"]

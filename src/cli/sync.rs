@@ -2796,7 +2796,9 @@ fn first_pin(
     )
 }
 
-pub(super) use draft::{filter, tell_unmatched_excludes, unmatched_exclude, without_files};
+pub(super) use draft::{
+    filter, tell_unmatched_excludes, unmatched_exclude, unmatched_said, without_files,
+};
 
 /// resolves a reference, with progress or plain lines while its source takes its time, listing
 /// only the folders that may hold a file the `select` patterns match where the source can, and

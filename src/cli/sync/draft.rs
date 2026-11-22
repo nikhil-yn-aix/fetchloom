@@ -1583,6 +1583,11 @@ pub(in crate::cli) fn tell_unmatched_excludes(
     }
 }
 
+/// the warning for the exclude pattern `named` as it was written, which matches no file of `of`.
+pub(in crate::cli) fn unmatched_said(named: &str, of: &str) -> String {
+    format!("{named} matched no file of {of}, so it leaves nothing out")
+}
+
 /// the warning, and its help, for the exclude pattern `glob`, `named` as it was written, that
 /// matches none of `paths`, the files of `of`.
 pub(in crate::cli) fn unmatched_exclude<'a, I: Iterator<Item = &'a str>>(
@@ -1591,7 +1596,7 @@ pub(in crate::cli) fn unmatched_exclude<'a, I: Iterator<Item = &'a str>>(
     of: &str,
     paths: impl Fn() -> I,
 ) -> (String, String) {
-    let message = format!("{named} matched no file of {of}, so it leaves nothing out");
+    let message = unmatched_said(named, of);
     let deeper = Glob::new(&format!("**/{}", glob.as_str()))
         .ok()
         .filter(|deeper| glob.is_top_level_only() && paths().any(|path| deeper.matches(path)));
