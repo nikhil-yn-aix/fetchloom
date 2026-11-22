@@ -883,13 +883,19 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(tool.timed(dict(wall_seconds=9.0), self.work), dict(wall_seconds=9.0, clock="process start to exit"))
         self.assertEqual(tools.Curl("unused").timed(dict(wall_seconds=9.0), self.work), dict(wall_seconds=9.0, clock="process start to exit"))
 
-    def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
+    def test_each_case_runs_the_tools_of_the_design(self):
         self.assertEqual([cls.name for cls in tools.CLASSES],
                          ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad", "rsync", "sha256sum"])
-        flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")
-        self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2r", "s3", "s4", "s7", "s8", "s10"])
-        # curl itself still asks the server in the no-op cases
-        self.assertTrue(all(plain.supports(dict(id=s)) for s in ("s6", "s9")))
+        six = {"fetchloom", "curl", "aria2c", "pooch", "dvc", "datalad"}
+        # the flush shows its cost only where many files are written, and a tool with no cache downloads again for
+        # a second project; dvc and datalad track files, not archives
+        expected = {"s1": six, "s2r": six | {"curl+sync"}, "s3": six | {"curl+sync"}, "s5": six | {"curl+sync"}, "s6": six,
+                    "s7": six, "s9": six, "s10": six, "s12": six, "s4": {"fetchloom", "curl", "curl+sync", "aria2c", "pooch"},
+                    "s8": {"fetchloom", "curl", "curl+sync", "aria2c", "pooch"}, "s11": {"fetchloom", "dvc", "datalad", "rsync"},
+                    "s13": {"fetchloom", "sha256sum", "pooch", "datalad"}}
+        adapters = tools.available("unused")
+        self.assertEqual({scenario: {name for name, tool in adapters.items() if tool.supports(dict(id=scenario))}
+                          for scenario in fixtures.ALL_SCENARIOS}, expected)
 
     def test_a_second_project_is_set_up_after_the_untimed_first(self):
         populated = []

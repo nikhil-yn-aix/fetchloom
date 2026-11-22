@@ -244,7 +244,8 @@ def variant(value):
 
 class Curl(Tool):
     name = "curl"
-    scenarios = Tool.scenarios - {"s5", *fixtures.SHARED, *fixtures.CHECKED}
+    # with no cache, a second project costs curl the whole download again, as it costs aria2c
+    scenarios = Tool.scenarios - {*fixtures.SHARED, *fixtures.CHECKED}
 
     def command(self, scenario, workdir):
         return script(workdir / "command.sh", self.steps(scenario, workdir))
@@ -268,9 +269,9 @@ class Curl(Tool):
 class DurableCurl(Curl):
     """curl as above, then a flush of the filesystem it wrote, as fetchloom flushes the files it
     places, so the cost of making bytes survive a power cut is on both sides; only in the cases that
-    write data."""
+    write many files."""
     name = "curl+sync"
-    scenarios = Curl.scenarios - set(NOOP) - set(fixtures.NEXT)
+    scenarios = {"s2r", "s3", "s4", "s5", "s8"}
 
     def version(self):
         return Curl("unused").version()
