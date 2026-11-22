@@ -238,6 +238,40 @@ pub(crate) fn count(n: u64, one: &str, many: &str) -> String {
     format!("{} {}", grouped(n), if n == 1 { one } else { many })
 }
 
+/// `a` against `b` as a person orders names: each run of digits by its value, so `note2` comes
+/// before `note10`, the rest byte by byte.
+pub(crate) fn natural(a: &str, b: &str) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+    let digits = |text: &[u8]| text.iter().take_while(|byte| byte.is_ascii_digit()).count();
+    let (mut a, mut b) = (a.as_bytes(), b.as_bytes());
+    loop {
+        match (a.first(), b.first()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let (long_a, long_b) = (digits(a), digits(b));
+                let value = |run: &[u8]| {
+                    let zeros = run.iter().take_while(|byte| **byte == b'0').count();
+                    run[zeros..].to_vec()
+                };
+                let (value_a, value_b) = (value(&a[..long_a]), value(&b[..long_b]));
+                let order = value_a
+                    .len()
+                    .cmp(&value_b.len())
+                    .then_with(|| value_a.cmp(&value_b))
+                    .then(long_a.cmp(&long_b));
+                if order != Ordering::Equal {
+                    return order;
+                }
+                (a, b) = (&a[long_a..], &b[long_b..]);
+            }
+            (Some(x), Some(y)) if x != y => return x.cmp(y),
+            _ => (a, b) = (&a[1..], &b[1..]),
+        }
+    }
+}
+
 /// a number with its thousands apart: `1,204`.
 pub(crate) fn grouped(n: u64) -> String {
     let digits = n.to_string();
@@ -400,6 +434,32 @@ pub(crate) fn nanos(time: SystemTime) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// runs of digits count by their value, so a tenth note follows the second, and names that
+    /// differ elsewhere keep their byte order.
+    #[test]
+    fn names_order_by_the_value_of_their_numbers() {
+        let mut names = vec![
+            "note10.txt",
+            "note2.txt",
+            "note1.txt",
+            "b.txt",
+            "note02.txt",
+            "a.txt",
+        ];
+        names.sort_by(|a, b| natural(a, b));
+        assert_eq!(
+            names,
+            [
+                "a.txt",
+                "b.txt",
+                "note1.txt",
+                "note2.txt",
+                "note02.txt",
+                "note10.txt"
+            ]
+        );
+    }
 
     /// the home folder alone is `~`, and a path elsewhere, or a home of `/`, stays whole.
     #[cfg(unix)]

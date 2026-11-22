@@ -680,6 +680,33 @@ fn an_offline_status_says_its_sync_needs_the_network() -> Result {
     Ok(())
 }
 
+/// `Extra` rows come in the order a person counts, as note2 before note10.
+#[test]
+fn extra_rows_count_their_numbers_in_order() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?)?;
+    for n in [1, 2, 10, 11] {
+        fs::write(
+            sandbox.work().join(format!("data/iris/note{n}.txt")),
+            b"mine",
+        )?;
+    }
+    let output = sandbox.run(&["status"])?;
+    let stdout = text(&output.stdout)?;
+    let notes: Vec<&str> = stdout
+        .lines()
+        .filter_map(|line| line.trim().strip_prefix("Extra data/iris/"))
+        .collect();
+    assert_eq!(
+        notes,
+        ["note1.txt", "note2.txt", "note10.txt", "note11.txt"],
+        "{stdout}"
+    );
+    Ok(())
+}
+
 /// at a terminal, files of a person's own that fill a folder alone, as a derivatives folder in a
 /// dataset's, take one row with their count, so the files beside them still show.
 #[cfg(target_os = "linux")]

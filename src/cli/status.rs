@@ -1452,7 +1452,7 @@ fn extra(survey: &Survey, wanted: &HashSet<&str>, manifest: &Manifest) -> Vec<St
         .filter(|path| !place::passed_over(manifest, survey, path))
         .cloned()
         .collect();
-    extra.sort();
+    extra.sort_by(|a, b| units::natural(a, b));
     extra
 }
 
