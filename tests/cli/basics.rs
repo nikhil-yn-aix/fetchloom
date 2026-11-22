@@ -50,6 +50,26 @@ fn help_lists_every_command() -> Result {
     Ok(())
 }
 
+/// `drop -h` says what its names are and when each is freed in a few lines, leaving the rules
+/// for each kind of mirror and source to its page.
+#[test]
+fn drop_short_help_explains_its_names_briefly() -> Result {
+    let sandbox = Sandbox::new()?;
+    let help = text(&sandbox.run(&["drop", "-h"])?.stdout)?;
+    let arguments: Vec<&str> = help
+        .lines()
+        .skip_while(|line| *line != "arguments:")
+        .skip(1)
+        .take_while(|line| !line.is_empty())
+        .collect();
+    assert!(
+        (1..=4).contains(&arguments.len()),
+        "{} lines: {help}",
+        arguments.len()
+    );
+    Ok(())
+}
+
 /// `help -h` is help's own page, as `help help` is, never the top command's.
 #[test]
 fn help_dash_h_shows_help_s_own_page() -> Result {

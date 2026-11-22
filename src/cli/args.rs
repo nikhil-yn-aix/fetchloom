@@ -1011,11 +1011,9 @@ pub(crate) struct Exclude {
 /// free a dataset's space here, keeping it in data.lock
 #[derive(Clone, Debug, clap::Args)]
 pub(crate) struct Drop {
-    /// the datasets' names in data.toml. each is freed only once every one of its files is
-    /// found elsewhere: on a folder mirror whose copy still hashes right, at its source when the
-    /// source states the checksum data.lock records, or with --yes at a web or S3 mirror or its
-    /// source at its size, or at its source with no size; a dataset added from a folder only on
-    /// a folder mirror
+    /// the datasets to free, by their names in data.toml. each is freed only once every one of
+    /// its files can be had again, from a folder mirror or its source; --yes also takes a web or
+    /// S3 mirror, or a source that states no checksum
     #[arg(value_name = "name", required = true, help_heading = "arguments")]
     pub(crate) names: Vec<String>,
 
