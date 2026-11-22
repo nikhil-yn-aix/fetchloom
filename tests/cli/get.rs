@@ -38,8 +38,14 @@ fn a_get_at_a_terminal_says_its_file_is_read_only() -> Result {
     let Some(screen) = sandbox.on_a_terminal(&["get", &server.url])? else {
         return Ok(());
     };
+    // a disk that clones, as btrfs does, gives a file of its own, which protects no cache's copy
+    let reason = if screen.contains(" · linked to the cache") {
+        ", which protects the cache's copy"
+    } else {
+        ""
+    };
     assert!(
-        screen.contains("\n  hint: the file is read-only, which protects the cache's copy: to edit it, write a file of your own with -o <file>, or copy it and make the copy writable\n"),
+        screen.contains(&format!("\n  hint: the file is read-only{reason}: to edit it, write a file of your own with -o <file>, or copy it and make the copy writable\n")),
         "{screen}"
     );
     Ok(())
