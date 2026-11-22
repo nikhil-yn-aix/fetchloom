@@ -11,9 +11,11 @@ const COMMENT: &str = "    # ";
 pub(super) const MARK: &str = if cfg!(windows) { " `" } else { " \\" };
 
 /// `text` with each line wider than `width` wrapped between words, colors kept, going on under its
-/// own text as [`hanging`] finds it. a command in backticks or a name in double quotes is never
-/// split, and a word too wide for the room under that text starts at the first column, where it
-/// fits whole or the terminal wraps it from the same column.
+/// own text as [`hanging`] finds it. a command in backticks is never split, since a shell would run
+/// a split command's first line alone: one too wide for the room under that text starts at the
+/// first column, where it fits whole or the terminal wraps it. a name in double quotes too wide
+/// for that room wraps at its own spaces, and a word too wide for it, as a link or a path, is cut
+/// at the edge, each going on under the text, never leaving a label such as `help:` alone.
 pub(super) fn fit(text: &str, width: usize) -> String {
     text.split('\n')
         .map(|line| fit_line(line, width))
@@ -52,12 +54,19 @@ fn fit_line(line: &str, width: usize) -> String {
     fitted
 }
 
+/// the fewest columns a line keeps for the start of a word too wide for any line, which otherwise
+/// starts on the next line.
+const ROOM: usize = 12;
+
 /// the indexes in `shown`, the characters a line shows, of the spaces it breaks at to fit
-/// `width`, each with the column the line after it starts at: `indent`, or the first column for a
-/// word too wide for the room past `indent`. a number keeps its unit.
+/// `width`, or of the character a word too wide for a line is cut before, each with the column
+/// the line after it starts at: `indent`, or the first column for a command too wide for the room
+/// past it. a number keeps its unit.
 fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, usize)> {
-    let breakable = breakable(shown, indent);
+    let room = width - indent;
+    let breakable = spanning(shown, indent, room);
     let after = widths_after(shown, &breakable);
+    let ticked = ticked(shown);
     let mut breaks = Vec::new();
     let mut column = 0;
     // the last space a line may break at, and the column it stands at
@@ -66,21 +75,75 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
         if breakable[at] {
             last = Some((at, column));
         }
-        column += console::measure_text_width(c.encode_utf8(&mut [0; 4]));
-        if column > width
-            && c != ' '
-            && let Some((space, before)) = last.take()
-        {
-            let start = if after[space] > width - indent {
-                0
-            } else {
-                indent
-            };
-            breaks.push((space, start));
-            column = start + column - before - 1;
+        let wide = console::measure_text_width(c.encode_utf8(&mut [0; 4]));
+        column += wide;
+        if column <= width || c == ' ' {
+            continue;
         }
+        if ticked[at] {
+            if let Some((space, before)) = last.take() {
+                let start = if after[space] > room { 0 } else { indent };
+                breaks.push((space, start));
+                column = start + column - before - 1;
+            }
+            continue;
+        }
+        // a break at the space that ends a label would leave the label alone on its line
+        if let Some((space, before)) = last.take()
+            && before >= indent
+            && (after[space] <= room || width - before - 1 < ROOM)
+        {
+            breaks.push((space, indent));
+            column = indent + column - before - 1;
+            if column <= width {
+                continue;
+            }
+        }
+        breaks.push((at, indent));
+        column = indent + wide;
     }
     breaks
+}
+
+/// whether each of `shown` belongs to a command in backticks, the backticks with it.
+fn ticked(shown: &[(usize, char)]) -> Vec<bool> {
+    let mut inside = false;
+    shown
+        .iter()
+        .map(|&(_, c)| {
+            if c == '`' {
+                inside = !inside;
+                return true;
+            }
+            inside
+        })
+        .collect()
+}
+
+/// [`breakable`], with the spaces inside a name in double quotes too wide for `room`, the columns
+/// a line has past its indent, which wraps at them.
+fn spanning(shown: &[(usize, char)], indent: usize, room: usize) -> Vec<bool> {
+    let mut breakable = breakable(shown, indent);
+    let after = widths_after(shown, &breakable);
+    let first = shown
+        .iter()
+        .take_while(|(at, _)| !breakable.get(*at).copied().unwrap_or_default())
+        .map(|(_, c)| console::measure_text_width(c.encode_utf8(&mut [0; 4])))
+        .sum::<usize>();
+    let mut wide = first > room;
+    let (mut ticked, mut quoted) = (false, false);
+    for (at, &(_, c)) in shown.iter().enumerate() {
+        match c {
+            '`' => ticked = !ticked,
+            '"' if !ticked => quoted = !quoted,
+            ' ' if breakable[at] => wide = after[at] > room,
+            ' ' if wide && quoted && !ticked && at > 0 && shown[at - 1].1 != ' ' => {
+                breakable[at] = true;
+            }
+            _ => {}
+        }
+    }
+    breakable
 }
 
 /// whether each of `shown` is a space a line may break at: the one that ends the label or verb
@@ -330,7 +393,8 @@ mod tests {
     use super::fit;
 
     /// a command in backticks too wide to follow its label on the first line goes on the next,
-    /// whole, rather than past the edge, where a terminal would wrap its last backtick alone.
+    /// whole, rather than past the edge or split, since a shell would run a split command's first
+    /// line alone.
     #[test]
     fn a_command_too_wide_beside_its_label_goes_on_the_next_line() {
         assert_eq!(
@@ -339,6 +403,13 @@ mod tests {
                 40
             ),
             "  next:\n`fetchloom add kaggle:uciml/iris` puts\n        the first match in a project"
+        );
+        assert_eq!(
+            fit(
+                "  help: `fetchloom sync --force data/iris/iris.csv` discards your edit",
+                40
+            ),
+            "  help:\n`fetchloom sync --force data/iris/iris.csv`\n        discards your edit"
         );
     }
 
@@ -406,20 +477,30 @@ mod tests {
         let link = format!("https://example.org/{}", "a".repeat(60));
         assert_eq!(
             fit(&format!("  help: open {link} in a browser"), 40),
-            format!("  help: open\n{link}\n        in a browser")
+            format!(
+                "  help: open {}\n        {}\n        {} in a\n        browser",
+                &link[..27],
+                &link[27..59],
+                &link[59..]
+            )
         );
         assert_eq!(fit("short\n  also short", 60), "short\n  also short");
     }
 
-    /// a path or a command too wide for the room past the indent once started there and ran on
-    /// at the first column, as the terminal wrapped it: it starts at the first column instead,
-    /// where it fits whole, and the line after it goes on under the text again.
+    /// a path or a link too wide for the room past the indent once ran on at the first column, as
+    /// the terminal wrapped it: it is cut at the edge where it stands and goes on under the text,
+    /// and one that fits a line under the text moves there whole. a command too wide for that
+    /// room still starts at the first column, whole, where it fits or the terminal wraps it.
     #[test]
-    fn a_word_too_wide_for_its_indent_starts_at_the_first_column() {
+    fn a_word_too_wide_for_a_line_goes_on_under_its_text() {
         let path = "bart/sub-01/func/sub-01_task-balloonanalogrisktask_run-01_bold.nii.gz";
         assert_eq!(
             fit(&format!("      Would fetch {path} · 45.1 MiB"), 80),
-            format!("      Would fetch\n{path} · 45.1 MiB")
+            format!(
+                "      Would fetch {}\n            {} · 45.1 MiB",
+                &path[..62],
+                &path[62..]
+            )
         );
         let command =
             "`fetchloom settings set data_links /datadisk/lab/p5-adversary/work/victim/dir`";
@@ -432,6 +513,15 @@ mod tests {
             ),
             format!(
                 "  help: if you made it to keep data on another disk, list that folder with\n{command}\n        first"
+            )
+        );
+        let link = "http://127.0.0.1:18871/slow/6000000/3/clean/train-00001-of-00004-5852b56a2bd28fd9.parquet";
+        assert_eq!(
+            fit(&format!("  shard · {link} · 1 file · 5.7 MiB"), 80),
+            format!(
+                "  shard · {}\n  {} · 1 file · 5.7 MiB",
+                &link[..70],
+                &link[70..]
             )
         );
         let fits = "bart/sub-01/func/sub-01_task-balloonanalogrisktask_run-01_events.tsv";

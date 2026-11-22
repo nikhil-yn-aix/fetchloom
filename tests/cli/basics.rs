@@ -1101,7 +1101,8 @@ fn stdout_answers_use_ascii_marks_where_the_locale_has_no_unicode() -> Result {
 }
 
 /// a terminal wraps inside a word, so fetchloom wraps itself: an example goes on after the mark a
-/// shell continues it at, and a word wider than the terminal gets a line of its own.
+/// shell continues it at, and a word wider than the terminal is cut at its edge and goes on under
+/// its text, never from the first column.
 #[cfg(target_os = "linux")]
 #[test]
 fn at_a_narrow_terminal_help_and_errors_wrap_between_words() -> Result {
@@ -1147,11 +1148,11 @@ fn at_a_narrow_terminal_help_and_errors_wrap_between_words() -> Result {
     assert_eq!(code, Some(10), "{screen}");
     // the terminal may clear a progress line first, so the error need not start its line
     assert!(screen.contains("error: "), "{screen}");
+    let joined: String = screen.lines().map(str::trim).collect();
+    assert!(joined.contains(server.url.as_str()), "{screen}");
     assert!(
-        screen
-            .lines()
-            .any(|line| line.trim_start() == server.url.as_str()),
-        "{screen}"
+        screen.lines().all(|line| !line.starts_with(['h', 'a'])),
+        "the link goes on under the error's text\n{screen}"
     );
     Ok(())
 }
