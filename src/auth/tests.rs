@@ -466,8 +466,11 @@ fn a_sign_in_command_keeps_each_host_one_literal_word() {
     ] {
         let printed = account.command();
         let (command, _) = crate::suggested::withheld(&printed);
-        // on windows a host no command there can hold safely is named apart, by a placeholder
-        if cfg!(windows) && !named.iter().copied().all(crate::suggested::safe_on_windows) {
+        // a host no command can hold safely is named apart, by a placeholder: on windows one cmd
+        // or powershell acts on, and everywhere one holding a backtick, which ends a command
+        if named.iter().any(|name| name.contains('`'))
+            || (cfg!(windows) && !named.iter().copied().all(crate::suggested::safe_on_windows))
+        {
             assert!(command.ends_with(r#" "<name>""#), "{command}");
             continue;
         }

@@ -1039,7 +1039,8 @@ fn an_archive_saved_under_another_kind_of_name_gets_a_warning() -> Result {
 }
 
 /// the server names the archive, and its name may hold what a shell runs: the `--dir` the
-/// warning suggests is quoted as every suggested word is, so a pasted line runs only what it shows.
+/// warning suggests names it by a placeholder, since its backtick would end the command, and a
+/// line says which name that stands for, so a pasted line runs only what it shows.
 #[test]
 fn a_folder_named_by_the_server_is_quoted_in_the_warning() -> Result {
     let sandbox = Sandbox::new()?;
@@ -1056,21 +1057,15 @@ fn a_folder_named_by_the_server_is_quoted_in_the_warning() -> Result {
     let document = json(&output)?;
     let warning = &document["warnings"][0];
     assert_eq!(warning["kind"], "archive.packed", "{document}");
-    if cfg!(windows) {
-        assert_eq!(
-            warning["help"],
-            r#"use `--dir "<folder>"` to unpack it into a folder"#
-        );
-        assert_eq!(
-            warning["details"][0],
-            "<folder> is $(touch PWNED)`id`, which no command here can hold safely"
-        );
-    } else {
-        assert_eq!(
-            warning["help"],
-            "use `--dir '$(touch PWNED)`id`'` to unpack it into a folder"
-        );
-    }
+    // no command holds the name safely anywhere, since its backtick would end the command
+    assert_eq!(
+        warning["help"],
+        r#"use `--dir "<folder>"` to unpack it into a folder"#
+    );
+    assert_eq!(
+        warning["details"][0],
+        "<folder> is $(touch PWNED)`id`, which no command here can hold safely"
+    );
     Ok(())
 }
 

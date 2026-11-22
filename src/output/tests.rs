@@ -1897,3 +1897,33 @@ fn a_signal_that_ends_a_question_first_tells_no_stopping_line() {
         output.said()
     );
 }
+
+/// a backtick in an output's `at` never moves where a command of its help starts or ends: the
+/// word holding it is withheld from the commands, so `fetchloom sync --force figs` stays on one
+/// line at every width, in the help for a changed folder and for one left elsewhere.
+#[test]
+fn a_backtick_in_a_folder_never_splits_a_command_of_its_help() {
+    use crate::source::local::{Reach, Since, ways_on};
+    let changed = Since::Changed {
+        yes: false,
+        reach: Reach::Reachable,
+    };
+    let left = Since::Left {
+        from: "results/fi`gs",
+        reach: Reach::Reachable,
+    };
+    for (shown, since) in [("results/fi`gs", changed), ("results/figures", left)] {
+        let help = ways_on("figs", shown, since);
+        let (help, _) = crate::suggested::withheld(&help);
+        let line = format!("  help: {help}");
+        for width in 60..=200 {
+            let fitted = super::fit::fit(&line, width);
+            assert!(
+                fitted
+                    .lines()
+                    .any(|shown| shown.contains("`fetchloom sync --force figs`")),
+                "{width}\n{fitted}"
+            );
+        }
+    }
+}

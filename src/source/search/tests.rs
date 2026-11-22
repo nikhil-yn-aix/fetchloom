@@ -811,6 +811,13 @@ fn the_command_waiting_for_a_late_site_keeps_the_words_whole() {
             "zenodo did not answer within 3 s of the others"
         );
         let help = late.help.unwrap_or_default();
+        // a backtick would end the command around it, so such words are named apart
+        if words.contains('`') {
+            let (shown, _) = crate::suggested::withheld(&help);
+            assert!(shown.contains("--source"), "{shown}");
+            assert!(shown.contains("\"<name>\""), "{shown}");
+            continue;
+        }
         let command = help
             .strip_prefix('`')
             .and_then(|rest| rest.strip_suffix("` waits for it"))

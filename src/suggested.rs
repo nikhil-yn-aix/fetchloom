@@ -218,7 +218,7 @@ pub(crate) fn shell_word(word: &str) -> Cow<'_, str> {
 
 /// [`shell_word`] for a folder, which a withheld word stands for as `<folder>`.
 pub(crate) fn shell_folder(word: &str) -> Cow<'_, str> {
-    if word.contains([OPEN, CLOSE]) || (cfg!(windows) && !safe_on_windows(word)) {
+    if word.contains([OPEN, CLOSE, '\u{60}']) || (cfg!(windows) && !safe_on_windows(word)) {
         return Cow::Owned(withhold(FOLDER, word));
     }
     shell_word(word)
@@ -427,14 +427,16 @@ pub(crate) fn unmarked(text: &str) -> Cow<'_, str> {
 /// written, and so is one holding a comma, which powershell 5.1 reads as a list and joins again
 /// with its numbers rewritten, or starting with one `-` and holding a dot, where powershell splits
 /// it; a backslash ending it is doubled inside the quotes, since a program reads `\"` as a quote.
-/// any other is withheld between marks for [`withheld`]. elsewhere double
-/// quotes keep a word literal unless it holds `$`, a backtick, a double quote, `!` (history) or a
-/// backslash; then it is single-quoted, a single quote or backslash escaped outside the quotes,
-/// since fish reads a backslash inside them as an escape.
+/// any other is withheld between marks for [`withheld`], as a word holding a backtick is on every
+/// system, since a line reads one as the end of the command it is in. elsewhere double quotes
+/// keep a word literal unless it holds `$`, a double quote, `!` (history) or a backslash; then it
+/// is single-quoted, a single quote or backslash escaped outside the quotes, since fish reads a
+/// backslash inside them as an escape.
 pub(crate) fn shell_word_for(word: &str, windows: bool) -> Cow<'_, str> {
     // a word holding the marks is withheld everywhere: held raw, the marks would be read as a
-    // withheld word's, and any other character in their place names another file
-    if word.contains([OPEN, CLOSE]) || (windows && !safe_on_windows(word)) {
+    // withheld word's, and any other character in their place names another file. so is one
+    // holding a backtick, which a line would read as the end of the command around it
+    if word.contains([OPEN, CLOSE, '\u{60}']) || (windows && !safe_on_windows(word)) {
         // a path to a file, not a host or a link, which only look like one
         let file = word.contains(['/', '\\'])
             && !word.contains("://")
@@ -547,10 +549,9 @@ pub(crate) mod tests {
     /// a word a shell would expand or split, quoted for bash, zsh and fish, then for powershell
     /// and cmd on windows: double quotes, which both read as written, or none for a word holding
     /// what cmd acts on or powershell's quoting cannot keep, which a command never holds there.
-    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 20] = [
+    pub(crate) const QUOTED: [(&str, &str, Option<&str>); 19] = [
         ("hi!.csv", "'hi!.csv'", None),
         ("$notes", "'$notes'", None),
-        ("a`b`", "'a`b`'", None),
         ("ada's data", "\"ada's data\"", Some("\"ada's data\"")),
         ("it's $5!", "'it'\\''s $5!'", None),
         ("my data", "\"my data\"", Some("\"my data\"")),
