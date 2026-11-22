@@ -221,20 +221,46 @@ fn frame(
     let mut lines = vec![format!("  {bold}{question}{bold:#}  {dim}{keys}{dim:#}")];
     let mut rows_listed = listed(options, cursor, style, width);
     let heights: Vec<usize> = rows_listed.iter().map(|row| rows(row, width)).collect();
+    let separator = if style.unicode { " \u{b7} " } else { ", " };
+    // the caller's footer, as `more matches: <command>`, puts its command on a line of its own
+    // where one line would not hold it after the counts, so the command is never cut
+    let counted = format!(
+        "{0} more above{separator}{0} more below{separator}",
+        options.len()
+    );
+    let command = footer.split_once(": ").filter(|_| {
+        4 + console::measure_text_width(&counted) + console::measure_text_width(footer) > width
+    });
+    let footer_rows = match (footer.is_empty(), command.is_some()) {
+        (true, _) => 0,
+        (false, false) => 1,
+        (false, true) => 2,
+    };
     // a frame as tall as the screen scrolls it, and the next draw cannot climb back to its top.
-    // the question, the footer and the row the cursor waits on take three
-    let all = 1 + heights.iter().sum::<usize>() + usize::from(!footer.is_empty());
+    // the question, the footer and the row the cursor waits on take what stays
+    let all = 1 + heights.iter().sum::<usize>() + footer_rows;
     let (start, end) = if all < height {
         (0, options.len())
     } else {
-        window(&heights, cursor, *top, height.saturating_sub(3))
+        window(
+            &heights,
+            cursor,
+            *top,
+            height.saturating_sub(2 + footer_rows.max(1)),
+        )
     };
     *top = start;
-    let separator = if style.unicode { " \u{b7} " } else { ", " };
+    let told = command.map_or(footer, |(label, _)| label);
     let footer = [
         (start > 0).then(|| format!("{start} more above")),
         (end < options.len()).then(|| format!("{} more below", options.len() - end)),
-        (!footer.is_empty()).then(|| footer.to_owned()),
+        (!told.is_empty()).then(|| {
+            if command.is_some() {
+                format!("{told}:")
+            } else {
+                told.to_owned()
+            }
+        }),
     ]
     .into_iter()
     .flatten()
@@ -245,6 +271,9 @@ fn frame(
         let more = if style.unicode { "\u{2026}" } else { "..." };
         let footer = console::truncate_str(&footer, width.saturating_sub(5), more);
         lines.push(format!("    {dim}{}{dim:#}", plain(&footer)));
+    }
+    if let Some((_, command)) = command {
+        lines.push(format!("    {dim}{}{dim:#}", plain(command)));
     }
     lines
 }
@@ -620,6 +649,49 @@ mod tests {
         assert_eq!(
             lines[2],
             format!("    2 {long}\n      Huberman  90.0 KiB  2 downloads")
+        );
+    }
+
+    /// a footer offering more matches at 40 columns was cut to `more matches: fetch…`: its command
+    /// goes whole on a line of its own under the counts, and the frame still fits the screen.
+    #[test]
+    fn a_footers_command_stays_whole_at_a_narrow_terminal() {
+        let options: Vec<String> = (1..=12)
+            .map(|n| format!("{:9}  Iris {n}", format!("zenodo:{n}")))
+            .collect();
+        let footer = "more matches: fetchloom search iris --limit 20";
+        let lines = frame(
+            "which one?",
+            &options,
+            footer,
+            (0, &mut 0),
+            style(false, true),
+            (40, 10),
+        );
+        let last = lines.len() - 1;
+        assert_eq!(lines[last], "    fetchloom search iris --limit 20");
+        assert!(
+            lines[last - 1].ends_with(" more below \u{b7} more matches:"),
+            "{lines:?}"
+        );
+        assert!(lines.len() < 10, "{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .all(|line| console::measure_text_width(line) <= 40),
+            "{lines:?}"
+        );
+        let wide = frame(
+            "which one?",
+            &options,
+            footer,
+            (0, &mut 0),
+            style(false, true),
+            (120, 30),
+        );
+        assert_eq!(
+            wide.last().map(String::as_str),
+            Some(format!("    {footer}").as_str())
         );
     }
 
