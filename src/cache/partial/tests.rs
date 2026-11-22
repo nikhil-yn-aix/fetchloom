@@ -636,6 +636,89 @@ fn pipelined_writes_preserve_full_disk_errors() {
     );
 }
 
+/// a disk that fills before a download first records its bytes keeps what reached the part but
+/// its last [`RECORD_ROOM`], hashed as read back, so the next run goes on from there: the bytes
+/// waiting to be written were hashed already and are fetched again, whether the write that failed
+/// was a batch of small chunks or one large chunk. a download with a record keeps it.
+#[cfg(debug_assertions)]
+#[test]
+fn a_full_disk_keeps_what_reached_the_part_before_its_first_record() {
+    let body: Vec<u8> = (0..=250u8).cycle().take(4 * BUFFER).collect();
+    let chunk = 64 * 1024;
+    for (whole, failed_at) in [(false, 3 * BUFFER), (true, 2 * BUFFER)] {
+        let (_dir, cache) = cache();
+        let partial = owned(&cache, "https://example.org/full");
+        let mut writer = partial
+            .writer(
+                0,
+                Some(body.len() as u64),
+                Validators::default(),
+                false,
+                false,
+            )
+            .unwrap();
+        writer.full_at = Some(2 * BUFFER as u64 + BUFFER as u64 / 2);
+        // no record comes on its own a second in, however slowly the test runs
+        writer.saved = Instant::now() + Duration::from_secs(3600);
+        let pieces: Vec<&[u8]> = if whole {
+            vec![&body[..2 * BUFFER], &body[2 * BUFFER..3 * BUFFER]]
+        } else {
+            body.chunks(chunk).collect()
+        };
+        let mut at = 0u64;
+        let error = pieces
+            .iter()
+            .find_map(|piece| {
+                let written = writer.write_chunk(at, &Bytes::copy_from_slice(piece));
+                at += piece.len() as u64;
+                written.err()
+            })
+            .unwrap();
+        let ended = failed_at + if whole { BUFFER } else { chunk };
+        assert_eq!(at, ended as u64);
+        assert!(partial.recorded().is_none(), "{whole}");
+        let error = writer.failed(error);
+        assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+        drop(writer);
+        let kept = 2 * BUFFER - usize::try_from(RECORD_ROOM).unwrap();
+        let record = partial.recorded().unwrap();
+        assert_eq!(record.received, kept as u64, "{whole}");
+        assert_eq!(record.sha256, digest::sha256(&body[..kept]));
+        assert_eq!(fs::metadata(&partial.bytes).unwrap().len(), kept as u64);
+        let mut resumed = partial
+            .writer(
+                kept as u64,
+                Some(body.len() as u64),
+                Validators::default(),
+                false,
+                false,
+            )
+            .unwrap();
+        resumed.write_all(&body[kept..]).unwrap();
+        assert_eq!(
+            resumed.finish().unwrap().digest,
+            digest::sha256(&body),
+            "{whole}"
+        );
+    }
+    let (_dir, cache) = cache();
+    let partial = owned(&cache, "https://example.org/recorded");
+    let mut writer = partial
+        .writer(0, None, Validators::default(), false, false)
+        .unwrap();
+    writer.write_all(&body[..2 * BUFFER]).unwrap();
+    writer.save().unwrap();
+    writer.full_at = Some(3 * BUFFER as u64);
+    let error = writer
+        .write_chunk(
+            2 * BUFFER as u64,
+            &Bytes::copy_from_slice(&body[2 * BUFFER..]),
+        )
+        .unwrap_err();
+    drop(writer.failed(error));
+    assert_eq!(partial.recorded().unwrap().received, 2 * BUFFER as u64);
+}
+
 #[test]
 fn complete_small_partials_skip_checkpoints_and_keep_their_bytes() {
     let (_dir, cache) = cache();

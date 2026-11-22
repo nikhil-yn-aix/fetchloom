@@ -821,9 +821,9 @@ fn a_first_add_that_fails_leaves_the_folder_as_it_was() -> Result {
     Ok(())
 }
 
-/// a disk that fills in a download's first second, before the download first records what it
-/// has, keeps what reached it but its last MiB, which makes room for the record, so the add run
-/// again once there is room goes on from there.
+/// a disk that fills while an add downloads keeps what reached it, so the add run again once
+/// there is room goes on from there: in the download's first second, before its first record,
+/// all but the last MiB, which makes room for the record; later, what its last record names.
 #[cfg(debug_assertions)]
 #[test]
 fn an_add_a_full_disk_stopped_goes_on_from_the_bytes_it_kept() -> Result {
@@ -850,7 +850,7 @@ fn an_add_a_full_disk_stopped_goes_on_from_the_bytes_it_kept() -> Result {
             .and_then(|start| start.parse().ok())
     });
     assert!(
-        requests.len() == 2 && from.is_some_and(|from| (MIB..3 * MIB).contains(&from)),
+        requests.len() == 2 && from.is_some_and(|from| (1..3 * MIB).contains(&from)),
         "{requests:?}"
     );
     Ok(())
