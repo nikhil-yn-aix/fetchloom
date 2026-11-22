@@ -313,6 +313,100 @@ def forget_connections():
         call(["ip", "tcp_metrics", "flush", SERVER_ADDRESS])
 
 
+# every measured run's cgroup sits under this one, which hands each the cpu, memory and io controllers
+TREES = Path("/sys/fs/cgroup/fl-bench")
+# how often a run's anonymous memory is read
+SAMPLE = .02
+
+
+def trees(root=None):
+    """the cgroup every measured run's own goes under, with the controllers they need; RuntimeError
+    when this machine cannot make it, since a run's helpers would then go uncounted."""
+    root = root or TREES
+    try:
+        root.mkdir(exist_ok=True)
+        (root / "cgroup.subtree_control").write_text("+cpu +memory +io\n")
+    except OSError as error:
+        raise RuntimeError(f"cannot make the cgroup v2 each run is measured in at {root}: {error}") from None
+    return root
+
+
+def flat(path):
+    """a cgroup file of `key value` lines as a dict of ints."""
+    return {key: int(value) for key, value in (line.split() for line in Path(path).read_text().splitlines())}
+
+
+class Tree:
+    """a cgroup v2 that a measured command and every process it starts run in, so helpers and workers
+    count: cpu time from cpu.stat, the most anonymous memory held at once, read from memory.stat every
+    SAMPLE seconds, and the bytes written to a disk from io.stat."""
+
+    def __init__(self, name, root=None):
+        self.path = (root or TREES) / name
+        self.path.mkdir()
+        self.peak = self.samples = 0
+        self.stopped = threading.Event()
+        self.thread = None
+
+    def adopt(self, pid):
+        """moves a process in; one moved before it runs anything starts all its work here."""
+        (self.path / "cgroup.procs").write_text(f"{pid}\n")
+
+    def anon(self):
+        return flat(self.path / "memory.stat")["anon"]
+
+    def cpu(self):
+        """user and system seconds of every process that ran here so far."""
+        stat = flat(self.path / "cpu.stat")
+        return stat["user_usec"] / 1e6, stat["system_usec"] / 1e6
+
+    def written(self, device):
+        """bytes written so far to the disk with this device number, as os.stat gives it."""
+        wanted = f"{os.major(device)}:{os.minor(device)}"
+        for line in (self.path / "io.stat").read_text().splitlines():
+            name, *fields = line.split()
+            if name == wanted:
+                return int(dict(field.split("=", 1) for field in fields).get("wbytes", 0))
+        return 0
+
+    def begin(self):
+        """starts reading the anonymous memory, its peak counted afresh."""
+        self.peak = self.samples = 0
+        self.stopped.clear()
+        self.thread = threading.Thread(target=self.sample, daemon=True)
+        self.thread.start()
+
+    def sample(self):
+        while True:
+            try:
+                self.peak = max(self.peak, self.anon())
+                self.samples += 1
+            except (OSError, KeyError, ValueError):
+                pass
+            if self.stopped.wait(SAMPLE):
+                return
+
+    def end(self):
+        """stops reading; returns the peak and how many readings it rests on."""
+        self.stopped.set()
+        if self.thread is not None:
+            self.thread.join()
+            self.thread = None
+        return self.peak, self.samples
+
+    def close(self):
+        """kills whatever is still in it, such as a helper the command left behind, and removes it."""
+        self.end()
+        try:
+            (self.path / "cgroup.kill").write_text("1\n")
+            deadline = time.monotonic() + 5
+            while "populated 1" in (self.path / "cgroup.events").read_text() and time.monotonic() < deadline:
+                time.sleep(.01)
+            self.path.rmdir()
+        except FileNotFoundError:
+            pass
+
+
 DROP = Path("/proc/sys/vm/drop_caches")
 
 

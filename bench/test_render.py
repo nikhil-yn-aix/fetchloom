@@ -471,6 +471,14 @@ class PageTests(Quiet):
         self.assertIn("| n/a | 1 | 6, over the budget in 1 of 1 runs | 0/1 |", page)
         self.assertIn("- politeness budget: at most 4 requests in flight to one host, for every tool", page)
 
+    def test_each_tool_shows_its_whole_trees_memory_beside_its_largest_process_and_what_it_wrote(self):
+        rows = [lab_row(user_seconds=.5, sys_seconds=.25, memory_bytes=300 << 20, maxrss_bytes=120 << 20, written_bytes=64 << 20,
+                        disk_bytes=32 << 20)]
+        page = self.render(rows, dict(kind="lab", quick=True))
+        self.assertIn("| CPU | peak memory | largest process | written | disk | requests |", page)
+        self.assertIn("| 750 ms | 300 MiB | 120 MiB | 64 MiB | 32 MiB |", page)
+        self.assertIn("peak memory is the most anonymous memory those processes held at once, read from the cgroup every 20 ms", page)
+
     def test_the_most_in_flight_on_lan_is_called_an_estimate_with_its_floor(self):
         rows = [lab_row(peak_in_flight={"lab.flb": 3}, in_flight_floor_ms=2), lab_row(tool="curl", peak_in_flight={"lab.flb": 4}),
                 lab_row(profile="home", peak_in_flight={"lab.flb": 4}, in_flight_floor_ms=0)]

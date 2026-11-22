@@ -29,6 +29,8 @@ LINK_DROP = (10, 10)
 TIME = "/usr/bin/time"
 # how often an interruption counted from a command's own anchor looks for it
 POLL = .01
+# a command measured in a cgroup waits here until it is in it, so everything it starts is there too
+GATE = 'read -r _ <&3 && exec "$0" "$@" 3<&-'
 
 
 def verify(outputs):
@@ -65,12 +67,15 @@ def seconds_choice(value):
         raise argparse.ArgumentTypeError(str(error)) from None
 
 
-def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None, during=None, anchor=None):
+def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus=None, during=None, anchor=None,
+            tree=None):
     """wall, cpu, peak memory and exit code of argv under GNU time in its own process group, SIGINT
     at the deadline then SIGKILL, and whether it timed out or was interrupted. `during`, such as a
     lab.LinkDrop, begins as the command starts and ends before this returns, whatever happened.
     `anchor`, a callable giving the time.monotonic() reading a command's own work began at, or None
-    until it has, moves the interruption and `during` from the command's start to that moment."""
+    until it has, moves the interruption and `during` from the command's start to that moment.
+    `tree`, a lab.Tree, holds the command from before it runs: then cpu is every process's in it and
+    memory_bytes the most anonymous memory they held at once, with GNU time's figures beside them."""
     timeout = positive_seconds(timeout)
     if interrupt_after is not None:
         interrupt_after = positive_seconds(interrupt_after)
@@ -87,6 +92,7 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
     stage = 0
     pid = None
     waited = False
+    gate = None
     handler_set = False
     previous_handler = signal.getsignal(signal.SIGALRM)
     # an interruption counted from an anchor looks for it every POLL seconds until it is there
@@ -143,15 +149,31 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
             os.chdir(cwd)
             # affinity is inherited before the client can execute or create workers
             with lab.affinity(cpus):
-                start = time.monotonic()
                 # posix_spawn avoids giving GNU time a forked copy of the harness's peak memory
-                pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True,
-                                     file_actions=[(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)])
+                actions = [(os.POSIX_SPAWN_DUP2, log, 1), (os.POSIX_SPAWN_DUP2, log, 2)]
+                if tree is None:
+                    start = time.monotonic()
+                    pid = os.posix_spawn(TIME, launcher, dict(env), setsid=True, file_actions=actions)
+                else:
+                    held, gate = os.pipe()
+                    try:
+                        pid = os.posix_spawn("/bin/sh", ["sh", "-c", GATE, *launcher], dict(env), setsid=True,
+                                             file_actions=[*actions, (os.POSIX_SPAWN_DUP2, held, 3)])
+                    finally:
+                        os.close(held)
         finally:
             try:
                 os.chdir(home)
             finally:
                 os.close(log)
+        if tree is not None:
+            tree.adopt(pid)
+            before = tree.cpu()
+            start = time.monotonic()
+            os.write(gate, b"\n")
+            os.close(gate)
+            gate = None
+            tree.begin()
         if during is not None:
             during.begin(start, anchor)
         signal.signal(signal.SIGALRM, alarm)
@@ -162,6 +184,10 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
         waited = True
         now = time.monotonic()
     except BaseException:
+        if gate is not None:
+            # a command still at its gate sees it close and never runs
+            os.close(gate)
+            gate = None
         if pid is not None:
             try:
                 os.killpg(pid, signal.SIGKILL)
@@ -183,8 +209,12 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
                 finally:
                     signal.signal(signal.SIGALRM, previous_handler)
         finally:
-            if during is not None:
-                during.end()
+            try:
+                if during is not None:
+                    during.end()
+            finally:
+                if tree is not None:
+                    tree.end()
     # a shell may exit before a child handles SIGINT; keep the next run isolated
     if signalled is not None:
         lab.end_group(pid, signalled + 5 - time.monotonic())
@@ -192,6 +222,12 @@ def measure(argv, cwd, env, logfile, timeout=1200, interrupt_after=None, *, cpus
                   maxrss_bytes=None, exit_code=os.waitstatus_to_exitcode(status), timeout=timed_out,
                   interruption_sent=interrupted, cpu_affinity=effective_cpus,
                   timeout_seconds=timeout, interrupt_after_seconds=interrupt_after, anchor_seconds=anchored)
+    if tree is not None:
+        user, system = tree.cpu()
+        # what GNU time's wait saw: the command and the children it waited for, not a helper it left
+        result.update(rusage=dict(user_seconds=usage.ru_utime, sys_seconds=usage.ru_stime),
+                      user_seconds=user - before[0], sys_seconds=system - before[1],
+                      memory_bytes=tree.peak, memory_samples=tree.samples)
     try:
         report = usage_file.read_text().splitlines()
         usage_file.unlink()
@@ -435,6 +471,7 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
                filesystem=workdir.parent.name, round=number, warmup=warmup, quick=case["quick"],
                count=case["count"], file_size=case["size"], status="failed", run_id=run_id, log=f"{run_id}.log")
     log = out / row["log"]
+    tree = None
     try:
         tools.reset(workdir)
         cold = case["id"] not in fixtures.WARM
@@ -458,24 +495,29 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
         access.write_text("")
         before = settled_free_bytes(workdir)
         row["free_before_bytes"] = before
+        # one cgroup holds the run's every process, both attempts of a resume included
+        tree = lab.Tree(uuid.uuid4().hex)
         if case["id"] == "s7":
             first = tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, interrupt_after=10,
-                                       cpus=cpus, anchor=tool.anchor(workdir)), workdir)
+                                       cpus=cpus, anchor=tool.anchor(workdir), tree=tree), workdir)
             row["first_attempt"] = first
             argv = tool.command(case, workdir)
             row["resume_command"] = exact_command(argv, workdir)
             row["resume_command"]["cwd"] = str(tool.cwd(workdir))
         drop = lab.LinkDrop(case["profile"], *LINK_DROP) if case["id"] == "s10" else None
         row.update(tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus, during=drop,
-                                      anchor=tool.anchor(workdir) if drop is not None else None), workdir))
+                                      anchor=tool.anchor(workdir) if drop is not None else None, tree=tree), workdir))
         if drop is not None:
             row["link_drop"] = drop.record
         if case["id"] == "s7":
             row["user_seconds"] += first["user_seconds"]
             row["sys_seconds"] += first["sys_seconds"]
-            peaks = (row["maxrss_bytes"], first["maxrss_bytes"])
-            row["maxrss_bytes"] = None if None in peaks else max(peaks)
+            for peak in ("maxrss_bytes", "memory_bytes"):
+                peaks = (row.get(peak), first.get(peak))
+                row[peak] = None if None in peaks else max(peaks)
         lab.flush(workdir)
+        # written back by the flush, the run's dirty pages are still its cgroup's
+        row["written_bytes"] = tree.written(os.stat(workdir).st_dev)
         row["free_after_bytes"] = free_bytes(workdir)
         row["disk_bytes"] = before - row["free_after_bytes"]
         time.sleep(0.05)
@@ -506,6 +548,8 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
     except Exception as error:
         row["error"] = f"{type(error).__name__}: {error}"
     finally:
+        if tree is not None:
+            tree.close()
         if (workdir / "prepare.log").exists():
             shutil.copyfile(workdir / "prepare.log", out / f"{run_id}-prepare.log")
     append(out / "runs.jsonl", row)
@@ -615,6 +659,10 @@ def campaign(parser, args):
     for fs in args.fs:
         if not os.path.ismount(lab.ROOT / "fs" / fs):
             parser.error(f"{fs} is not mounted")
+    try:
+        lab.trees()
+    except RuntimeError as error:
+        parser.error(str(error))
     return lock, adapters, cases
 
 

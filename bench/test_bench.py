@@ -301,6 +301,45 @@ class MeasurementTests(unittest.TestCase):
         finally:
             shutil.rmtree(root)
 
+    def test_a_cgroup_gives_its_cpu_its_memory_peak_and_what_it_wrote_to_one_disk(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            tree = lab.Tree("run", root)
+            (tree.path / "cpu.stat").write_text("usage_usec 3500000\nuser_usec 2500000\nsystem_usec 1000000\n")
+            (tree.path / "io.stat").write_text("8:16 rbytes=0 wbytes=12288 rios=0 wios=2 dbytes=0 dios=0\n"
+                                               "7:2 rbytes=8192 wbytes=67108864 rios=2 wios=56 dbytes=0 dios=0\n")
+            self.assertEqual(tree.cpu(), (2.5, 1.0))
+            self.assertEqual([tree.written(os.makedev(*device)) for device in ((7, 2), (8, 16), (7, 3))], [67108864, 12288, 0])
+            # each reading keeps the most anonymous memory seen, whatever came after
+            for anon in (5 << 20, 3 << 20, 9 << 20, 1 << 20):
+                (tree.path / "memory.stat").write_text(f"anon {anon}\nfile 409600\n")
+                tree.stopped.set()
+                tree.sample()
+            self.assertEqual((tree.peak, tree.samples), (9 << 20, 4))
+
+    @unittest.skipUnless(os.environ.get("FL_BENCH_LAB_CHECKS") == "1" and os.geteuid() == 0, "needs root and cgroup v2")
+    def test_a_run_counts_every_process_it_starts_even_one_it_left_behind(self):
+        import run
+        hold = "import time; b = bytearray(64 << 20); b[::4096] = b'x' * len(b[::4096]); time.sleep(.5)"
+        spin = "import time\nend = time.process_time() + .4\nwhile time.process_time() < end: pass"
+        script = f'python3 -c "{hold}" & python3 -c "{hold}" & wait; (python3 -c "{spin}" &); sleep 1.5'
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            tree = lab.Tree(f"test-{os.getpid()}", lab.trees())
+            try:
+                result = run.measure(["sh", "-c", script], root, os.environ, root / "log", 30, tree=tree)
+            finally:
+                tree.close()
+        self.assertEqual(result["exit_code"], 0)
+        # two processes held 64 MiB each at once, while the largest alone held one
+        self.assertGreater(result["memory_bytes"], 120 << 20)
+        self.assertLess(result["maxrss_bytes"], 100 << 20)
+        # the helper left running was never waited for, so only the cgroup saw its cpu
+        cgroup = result["user_seconds"] + result["sys_seconds"]
+        waited = result["rusage"]["user_seconds"] + result["rusage"]["sys_seconds"]
+        self.assertGreater(cgroup - waited, .3)
+        self.assertFalse(tree.path.exists())
+
     def test_peak_memory_excludes_the_harness(self):
         import run
         from pathlib import Path

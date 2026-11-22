@@ -39,7 +39,8 @@ def summarize(rows):
                 high=max(times) if times else None, failures=sum(r.get("status") == "failed" for r in rows),
                 timeouts=sum(r.get("status") == "failed" and bool(r.get("timeout")) for r in rows),
                 skipped=sum(r.get("status") == "skipped" for r in rows), rounds=len(rows),
-                cpu=median(cpu) if cpu else None, memory=metric("maxrss_bytes"), disk=metric("disk_bytes"),
+                cpu=median(cpu) if cpu else None, memory=metric("memory_bytes"), largest=metric("maxrss_bytes"),
+                written=metric("written_bytes"), disk=metric("disk_bytes"),
                 requests=metric("requests"), connections=metric("connections"), body_bytes_ratio=metric("body_bytes_ratio"),
                 in_flight=max(peaks) if peaks else None, in_flight_floor_ms=max(floors, default=0),
                 over_budget=sum(bool(r.get("over_budget")) for r in rows))
@@ -630,7 +631,11 @@ METHOD = ("a command-line tool's clock runs from its start to its exit, includin
           "at least a round trip, since a client sends its next request on a slot only after the last answer reaches it; a run "
           "past the budget is counted beside the tool, not failed. tables use successful runs only; failures are counted, a run "
           "past its configured deadline counts as timed out, and a tool with any failed or timed-out run has no chart bar. CPU "
-          "is user plus system time, memory is the median command peak, and disk is the median free-space change. bars show "
+          "is user plus system time of every process a command started, from the cgroup each run has to itself, so helpers "
+          "and workers count; for pooch it is its calls' own. peak memory is the most anonymous memory those processes held "
+          "at once, read from the cgroup every 20 ms, and largest process is the biggest single process's peak, as GNU time "
+          "reports it. written is what a run wrote to the measured disk, from the cgroup's io.stat after a flush, and disk is "
+          "the free-space change, so a link or reflink counts once. each is the median of a tool's passed runs. bars show "
           "the median; the thin line on each spans the fastest and slowest run. every tool runs 5 rounds, and each other tool's "
           "time is set over fetchloom's round by round: the table gives the median of those ratios with a paired percentile "
           "bootstrap interval, 20,000 resamples from seed 1729. "
@@ -738,10 +743,10 @@ def case_section(case):
     floor = max(item.get("in_flight_floor_ms") or 0 for item in summaries.values())
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
-             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
-             "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
+             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | largest process | written | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
+             "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
-        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(tool, judged)} | {said(tool, judged)} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
+        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(tool, judged)} | {said(tool, judged)} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['largest'])} | {size(entry['written'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
     lines += verdict_lines(case)
     if floor:
         lines.append(f"\nthe most in flight on this link is an estimate, with a floor of {floor} ms: with no round trip to wait "
@@ -771,7 +776,7 @@ def case_section(case):
         for tool, entry in summaries.items():
             value = entry["body_bytes_ratio"]
             lines.append(f"| {tool} | {value:.3f}x |" if value is not None else f"| {tool} | n/a |")
-        lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both; interruption is at 10 s, with a 5 s kill grace period.\n")
+        lines.append("\nwall time is the second attempt. CPU adds both attempts, peak memory is the larger of the two and bytes cover both, written ones included; interruption is at 10 s, with a 5 s kill grace period.\n")
     if case["scenario"] in ("s7", "s10"):
         lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
@@ -837,11 +842,11 @@ def live_section(service, measured):
     """a live service's heading, table of both clients with the other's time over fetchloom's, and
     its card."""
     judged = measured["judged"]
-    lines = [f"### {service}\n", "| tool | median | min to max | time over fetchloom's, 95% interval | paired rounds | CPU | peak memory | disk | requests | failures |",
+    lines = [f"### {service}\n", "| tool | median | min to max | time over fetchloom's, 95% interval | paired rounds | CPU | largest process | disk | requests | failures |",
              "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
     for name, entry in measured["summaries"].items():
         pairs = judged["comparisons"].get(name, {}).get("pairs", "")
-        lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(name, judged)} | {pairs} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
+        lines.append(f"| {name} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(name, judged)} | {pairs} | {seconds(entry['cpu'])} | {size(entry['largest'])} | {size(entry['disk'])} | n/a | {entry['failures']}/{entry['rounds']} |")
     return lines + ["", picture(f"live-{service}", service)]
 
 

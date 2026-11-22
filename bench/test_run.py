@@ -20,6 +20,20 @@ import tools
 USAGE = SimpleNamespace(ru_utime=1, ru_stime=2)
 
 
+class Tree:
+    """a run's cgroup as one_run uses it, without the kernel: made, read for what the run wrote, closed."""
+
+    def __init__(self, name, root=None):
+        self.name, self.closed, self.read = name, False, []
+
+    def written(self, device):
+        self.read.append(device)
+        return 8192
+
+    def close(self):
+        self.closed = True
+
+
 class TimerTests(unittest.TestCase):
     def test_invalid_deadlines_never_spawn(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -94,6 +108,44 @@ class TimerTests(unittest.TestCase):
                  mock.patch.object(lab, "end_group"), self.assertRaisesRegex(OSError, "wait failed"):
                 run.measure(["true"], root, {"PATH": "/usr/bin:/bin"}, root / "log", during=beside)
             self.assertEqual(beside.steps, [("begin", True), ("end",)])
+
+    def test_a_command_in_a_cgroup_waits_at_a_gate_until_it_is_in_it(self):
+        steps = []
+
+        class Held:
+            peak, samples = 96 << 20, 7
+
+            def adopt(self, pid):
+                steps.append(("adopt", pid))
+
+            def cpu(self):
+                steps.append(("cpu",))
+                return (0.5, 0.25) if len(steps) < 3 else (2.5, 1.25)
+
+            def begin(self):
+                steps.append(("begin",))
+
+            def end(self):
+                steps.append(("end",))
+
+        def wait(*args):
+            steps.append(("wait",))
+            return 987654, 0, USAGE
+
+        with tempfile.TemporaryDirectory() as folder, \
+             mock.patch.object(run.os, "posix_spawn", return_value=987654) as spawn, \
+             mock.patch.object(run.os, "write", side_effect=lambda fd, data: steps.append(("open", data))), \
+             mock.patch.object(run.os, "wait4", side_effect=wait), mock.patch.object(run.signal, "setitimer"):
+            root = Path(folder)
+            result = run.measure(["fetchloom", "sync"], root, {"PATH": "/usr/bin:/bin"}, root / "log", tree=Held())
+        path, argv, _ = spawn.call_args.args
+        self.assertEqual((path, argv[:4], argv[-2:]), ("/bin/sh", ["sh", "-c", run.GATE, run.TIME], ["fetchloom", "sync"]))
+        # the gate is the read end of a pipe, at the descriptor the shell reads before it runs anything
+        self.assertEqual(spawn.call_args.kwargs["file_actions"][-1][::2], (os.POSIX_SPAWN_DUP2, 3))
+        self.assertEqual(steps, [("adopt", 987654), ("cpu",), ("open", b"\n"), ("begin",), ("wait",), ("end",), ("cpu",)])
+        self.assertEqual((result["user_seconds"], result["sys_seconds"], result["memory_bytes"], result["memory_samples"]),
+                         (2.0, 1.0, 96 << 20, 7))
+        self.assertEqual(result["rusage"], dict(user_seconds=1, sys_seconds=2))
 
     def test_spawn_failure_restores_cwd_and_leaves_no_usage_file(self):
         before = os.getcwd()
@@ -256,6 +308,7 @@ class WarmTests(unittest.TestCase):
                 case = dict(id=scenario, profile="lan", quick=True, count=1, size=1, files=[], members=[],
                             key="key", server_dir=str(root / "www"))
                 with mock.patch.object(lab, "ROOT", root), mock.patch.object(lab, "forget_connections"), \
+                     mock.patch.object(lab, "Tree", Tree), \
                      mock.patch.object(lab, "drop_caches") as drop, mock.patch.object(lab, "flush"), \
                      mock.patch.object(run, "measure", return_value=measured), \
                      mock.patch.object(run, "settled_free_bytes", return_value=1), \
@@ -295,9 +348,9 @@ class ManyVariantTests(unittest.TestCase):
                 for n in range(12):
                     argv += ["--variant", f"v{n}:FETCHLOOM_EXP_V{n}={n}"]
                 with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
-                     mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
+                     mock.patch.multiple(lab, require_root=mock.DEFAULT, profile=mock.DEFAULT, trees=mock.DEFAULT, Tree=Tree,
+                                         drop_caches=mock.DEFAULT, forget_connections=mock.DEFAULT, flush=mock.DEFAULT), \
                      mock.patch.object(lab, "pin_server", create=True, return_value={}), \
-                     mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
                      mock.patch.object(run, "metadata", side_effect=metadata), \
                      mock.patch.object(run.os.path, "ismount", return_value=True), \
                      mock.patch.object(run.fixtures, "case_specs", return_value=[case]), \
@@ -305,8 +358,7 @@ class ManyVariantTests(unittest.TestCase):
                      mock.patch.object(run.fixtures, "prepare_native", return_value=case), \
                      mock.patch.object(run, "measure", side_effect=measured), \
                      mock.patch.object(run, "settled_free_bytes", return_value=100), \
-                     mock.patch.object(run, "free_bytes", return_value=97), \
-                     mock.patch.object(run.lab, "flush"), mock.patch.object(run.time, "sleep"), \
+                     mock.patch.object(run, "free_bytes", return_value=97), mock.patch.object(run.time, "sleep"), \
                      contextlib.redirect_stdout(io.StringIO()):
                     self.assertEqual(run.main(), 0)
                 meta = json.loads((out / "meta.json").read_text())
@@ -362,6 +414,7 @@ class CampaignTests(unittest.TestCase):
             argv += ["--only-tools", "fetchloom"]
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
              mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
+             mock.patch.multiple(lab, trees=mock.DEFAULT, Tree=Tree), \
              mock.patch.object(lab, "pin_server", return_value={}), \
              mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
              mock.patch.object(run, "metadata", side_effect=lambda *args: dict(commands={}, orders=[], cases=[])), \
@@ -608,6 +661,7 @@ class OneRunTests(unittest.TestCase):
 
     def one_run(self, tool, measured, case=None):
         with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "forget_connections"), \
+             mock.patch.object(lab, "Tree", Tree), \
              mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "flush"), \
              mock.patch.object(run, "measure", side_effect=measured), \
              mock.patch.object(run, "settled_free_bytes", return_value=10), \
@@ -629,7 +683,7 @@ class OneRunTests(unittest.TestCase):
                          dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, exit_code=0, timeout=False,
                               interruption_sent=False)])
 
-        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None, anchor=None):
+        def measured(argv, cwd, env, log, timeout, interrupt_after=None, cpus=None, during=None, anchor=None, tree=None):
             # a listing of the folder costs bytes too, but is no part of the file
             access = self.root / "access.jsonl"
             access.write_text(access.read_text() + '{"request": "GET /key/a.bin HTTP/1.1", "status": 206, "bytes": 3}\n'
@@ -649,6 +703,47 @@ class OneRunTests(unittest.TestCase):
                               interruption_sent=False)])
         row = self.one_run(Downloader("unused"), measured, dict(self.case, id="s7", profile="home"))
         self.assertEqual(row["checks"], ["no expected outputs"])
+
+    def test_a_run_has_a_cgroup_of_its_own_read_for_what_it_wrote_once_flushed(self):
+        made, flushed = [], []
+
+        class Counted(Tree):
+            def __init__(self, name, root=None):
+                super().__init__(name, root)
+                made.append(self)
+
+            def written(self, device):
+                self.read.append((device, list(flushed)))
+                return 8192
+
+        class Downloader(tools.Tool):
+            name = "downloader"
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+        attempts = iter([dict(wall_seconds=10, user_seconds=1, sys_seconds=2, maxrss_bytes=7, memory_bytes=40, exit_code=130,
+                              timeout=False, interruption_sent=True),
+                         dict(wall_seconds=3, user_seconds=4, sys_seconds=8, maxrss_bytes=5, memory_bytes=90, exit_code=0,
+                              timeout=False, interruption_sent=False)])
+        trees = []
+
+        def measured(*args, tree=None, **kwargs):
+            trees.append(tree)
+            return next(attempts)
+
+        with mock.patch.object(lab, "Tree", Counted), mock.patch.object(lab, "flush", side_effect=flushed.append), \
+             mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "forget_connections"), \
+             mock.patch.object(lab, "drop_caches"), mock.patch.object(run, "measure", side_effect=measured), \
+             mock.patch.object(run, "settled_free_bytes", return_value=10), \
+             mock.patch.object(run, "free_bytes", return_value=4), mock.patch.object(run.time, "sleep"):
+            row = run.one_run(Downloader("unused"), dict(self.case, id="s7", profile="home"), self.work, self.root, 1, False, 30)
+        # both attempts of a resume run in one cgroup, read after the flush and removed with the run
+        [tree] = made
+        self.assertEqual(trees, [tree, tree])
+        self.assertEqual(tree.read, [(os.stat(self.work).st_dev, [self.work])])
+        self.assertTrue(tree.closed)
+        self.assertEqual((row["written_bytes"], row["memory_bytes"], row["maxrss_bytes"]), (8192, 90, 7))
 
     def test_a_run_with_more_requests_in_flight_than_the_budget_is_flagged(self):
         class Fast(tools.Tool):
@@ -846,6 +941,7 @@ class MainPreparationTests(unittest.TestCase):
                     "--scenarios", "s2r", "--quick", "--out", str(root / "results")]
             with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
                  mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
+                 mock.patch.object(lab, "trees"), \
                  mock.patch.object(lab, "pin_server", return_value={}), \
                  mock.patch.object(run, "metadata", return_value=dict(commands={}, orders=[], cases=[])), \
                  mock.patch.object(run.os.path, "ismount", return_value=True), \
@@ -921,6 +1017,9 @@ class MainRefusalTests(unittest.TestCase):
         (self.root / "results").mkdir(exist_ok=True)
         (self.root / "results/runs.jsonl").write_text("")
         self.assertEqual(self.refused(), "run.py: error: output already contains runs; use a new directory")
+        (self.root / "results/runs.jsonl").unlink()
+        with mock.patch.object(lab, "trees", side_effect=RuntimeError("cannot make the cgroup v2 each run is measured in")):
+            self.assertEqual(self.refused(), "run.py: error: cannot make the cgroup v2 each run is measured in")
         (self.root / "owned.json").unlink()
         self.assertEqual(self.refused(), "run.py: error: run lab.py setup first")
 
