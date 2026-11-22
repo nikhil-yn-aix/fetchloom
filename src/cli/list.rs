@@ -914,6 +914,33 @@ mod tests {
         );
     }
 
+    /// a usual folder, data/<name>, repeats the name, while the source is the one column nothing
+    /// else tells, so at 80 columns the source stays whole and the usual folder gives way. `list -h`
+    /// says so, rather than promise a folder a narrow screen leaves out.
+    #[test]
+    fn a_narrow_screen_leaves_out_a_usual_folder_as_the_help_says() {
+        let listed = |name: &str, reference: &str| Listed {
+            reference: reference.to_owned(),
+            ..zenodo(name, None)
+        };
+        let datasets = [
+            listed("measurements", "local"),
+            listed("table", "http://127.0.0.1:18871/files/set1/table.csv"),
+        ];
+        let narrow = table(&datasets, Some(80), UNICODE);
+        assert!(!narrow.contains("data/table"), "{narrow}");
+        assert!(
+            narrow.contains("http://127.0.0.1:18871/files/set1/table.csv"),
+            "{narrow}"
+        );
+        assert!(table(&datasets, Some(120), UNICODE).contains("data/table"));
+        let about = super::super::args::command()
+            .find_subcommand("list")
+            .and_then(|list| list.get_about().map(ToString::to_string))
+            .unwrap_or_default();
+        assert!(about.contains("if there is room, folder"), "{about}");
+    }
+
     /// a name wider than half the terminal takes a line of its own above its row, so the other
     /// rows keep their sources whole.
     #[test]

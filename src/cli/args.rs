@@ -619,7 +619,7 @@ pub(crate) enum Command {
     #[command(override_usage = "fetchloom diff [options] [from] [to]", help_template = TEMPLATE, after_help = examples::DIFF)]
     Diff(Diff),
 
-    /// list the project's datasets: source, size and folder
+    /// list the datasets: source, size and, if there is room, folder
     #[command(override_usage = "fetchloom list [options] [name]", help_template = TEMPLATE, after_help = examples::LIST)]
     List(List),
 
