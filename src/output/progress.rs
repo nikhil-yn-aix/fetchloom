@@ -265,16 +265,24 @@ impl Moved {
     }
 
     /// how long since the bar last moved.
+    #[cfg(test)]
     fn quiet(&self) -> Duration {
-        self.born
-            .elapsed()
+        self.quiet_at(Instant::now())
+    }
+
+    /// how long the bar had not moved at `now`.
+    fn quiet_at(&self, now: Instant) -> Duration {
+        now.saturating_duration_since(self.born)
             .saturating_sub(Duration::from_millis(self.at.load(Ordering::Relaxed)))
     }
 
-    /// how long a download's data has not come, once a server answered or bytes came: until
-    /// then the bar waits for an answer, as a check of a cached file does, which is no stall.
-    fn silence(&self) -> Option<Duration> {
-        self.heard.load(Ordering::Relaxed).then(|| self.quiet())
+    /// how long a download's data had not come at `now`, once a server answered or bytes came:
+    /// until then the bar waits for an answer, as a check of a cached file does, which is no
+    /// stall.
+    fn silence(&self, now: Instant) -> Option<Duration> {
+        self.heard
+            .load(Ordering::Relaxed)
+            .then(|| self.quiet_at(now))
     }
 }
 
@@ -634,7 +642,9 @@ fn style(
                     )
                 });
                 // unpacking and checking read local files, whose pauses mean nothing
-                let quiet = (verb == "Downloading").then(|| moved.silence()).flatten();
+                let quiet = (verb == "Downloading")
+                    .then(|| moved.silence(Instant::now()))
+                    .flatten();
                 let stopping = moved.stopping.load(Ordering::Relaxed);
                 let behind = quiet.filter(|_| moved.behind.load(Ordering::Relaxed));
                 let mut counters = waiting(done, total, moved.retrying(), behind)
@@ -1562,9 +1572,8 @@ mod tests {
     #[test]
     fn a_bar_stalls_only_once_its_server_answered() {
         let five = Duration::from_secs(5);
-        let born = Instant::now()
-            .checked_sub(five)
-            .unwrap_or_else(Instant::now);
+        let born = Instant::now();
+        let now = born + five;
         let bar = Bar {
             drawn: Some(ProgressBar::hidden()),
             color: false,
@@ -1575,7 +1584,8 @@ mod tests {
             }),
             later: None,
         };
-        let line = |bar: &Bar| measured(0, Some(10), 0.0, five, five, bar.moved.silence(), false);
+        let line =
+            |bar: &Bar| measured(0, Some(10), 0.0, five, five, bar.moved.silence(now), false);
         bar.length(10);
         assert_eq!(line(&bar), "5 s");
         bar.start(Some(10), 0);
