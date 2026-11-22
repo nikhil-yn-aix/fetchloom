@@ -1216,7 +1216,7 @@ impl Shared {
             true,
         );
         match time {
-            Some(time) => (self.say)(verb, &format!("{text} · {time}")),
+            Some(time) => (self.say)(verb, &format!("{text} · {time} left")),
             None => (self.say)(verb, &text),
         }
         true
@@ -1412,7 +1412,8 @@ fn tick(shared: &Shared, (moment, every): (Duration, Duration)) {
 }
 
 /// the line a batch tells once it has run `elapsed`: what it does the `first` time, then how far it
-/// got of `total`, or once every byte is in, that a download waits on the disk or an unpack ends.
+/// got of `total`, with how long it has run and, once bytes came, about how long is left at the
+/// rate so far, or once every byte is in, that a download waits on the disk or an unpack ends.
 fn report(
     verb: &'static str,
     what: &str,
@@ -1429,29 +1430,54 @@ fn report(
             },
         );
     }
-    let elapsed = units::seconds(elapsed);
+    let so_far = format!("{} so far", units::seconds(elapsed));
     if verb == "Downloading" && every_byte_in(done, total) {
         return (
             "Waiting",
-            format!("for the disk to finish writing {what} · {elapsed}"),
+            format!("for the disk to finish writing {what} · {so_far}"),
         );
     }
     if verb == "Unpacking" && every_byte_in(done, total) {
-        return ("Finishing", format!("{what} · {elapsed}"));
+        return ("Finishing", format!("{what} · {so_far}"));
     }
     (
         verb,
         match total {
-            Some(total) => format!(
-                "{} of {} · {elapsed}",
-                units::size(done.min(total)),
-                units::size(total)
-            ),
+            Some(total) => {
+                let done = done.min(total);
+                let left = left_at(done, total, elapsed)
+                    .map(|left| format!(", {} left", units::about(left)))
+                    .unwrap_or_default();
+                format!(
+                    "{} of {} · {so_far}{left}",
+                    units::size(done),
+                    units::size(total)
+                )
+            }
             // a wait with no bytes to count, such as a source taking its time to answer
-            None if done == 0 => format!("{what} · {elapsed}"),
-            None => format!("{} · {elapsed}", units::size(done)),
+            None if done == 0 => format!("{what} · {so_far}"),
+            None => format!("{} · {so_far}", units::size(done)),
         },
     )
+}
+
+/// about how long the rest of `total` takes at the rate `done` came in `elapsed`, once a byte
+/// came: none before, when no rate is known.
+fn left_at(done: u64, total: u64, elapsed: Duration) -> Option<Duration> {
+    if done == 0 || elapsed.is_zero() {
+        return None;
+    }
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a byte count far below 2^52 is exact as a float"
+    )]
+    let rate = done as f64 / elapsed.as_secs_f64();
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a byte count far below 2^52 is exact as a float"
+    )]
+    let rest = total.saturating_sub(done) as f64;
+    Duration::try_from_secs_f64(rest / rate).ok()
 }
 
 #[cfg(test)]
@@ -2045,7 +2071,7 @@ mod tests {
         drop(ticker);
         assert_eq!(
             *heard.lock().unwrap(),
-            ["Downloading 2 files · 96 B · under 10 s"]
+            ["Downloading 2 files · 96 B · under 10 s left"]
         );
     }
 
@@ -2413,23 +2439,54 @@ mod tests {
         );
         assert_eq!(
             told("Downloading", 20, Some(57)),
-            ("Downloading", "20 B of 57 B · 10 s".to_owned())
+            (
+                "Downloading",
+                "20 B of 57 B · 10 s so far, about 20 s left".to_owned()
+            )
         );
         assert_eq!(
             told("Downloading", 57, Some(57)),
             (
                 "Waiting",
-                "for the disk to finish writing iris.csv · 10 s".to_owned()
+                "for the disk to finish writing iris.csv · 10 s so far".to_owned()
             )
         );
         assert_eq!(
             told("Downloading", 0, Some(0)),
-            ("Downloading", "0 B of 0 B · 10 s".to_owned()),
+            ("Downloading", "0 B of 0 B · 10 s so far".to_owned()),
             "a batch of empty files has had no byte yet"
         );
         assert_eq!(
             told("Unpacking", 20, Some(57)),
-            ("Unpacking", "20 B of 57 B · 10 s".to_owned())
+            (
+                "Unpacking",
+                "20 B of 57 B · 10 s so far, about 20 s left".to_owned()
+            )
+        );
+    }
+
+    /// a plain line's time is how long the batch has run, said so, and once bytes came, the time
+    /// left at the rate so far, which a guess made before any byte came never stands for.
+    #[test]
+    fn a_plain_line_tells_its_time_so_far_apart_from_its_time_left() {
+        let told = |done, elapsed| {
+            report(
+                "Downloading",
+                "jp25-file.bin",
+                (done, Some(20_000_000)),
+                Duration::from_secs(elapsed),
+                false,
+            )
+            .1
+        };
+        assert_eq!(told(0, 10), "0 B of 19.1 MiB · 10 s so far");
+        assert_eq!(
+            told(8_000_000, 10),
+            "7.6 MiB of 19.1 MiB · 10 s so far, about 20 s left"
+        );
+        assert_eq!(
+            told(16_000_000, 20),
+            "15.3 MiB of 19.1 MiB · 20 s so far, under 10 s left"
         );
     }
 
@@ -2439,11 +2496,14 @@ mod tests {
         let ten = Duration::from_secs(10);
         assert_eq!(
             report("Unpacking", "set/set.tar", (57, Some(57)), ten, false),
-            ("Finishing", "set/set.tar · 10 s".to_owned())
+            ("Finishing", "set/set.tar · 10 s so far".to_owned())
         );
         assert_eq!(
             report("Unpacking", "2 archives", (57, Some(80)), ten, false),
-            ("Unpacking", "57 B of 80 B · 10 s".to_owned())
+            (
+                "Unpacking",
+                "57 B of 80 B · 10 s so far, under 10 s left".to_owned()
+            )
         );
         assert_eq!(
             report("Unpacking", "set/set.tar", (57, Some(57)), ten, true),

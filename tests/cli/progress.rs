@@ -98,7 +98,7 @@ fn a_links_line_says_its_time_once_its_host_is_known() -> Result {
         .find(|line| line.starts_with("Downloading iris.csv"));
     assert_eq!(
         started,
-        Some("Downloading iris.csv · 32 B · under 10 s"),
+        Some("Downloading iris.csv · 32 B · under 10 s left"),
         "{stderr}"
     );
     Ok(())
@@ -206,7 +206,7 @@ fn progress_beside_json_says_how_long_a_download_takes() -> Result {
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert_eq!(
         stderr.lines().next(),
-        Some("Downloading iris/iris.csv · 32 B · under 10 s"),
+        Some("Downloading iris/iris.csv · 32 B · under 10 s left"),
         "{stderr}"
     );
     Ok(())

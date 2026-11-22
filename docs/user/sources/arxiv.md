@@ -61,10 +61,10 @@ before april 2007 arXiv numbered papers within each archive, so `arxiv:9901` is 
 ```text
 $ fetchloom add arxiv:cs.LG/2401 --dry-run
   Resolving arxiv:cs.LG/2401
-  Resolving arxiv:cs.LG/2401 · 10 s
-  Resolving arxiv:cs.LG/2401 · 20 s
-  Resolving arxiv:cs.LG/2401 · 30 s
-  Resolving arxiv:cs.LG/2401 · 40 s
+  Resolving arxiv:cs.LG/2401 · 10 s so far
+  Resolving arxiv:cs.LG/2401 · 20 s so far
+  Resolving arxiv:cs.LG/2401 · 30 s so far
+  Resolving arxiv:cs.LG/2401 · 40 s so far
    Resolved arxiv:cs.LG/2401 · arXiv cs.LG, January 2024 · 2,440 files
 warning: left out 10 papers whose newest version is a withdrawal, which has no pdf, as arxiv:2401.01626@v2; an earlier version can be added by its id
 warning: the mirror does not hold 1 paper at its newest version yet, so it comes from export.arxiv.org, one every 3 seconds

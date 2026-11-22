@@ -34,10 +34,10 @@ while the download runs, stderr shows:
 
 ```text
 Downloading big.bin · 1.9 MiB
-Downloading 1.4 MiB of 1.9 MiB · 10 s
+Downloading 1.4 MiB of 1.9 MiB · 10 s so far, under 10 s left
 ```
 
-once fetchloom has downloaded from a host, the first line also says about how long the download takes, as `Downloading big.bin · 1.9 MiB · under 10 s`.
+each later line says how long the download has run, and once bytes came, about how long is left at the rate so far. once fetchloom has downloaded from a host, the first line also gives a first guess at the time left, made before any byte came, as `Downloading big.bin · 1.9 MiB · under 10 s left`.
 
 [JSON output](../reference/json-output.md) defines every result and counter.
 

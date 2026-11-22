@@ -45,7 +45,7 @@ the helpers run the executable installed with the package, else one in the pytho
 
 ```text
 Downloading big.bin · 2.9 MiB
-Downloading 1.4 MiB of 2.9 MiB · 10 s
+Downloading 1.4 MiB of 2.9 MiB · 10 s so far, about 10 s left
 ```
 
 a notebook's stop button interrupts python, which stops the program too, and the next call continues from the bytes already downloaded. killing only the python process leaves the program running until it has placed the file.
