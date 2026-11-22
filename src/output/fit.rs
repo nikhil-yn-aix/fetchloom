@@ -174,15 +174,24 @@ fn visible(line: &str) -> Vec<(usize, char)> {
 }
 
 /// the column a line goes on at once wrapped: past its label, as `error: ` or `  help: `, or
-/// past the verb column of a step, which is 11 wide, else at its own indent.
+/// past the verb column of a step, which is 11 wide, else at its own indent. a verb of two words,
+/// as `Put back` or `Signed in`, starts with a capital, as no line of prose here does.
 fn hanging(plain: &str) -> usize {
     let indent = plain.len() - plain.trim_start_matches(' ').len();
     let head: Vec<char> = plain.chars().take(12).collect();
     let verb: String = head.iter().take(11).collect();
+    let word = verb.trim();
+    let words: Vec<&str> = word.split(' ').collect();
+    let two_words = words.len() == 2
+        && word.starts_with(|c: char| c.is_ascii_uppercase())
+        && verb.ends_with(|c: char| c != ' ')
+        && words
+            .iter()
+            .all(|word| !word.is_empty() && word.chars().all(char::is_alphabetic));
     if head.len() == 12
         && head[11] == ' '
-        && !verb.trim().is_empty()
-        && !verb.trim().contains([' ', ':'])
+        && !word.is_empty()
+        && (!word.contains([' ', ':']) || two_words)
     {
         return 12;
     }
@@ -316,6 +325,30 @@ fn commented(comment: &str, width: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::fit;
+
+    /// a step whose verb is two words goes on under its text, as one of one word does, while a
+    /// line of prose that happens to have a space at the verb column's edge keeps its indent.
+    #[test]
+    fn a_two_word_verb_wraps_under_its_text() {
+        assert_eq!(
+            fit(
+                "   Put back data/iris-species/Iris.csv, which was deleted or moved, since data.lock pins it",
+                80
+            ),
+            "   Put back data/iris-species/Iris.csv, which was deleted or moved, since\n            data.lock pins it"
+        );
+        assert_eq!(
+            fit(
+                "  Signed in to 127.0.0.1:18871 with a token · saved to ~/.config/fetchloom/credentials.json",
+                60
+            ),
+            "  Signed in to 127.0.0.1:18871 with a token · saved to\n            ~/.config/fetchloom/credentials.json"
+        );
+        assert_eq!(
+            fit("hello world and some more words to wrap here", 30),
+            "hello world and some more\nwords to wrap here"
+        );
+    }
 
     /// a line goes on past its label or verb column, a command in backticks stays whole, colors
     /// count for nothing, and a word wider than a line goes whole onto a line of its own.
