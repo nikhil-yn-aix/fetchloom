@@ -82,13 +82,14 @@ class ProjectionTests(unittest.TestCase):
         short = project.rules(rows(600), [])
         self.assertEqual((short["live"], short["apart"]), ("with the run", []))
 
-def pilot(**changes):
-    """a whole pilot of the real run: every case it measures, with fetchloom and curl one round each,
-    and every live service's reference and one round of both tools."""
-    cases = sorted(project.expected_cases())
-    rows = [lab(scenario, profile, tool, 60, filesystem=fs) for fs, profile, scenario in cases for tool in ("fetchloom", "curl")]
+def pilot(arms=None, **changes):
+    """a whole pilot of the real run: every case it measures, each of its arms one round, or only
+    `arms` where the pilot was told to leave the rest out, and every live service's reference and one
+    round of both tools."""
+    cases = {key: sorted(arms or project.required_arms(key)) for key in sorted(project.expected_cases())}
+    rows = [lab(scenario, profile, tool, 60, filesystem=fs) for (fs, profile, scenario), tools in cases.items() for tool in tools]
     metas = [dict(kind="lab", quick=False, cases=[dict(filesystem=fs, profile=profile, id=scenario, rounds=1, warmup=False,
-                                                       arm_rounds={"fetchloom": 1, "curl": 1}) for fs, profile, scenario in cases])]
+                                                       arm_rounds={tool: 1 for tool in tools}) for (fs, profile, scenario), tools in cases.items()])]
     metas.append(dict(kind="live", quick=False, rounds=1,
                       datasets=[dict(service=service, tool=f"{service}-tool", reference_seconds=30) for service in live.RUN]))
     rows += [dict(kind="live", service=service, tool=tool, round=1, status="passed", run_seconds=20)
@@ -106,6 +107,17 @@ class PilotTests(unittest.TestCase):
         whole = pilot()
         decided = project.decide(whole["rows"], whole["metas"])
         self.assertGreater(sum(decided["hours"].values()), 0)
+        # every tool of the design's table, as in s1 at home: the six and fetchloom's control
+        self.assertEqual(project.required_arms(("ext4", "home", "s1")),
+                         {"fetchloom", "fetchloom+control", "curl", "aria2c", "pooch", "dvc", "datalad"})
+        self.assertEqual(project.required_arms(("ext4", "lan", "s11")), {"fetchloom", "dvc", "datalad", "rsync"})
+
+    def test_a_pilot_told_to_leave_tools_out_cannot_stand_for_the_real_run(self):
+        # as a pilot run with --only-tools fetchloom,curl: every case has its plan's arms, but not the real run's
+        narrowed = pilot(arms=["fetchloom", "curl"])
+        with self.assertRaises(ValueError) as refused:
+            project.decide(narrowed["rows"], narrowed["metas"])
+        self.assertIn("no pilot run of ext4/home/s1 aria2c", str(refused.exception))
 
     def test_a_pilot_that_cannot_stand_for_the_real_run_projects_nothing(self):
         whole = pilot()
@@ -130,6 +142,43 @@ class PilotTests(unittest.TestCase):
                 told = self.refused(rows, metas)
                 self.assertIn("the pilot cannot stand for the real run", told)
                 self.assertIn(said, told)
+
+
+class FailedRunTests(unittest.TestCase):
+    def changed(self, case, tool, **changes):
+        """a whole pilot with one lab run changed."""
+        whole = pilot()
+        rows = [dict(row, **changes) if (row.get("filesystem"), row.get("profile"), row.get("scenario"), row.get("tool"))
+                == (*case, tool) else row for row in whole["rows"]]
+        return rows, whole["metas"]
+
+    def test_a_failed_or_skipped_run_of_fetchloom_or_its_control_refuses(self):
+        for tool, changes, said in [("fetchloom", dict(status="failed"), "ext4/home/s1 fetchloom failed its pilot run"),
+                                    ("fetchloom+control", dict(status="failed"), "ext4/home/s1 fetchloom+control failed its pilot run"),
+                                    ("fetchloom", dict(status="skipped"), "ext4/home/s1 fetchloom was skipped in the pilot")]:
+            with self.subTest(tool=tool, **changes), self.assertRaises(ValueError) as refused:
+                project.decide(*self.changed(("ext4", "home", "s1"), tool, **changes))
+            self.assertIn(said, str(refused.exception))
+
+    def test_a_skipped_run_of_any_other_lab_tool_refuses(self):
+        with self.assertRaises(ValueError) as refused:
+            project.decide(*self.changed(("ext4", "lan", "s3"), "aria2c", status="skipped"))
+        self.assertIn("ext4/lan/s3 aria2c was skipped in the pilot", str(refused.exception))
+
+    def test_another_tool_that_failed_fast_is_projected_at_the_slowest_passing_cost(self):
+        rows, metas = self.changed(("ext4", "lan", "s3"), "aria2c", status="failed", run_seconds=2)
+        # pooch passed slowest in that case, at 300 s a round; aria2c gave up after 2 s
+        rows = [dict(row, run_seconds=300) if (row.get("scenario"), row.get("tool")) == ("s3", "pooch") else row for row in rows]
+        decided = project.decide(rows, metas)
+        self.assertEqual(decided["failed_in_pilot"], [dict(case="ext4/lan/s3", tool="aria2c", seconds=2, projected_seconds=300)])
+        passed = project.decide(*self.changed(("ext4", "lan", "s3"), "pooch", run_seconds=300))
+        # as if aria2c had taken pooch's 300 s, not its 60: 240 s more a round, 5 rounds and a warmup
+        self.assertAlmostEqual(decided["hours"]["lan"] - passed["hours"]["lan"], 240 * 6 / 3600)
+        # one that failed slower than any that passed keeps its own cost, and one with none takes theirs
+        rows, metas = self.changed(("ext4", "lan", "s3"), "aria2c", status="failed", run_seconds=387)
+        self.assertEqual(project.decide(rows, metas)["failed_in_pilot"][0]["projected_seconds"], 387)
+        rows, metas = self.changed(("ext4", "lan", "s3"), "aria2c", status="failed", run_seconds=None)
+        self.assertEqual(project.decide(rows, metas)["failed_in_pilot"][0]["projected_seconds"], 60)
 
 
 class LiveGapTests(unittest.TestCase):

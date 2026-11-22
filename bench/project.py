@@ -18,6 +18,7 @@ import lab
 import live
 import render
 import run
+import tools
 
 # past this many hours the poor link's sizes shrink, and past the second the live part moves to a
 # separate daytime run, and then the tiny files to a block of their own
@@ -73,46 +74,69 @@ def expected_cases():
     return ext4 | {("xfs", "lan", "s5"), ("xfs", "lan", "s6")}
 
 
+def required_arms(key):
+    """the arms the real run gives a case, as filesystem, link and scenario: every tool the benchmark's
+    table runs in it, and in a headline case fetchloom's control arm, found as the real run finds them,
+    never from what a pilot planned."""
+    adapters = tools.available(Path("fetchloom"), [tools.CONTROL])
+    case = dict(id=key[2], profile=key[1])
+    return set(run.eligible(adapters, key[0], case))
+
+
 def finite(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
 
 
 def lacking(name, runs):
-    """why one arm's pilot runs cannot stand for it: more than one round or a warmup, or no finite
-    cost on record; none when it ran once with a cost."""
+    """why one arm's pilot runs cannot stand for it: more than one round or a warmup, or a passed run
+    with no finite cost on record; none when it ran once with a cost, or failed, which is priced."""
     if len(runs) > 1 or any(row.get("round") != 1 or row.get("warmup") for row in runs):
         return [f"{name} ran other than one round"]
-    if runs and not finite(runs[0].get("run_seconds")):
+    if runs and runs[0].get("status") == "passed" and not finite(runs[0].get("run_seconds")):
         return [f"{name} has no cost on record"]
     return []
 
 
 def unfit(rows, metas):
     """why these results cannot stand for the real run, as two lists of phrases. the first refuses any
-    projection: a smoke run, a case of the lab part it never measured or an arm of one with no run,
-    more than one round or a warmup, or a run with no finite cost, on any link. the second moves only
-    the live part to the daytime run: a live service of the real run it never measured, or a round
-    of one it never made or that failed."""
+    projection: a smoke run, a case of the lab part it never measured or an arm the real run gives it
+    with no run, a skipped lab run or a failed one of fetchloom or its control, more than one round or
+    a warmup, or a passed run with no finite cost, on any link. the second moves only the live part
+    to the daytime run: a live service of the real run it never measured, or a round of one it never
+    made or that failed. another lab tool's failed run is priced instead."""
     refused, missed = [], []
     labs = [meta for meta in metas if meta.get("kind") == "lab"]
     lives = [meta for meta in metas if meta.get("kind") == "live"]
     if any(meta.get("quick") for meta in metas) or any(row.get("quick") for row in rows):
         refused.append("a smoke run, not a full-size pilot")
     planned = {(case.get("filesystem"), case.get("profile"), case.get("id")): case for meta in labs for case in meta.get("cases") or []}
-    refused += [f"{'/'.join(key)} never measured" for key in sorted(expected_cases() - planned.keys())]
     measured = defaultdict(list)
     for row in rows:
         if row.get("kind") == "lab" and "tool" in row:
             measured[row.get("filesystem"), row.get("profile"), row.get("scenario"), row["tool"]].append(row)
-    for key, case in sorted(planned.items(), key=str):
-        name = "/".join(map(str, key))
+    for key in sorted(expected_cases()):
+        name = "/".join(key)
+        case = planned.get(key)
+        if case is None:
+            refused.append(f"{name} never measured")
+            continue
         arms = case.get("arm_rounds") or {}
-        if not arms or case.get("warmup") or any(rounds != 1 for rounds in arms.values()):
+        if case.get("warmup") or any(rounds != 1 for rounds in arms.values()):
             refused.append(f"{name} is not planned as one round of each arm with no warmup")
-        for arm in sorted(arms):
+        # the arms the real run measures, whatever the pilot was told to leave out
+        for arm in sorted(required_arms(key) | arms.keys()):
             runs = measured.pop((*key, arm), [])
-            refused += lacking(f"{name} {arm}", runs) if runs else [f"no pilot run of {name} {arm}"]
-    refused += [f"{'/'.join(map(str, key[:3]))} {key[3]} ran outside its plan" for key in sorted(measured, key=str)]
+            if not runs:
+                refused.append(f"no pilot run of {name} {arm}")
+                continue
+            refused += lacking(f"{name} {arm}", runs)
+            status = runs[0].get("status")
+            # a lab tool is local, so a skip is a missing tool or a fault of the harness
+            if status not in ("passed", "failed"):
+                refused.append(f"{name} {arm} was {status or 'not run'} in the pilot")
+            elif status == "failed" and arm in (tools.Fetchloom.name, run.CONTROL):
+                refused.append(f"{name} {arm} failed its pilot run")
+    refused += [f"{'/'.join(map(str, key[:3]))} {key[3]} ran outside the real run's plan" for key in sorted(measured, key=str)]
     if not lives:
         missed.append("no live pilot")
     if any(meta.get("rounds") != 1 for meta in lives):
@@ -136,6 +160,27 @@ def unfit(rows, metas):
     return refused, missed
 
 
+def priced(rows):
+    """the rows with each failed lab run, of a tool other than fetchloom and its control, costed at
+    the larger of its own cost and the slowest passed run of its case, so a quick failure cannot
+    shrink the projection; and those runs, listed."""
+    slowest = defaultdict(float)
+    for row in rows:
+        if row.get("kind") == "lab" and row.get("status") == "passed" and finite(row.get("run_seconds")):
+            key = (row["filesystem"], row["profile"], row["scenario"])
+            slowest[key] = max(slowest[key], row["run_seconds"])
+    costed, failed = [], []
+    for row in rows:
+        if row.get("kind") == "lab" and row.get("status") == "failed":
+            key = (row["filesystem"], row["profile"], row["scenario"])
+            own = row["run_seconds"] if finite(row.get("run_seconds")) else None
+            cost = max(own or 0, slowest[key])
+            failed.append(dict(case="/".join(key), tool=row["tool"], seconds=own, projected_seconds=cost))
+            row = dict(row, run_seconds=cost)
+        costed.append(row)
+    return costed, failed
+
+
 def decide(rows, metas):
     """the pilot's rules applied to a pilot that can stand for the real run; ValueError naming what it
     lacks otherwise, since a run it never made would count as no time and freeze no rival. a live
@@ -145,10 +190,12 @@ def decide(rows, metas):
     if refused:
         shown = "; ".join(refused[:12]) + (f"; and {len(refused) - 12} more" if len(refused) > 12 else "")
         raise ValueError(f"the pilot cannot stand for the real run: {shown}")
+    rows, failed = priced(rows)
     if not missed:
-        return rules(rows, metas)
+        return dict(rules(rows, metas), failed_in_pilot=failed)
     plan = rules([row for row in rows if row.get("kind") != "live"], [meta for meta in metas if meta.get("kind") != "live"])
-    return dict(plan, live="daytime", live_reason="the live pilot missed a service or a round: " + "; ".join(missed))
+    return dict(plan, live="daytime", live_reason="the live pilot missed a service or a round: " + "; ".join(missed),
+                failed_in_pilot=failed)
 
 
 def rules(rows, metas):
