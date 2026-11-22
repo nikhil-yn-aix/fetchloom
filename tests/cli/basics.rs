@@ -50,6 +50,20 @@ fn help_lists_every_command() -> Result {
     Ok(())
 }
 
+/// `help -h` is help's own page, as `help help` is, never the top command's.
+#[test]
+fn help_dash_h_shows_help_s_own_page() -> Result {
+    let sandbox = Sandbox::new()?;
+    for line in [&["help", "-h"][..], &["help", "--help"], &["help", "help"]] {
+        let shown = text(&sandbox.run(line)?.stdout)?;
+        assert!(
+            shown.starts_with("explain the ideas behind fetchloom, or one command\n"),
+            "{line:?}: {shown}"
+        );
+    }
+    Ok(())
+}
+
 /// `-h` shows the commands a newcomer uses first, a GEO example and where the R and python helpers
 /// are, or a command's examples and most used options, in one screen of 24 rows with the line
 /// typed and the next prompt; `--help` keeps every option. when a line has both `-h` and

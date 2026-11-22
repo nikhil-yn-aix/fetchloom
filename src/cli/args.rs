@@ -374,11 +374,16 @@ fn help_request(
         };
         if names {
             match current.find_subcommand(word) {
-                Some(sub) if sub.get_name() != "help" => {
+                // the words after help are its topic, so help's own page is the one asked for
+                Some(sub) if sub.get_name() == "help" => {
+                    topic.push(sub.get_name().to_owned());
+                    names = false;
+                }
+                Some(sub) => {
                     topic.push(sub.get_name().to_owned());
                     current = sub;
                 }
-                _ => names = false,
+                None => names = false,
             }
         }
     }
