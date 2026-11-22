@@ -654,7 +654,9 @@ def arguments():
                              "shuffled into the same rounds; repeatable")
     parser.add_argument("--timeout", type=seconds_choice, default=1200)
     parser.add_argument("--cpus", type=lab.cpu_choice, default=os.environ.get("FL_BENCH_CPUS", ""),
-                        help="CPU list inherited by measured commands and nginx; defaults to available CPUs")
+                        help="CPU list inherited by measured commands, and nginx without --server-cpus; defaults to available CPUs")
+    parser.add_argument("--server-cpus", type=lab.cpu_choice,
+                        help="CPU list for the lab server's nginx, apart from the measured commands' --cpus")
     parser.add_argument("--comparators", type=comparators_choice, default={},
                         help="the comparator each headline case froze from the pilot, from render.py --comparators")
     parser.add_argument("--control", action="store_true",
@@ -692,6 +694,8 @@ def campaign(parser, args):
     for fs in args.fs:
         if not os.path.ismount(lab.ROOT / "fs" / fs):
             parser.error(f"{fs} is not mounted")
+    if args.server_cpus and set(args.server_cpus) & set(args.cpus):
+        parser.error("the server's CPUs must be apart from the measured commands' --cpus")
     try:
         lab.trees()
     except RuntimeError as error:
@@ -785,7 +789,7 @@ def main():
     args = parser.parse_args()
     lab.require_root()
     lock, adapters, cases = campaign(parser, args)
-    server_cpus = lab.pin_server(args.cpus)
+    server_cpus = lab.pin_server(args.server_cpus or args.cpus)
     meta = metadata(args, adapters)
     meta.update(cpu_affinity=list(args.cpus), nginx_cpu_affinity=server_cpus)
     meta["estimated_seconds"] = estimate(args, adapters, cases)

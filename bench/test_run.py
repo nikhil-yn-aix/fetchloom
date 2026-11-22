@@ -381,7 +381,7 @@ class ManyVariantTests(unittest.TestCase):
 class CampaignTests(unittest.TestCase):
     """whole campaigns through run.main, with the lab and every client stood in for."""
 
-    def campaign(self, cases, *arguments, comparators=None):
+    def campaign(self, cases, *arguments, comparators=None, pinned=None):
         """the meta.json and rows of a campaign over these cases, fetchloom's alone unless --only-tools
         says otherwise, every run passing."""
         folder = tempfile.TemporaryDirectory()
@@ -415,7 +415,7 @@ class CampaignTests(unittest.TestCase):
         with mock.patch.object(sys, "argv", argv), mock.patch.object(lab, "ROOT", root), \
              mock.patch.object(lab, "require_root"), mock.patch.object(lab, "profile"), \
              mock.patch.multiple(lab, trees=mock.DEFAULT, Tree=Tree), \
-             mock.patch.object(lab, "pin_server", return_value={}), \
+             mock.patch.object(lab, "pin_server", pinned or mock.Mock(return_value={})), \
              mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "forget_connections"), \
              mock.patch.object(run, "metadata", side_effect=lambda *args: dict(commands={}, orders=[], cases=[])), \
              mock.patch.object(run.os.path, "ismount", return_value=True), \
@@ -440,6 +440,13 @@ class CampaignTests(unittest.TestCase):
         self.assertEqual([row["round"] for row in control], [0, 1, 2])
         self.assertEqual({row["environment"]["FETCHLOOM_EXP_NONE"] for row in control}, {"1"})
         self.assertEqual({tuple(sorted(order["tools"])) for order in meta["orders"] if order["scenario"] == "s4"}, {("fetchloom",)})
+
+    def test_the_lab_server_runs_on_cpus_apart_from_the_measured_commands(self):
+        pinned = mock.Mock(return_value={"41": [0]})
+        meta, rows = self.campaign([dict(id="s4", profile="home")], "--rounds", "1", "--cpus", "1", "--server-cpus", "0", pinned=pinned)
+        pinned.assert_called_once_with((0,))
+        self.assertEqual({tuple(row["cpu_affinity"]) for row in rows if "cpu_affinity" in row} | {tuple(meta["cpu_affinity"])}, {(1,)})
+        self.assertEqual(meta["nginx_cpu_affinity"], {"41": [0]})
 
     def test_every_arm_runs_five_rounds_and_a_headline_verdicts_arms_ten(self):
         meta, rows = self.campaign([dict(id="s1", profile="home"), dict(id="s4", profile="home")], "--control",
@@ -1116,6 +1123,8 @@ class MainRefusalTests(unittest.TestCase):
         (self.root / "results/runs.jsonl").write_text("")
         self.assertEqual(self.refused(), "run.py: error: output already contains runs; use a new directory")
         (self.root / "results/runs.jsonl").unlink()
+        self.assertEqual(self.refused("--cpus", "0-1", "--server-cpus", "1"),
+                         "run.py: error: the server's CPUs must be apart from the measured commands' --cpus")
         with mock.patch.object(lab, "trees", side_effect=RuntimeError("cannot make the cgroup v2 each run is measured in")):
             self.assertEqual(self.refused(), "run.py: error: cannot make the cgroup v2 each run is measured in")
         (self.root / "owned.json").unlink()
