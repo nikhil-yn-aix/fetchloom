@@ -5849,3 +5849,67 @@ fn a_named_sync_names_the_entries_it_left_behind_before_a_commit() -> Result {
     );
     Ok(())
 }
+
+/// a named sync tells what it left behind from the lock it wrote, never from data.lock read
+/// again: a lock grown past what the run may read, its container's room set for a small one,
+/// still names the entry left behind, and one data.toml dropped is told as removed.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_named_sync_that_grows_its_lock_names_what_it_left_behind() -> Result {
+    use std::fmt::Write as _;
+    let sandbox = Sandbox::new()?;
+    let mut routes: Vec<(String, Vec<crate::support::Part>)> = ["alpha", "beta", "core"]
+        .map(|name| (format!("/{name}.csv"), file(name.as_bytes(), "\"1\"")))
+        .into();
+    let mut sums = String::new();
+    for at in 0..200 {
+        let body = format!("{at}\n");
+        let _ = writeln!(sums, "{}  part/{at:03}.csv", sha256_hex(body.as_bytes()));
+        routes.push((
+            format!("/big/part/{at:03}.csv"),
+            file(body.as_bytes(), "\"1\""),
+        ));
+    }
+    routes.push(("/big/SHA256SUMS".to_owned(), file(sums.as_bytes(), "\"1\"")));
+    let server = Routes::start(routes)?;
+    for name in ["alpha", "beta", "core"] {
+        add_ok(&sandbox, &format!("{}/{name}.csv", server.url))?;
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let entry = |name: &str| format!("ref = \"{}/{name}.csv\"\n", server.url);
+    let text = fs::read_to_string(&manifest)?
+        .replace(
+            &entry("alpha"),
+            &format!("ref = \"list:{}/big/SHA256SUMS\"\n", server.url),
+        )
+        .replace(
+            &entry("beta"),
+            &format!("{}extract = false\n", entry("beta")),
+        );
+    let core = text.find("[datasets.core]").ok_or("no core entry")?;
+    let text = format!(
+        "{}{}",
+        &text[..core],
+        text[core..].replacen(&entry("core"), "", 1)
+    )
+    .replace("[datasets.core]\n", "");
+    fs::write(&manifest, text)?;
+    // room for the two pins data.lock holds and data.toml beside them, not for 200 more
+    let base: u64 = if cfg!(target_env = "musl") {
+        28 << 20
+    } else {
+        16 << 20
+    };
+    let mut sync = sandbox.command(&["sync", "alpha"]);
+    sync.env("FETCHLOOM_TEST_ROOM", (base + (64 << 10)).to_string());
+    let Some(screen) = sandbox.on_a_terminal_running(&sync)? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(
+            "next: run `fetchloom lock`, which pins beta and removes core as data.toml asks, then commit data.toml and data.lock, so other clones use these pins"
+        ),
+        "{screen}"
+    );
+    Ok(())
+}

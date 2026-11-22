@@ -1609,6 +1609,7 @@ pub(super) async fn sync_add(
             lock_changed: written.is_some(),
             pins: engine::repinned(&before, &lock),
             placed: placement,
+            behind: super::project::Behind::default(),
         })
     })();
     match committed {

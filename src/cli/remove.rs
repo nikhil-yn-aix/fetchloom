@@ -187,6 +187,7 @@ fn previewed(
         lock_changed: true,
         pins: Vec::new(),
         placed: preview,
+        behind: super::project::Behind::default(),
     }
 }
 

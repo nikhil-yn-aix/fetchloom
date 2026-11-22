@@ -283,6 +283,7 @@ async fn sync_held(
         lock_changed,
         pins,
         placed: placement,
+        behind,
     } = waited(
         &context.output,
         &waiting,
@@ -293,7 +294,7 @@ async fn sync_held(
         &project,
         &manifest,
         &work.scope,
-        lock_changed,
+        (lock_changed, &behind),
         &placement,
         args.verify,
         &waiting,
@@ -417,12 +418,13 @@ async fn sync_plain(
         lock_changed,
         pins,
         placed: placement,
+        behind,
     } = outcome;
     let closing = closing(
         project,
         manifest,
         &work.scope,
-        lock_changed,
+        (lock_changed, &behind),
         &placement,
         false,
         &waiting,
@@ -532,7 +534,15 @@ fn settled_named(
     context.stop.finish();
     register(&work);
     let waiting = waiting_in(&lock);
-    let closing = closing(project, manifest, scope, false, &placement, false, &waiting);
+    let closing = closing(
+        project,
+        manifest,
+        scope,
+        (false, &Behind::default()),
+        &placement,
+        false,
+        &waiting,
+    );
     let report = Report {
         selected: Some(scope.clone()),
         project: project.root.clone(),
@@ -603,7 +613,7 @@ fn settled_unheld(
         project,
         &manifest,
         &scope,
-        false,
+        (false, &Behind::default()),
         &placement,
         args.verify,
         &[],
@@ -645,7 +655,7 @@ fn closing(
     project: &Project,
     manifest: &Manifest,
     scope: &Scope,
-    lock_changed: bool,
+    (lock_changed, behind): (bool, &Behind),
     placement: &Placement,
     verified: bool,
     waiting: &[lock::Waiting],
@@ -716,12 +726,11 @@ fn closing(
             "commit {}, so other clones use these pins",
             committed(project)
         );
-        Some(match left_behind(project, manifest, scope).as_slice() {
-            [] => commit,
-            names => format!(
-                "run `{}`, which pins {} as data.toml asks, then {commit}",
-                command("lock"),
-                units::listed(names, "and")
+        Some(match behind.told() {
+            None => commit,
+            Some(does) => format!(
+                "run `{}`, which {does} as data.toml asks, then {commit}",
+                command("lock")
             ),
         })
     } else {
@@ -733,29 +742,6 @@ fn closing(
         })
     };
     Closing { verb, text, next }
-}
-
-/// the datasets outside a named `scope` whose entries data.lock, as the run left it, no longer
-/// answers, which a commit now would take behind data.toml; none for a sync of every dataset. one
-/// waiting for its file list is left out, as no lock brings that list.
-fn left_behind(project: &Project, manifest: &Manifest, scope: &Scope) -> Vec<String> {
-    if *scope == Scope::All {
-        return Vec::new();
-    }
-    let Ok(Some(lock)) = project.lock() else {
-        return Vec::new();
-    };
-    let waiting: BTreeSet<&str> = lock
-        .still_waiting()
-        .map(|waiting| waiting.name.as_str())
-        .collect();
-    let (unlocked, removed) = super::status::out_of_date(manifest, &lock);
-    let left: BTreeSet<String> = unlocked
-        .into_iter()
-        .chain(removed)
-        .filter(|name| !scope.includes(name) && !waiting.contains(name.as_str()))
-        .collect();
-    left.into_iter().collect()
 }
 
 /// the datasets a sync of every dataset places that wait for their file lists, whose files, any
@@ -1560,6 +1546,56 @@ pub(super) struct Outcome<T> {
     /// the datasets newly pinned, pinned to other data or files, or no longer pinned.
     pub(super) pins: Vec<String>,
     pub(super) placed: T,
+    /// what the lock the run wrote leaves behind data.toml outside a named scope.
+    pub(super) behind: Behind,
+}
+
+/// the datasets outside a run's named scope whose entries data.lock, as the run left it, no
+/// longer answers, which a commit now would take behind data.toml: those `lock` would pin anew
+/// and those it would remove. none for a run of every dataset, and none waiting for its file
+/// list, as no lock brings that list.
+#[derive(Debug, Default)]
+pub(super) struct Behind {
+    pins: Vec<String>,
+    removes: Vec<String>,
+}
+
+impl Behind {
+    /// what `lock`, as a run of `scope` wrote it, leaves behind `manifest`.
+    fn of(manifest: &Manifest, lock: &Lock, scope: &Scope) -> Behind {
+        if *scope == Scope::All {
+            return Behind::default();
+        }
+        let waiting: BTreeSet<&str> = lock
+            .still_waiting()
+            .map(|waiting| waiting.name.as_str())
+            .collect();
+        let left = |names: Vec<String>| -> Vec<String> {
+            let left: BTreeSet<String> = names
+                .into_iter()
+                .filter(|name| !scope.includes(name) && !waiting.contains(name.as_str()))
+                .collect();
+            left.into_iter().collect()
+        };
+        let (unlocked, removed) = super::status::out_of_date(manifest, lock);
+        Behind {
+            pins: left(unlocked),
+            removes: left(removed),
+        }
+    }
+
+    /// what `fetchloom lock` does about them, as `pins beta and removes gamma`; none when the
+    /// lock answers every entry.
+    fn told(&self) -> Option<String> {
+        let mut does = Vec::new();
+        if !self.pins.is_empty() {
+            does.push(format!("pins {}", units::listed(&self.pins, "and")));
+        }
+        if !self.removes.is_empty() {
+            does.push(format!("removes {}", units::listed(&self.removes, "and")));
+        }
+        (!does.is_empty()).then(|| does.join(" and "))
+    }
 }
 
 /// the choices a command makes for one [`sync_all`].
@@ -1661,6 +1697,7 @@ fn settle(
         lock_changed: false,
         pins: Vec::new(),
         placed: placement,
+        behind: Behind::default(),
     }))
 }
 
@@ -1681,6 +1718,7 @@ async fn sync_surveyed(
     } = run;
     let named = work.named();
     super::drop::brought_back(&mut survey, &named);
+    let asked = manifest;
     let left_out = super::drop::placed_naming(manifest, &work.scope, &named, &survey.state.dropped);
     let manifest = &*left_out;
     let seen = match read {
@@ -1713,6 +1751,7 @@ async fn sync_surveyed(
     let written = work.write_lock(&before, &lock)?;
     let changed = written.is_some();
     let pins = engine::repinned(&before, &lock);
+    let behind = Behind::of(asked, &lock, &work.scope);
     let written = match &written {
         Some(text) => Some(digest::sha256(text.as_bytes())),
         None => seen.lock,
@@ -1742,6 +1781,7 @@ async fn sync_surveyed(
         lock_changed: changed,
         pins,
         placed: placement,
+        behind,
     })
 }
 
@@ -1817,6 +1857,7 @@ pub(super) async fn preview_all(
                 placement,
                 ..Preview::default()
             },
+            behind: Behind::default(),
         });
     }
     let engine::DryRelock {
@@ -1857,6 +1898,7 @@ pub(super) async fn preview_all(
         lock_changed: changed,
         pins: engine::repinned(&before, &lock),
         placed: preview,
+        behind: Behind::default(),
     })
 }
 
