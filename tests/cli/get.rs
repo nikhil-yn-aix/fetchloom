@@ -4000,6 +4000,23 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
     }
     assert!(!work.join(".fetchloom/x").exists());
     assert!(!elsewhere.join(".git").exists());
+    // a data.toml in the dataset's folder hides no record of the project that placed its files
+    let guarded = ["data/iris/.gitignore", "data/iris/iris.csv"];
+    let held = guarded.map(|path| std::fs::read(work.join(path)));
+    std::fs::write(work.join("data/iris/data.toml"), "")?;
+    for args in [
+        ["get", &link, "-o", "data/iris/iris.csv", "--force"].as_slice(),
+        &["export", "-o", "data/iris/.gitignore", "--force"],
+    ] {
+        let output = sandbox.command(&[&["--json"], args].concat()).output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{args:?}: {document}");
+    }
+    assert_eq!(server.requests().len(), asked, "nothing was asked for");
+    for (path, before) in guarded.iter().zip(held) {
+        assert_eq!(std::fs::read(work.join(path))?, before?, "{path}");
+    }
+    std::fs::remove_file(work.join("data/iris/data.toml"))?;
     let own = sandbox.run(&["get", &link, "-o", "data/iris/notes.txt"])?;
     assert_eq!(own.status.code(), Some(0), "{}", text(&own.stderr)?);
     Ok(())

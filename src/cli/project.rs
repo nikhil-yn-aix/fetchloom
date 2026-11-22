@@ -2043,10 +2043,19 @@ enum Made {
     Marker(String),
 }
 
-/// what a sync made at `name` in `folder` of the project around it, or none: a folder outside
-/// any project, or one named through `..`, holds nothing a sync made.
+/// what a sync made at `name` in `folder`, as the state of any project around it records it, or
+/// none: a data.toml in a dataset's folder hides no record of the project that placed it there,
+/// and a folder named through `..` holds nothing a sync made.
 fn made_by_sync(folder: &Path, name: &std::ffi::OsStr) -> Option<Made> {
-    let project = Project::find(folder)?;
+    let name = name.to_str()?;
+    folder
+        .ancestors()
+        .filter(|root| root.join(manifest::FILE).exists())
+        .find_map(|root| made_in(&Project::at(root.to_path_buf()), folder, name))
+}
+
+/// what a sync of `project` made at `name` in `folder`, a folder inside it, as its state records.
+fn made_in(project: &Project, folder: &Path, name: &str) -> Option<Made> {
     let mut at = String::new();
     for part in folder.strip_prefix(&project.root).ok()?.components() {
         let std::path::Component::Normal(part) = part else {
@@ -2060,7 +2069,6 @@ fn made_by_sync(folder: &Path, name: &std::ffi::OsStr) -> Option<Made> {
     if at.is_empty() {
         return None;
     }
-    let name = name.to_str()?;
     let path = format!("{at}/{name}");
     let (state, _) = project.state_within(std::slice::from_ref(&at), &|placed| {
         placed.eq_ignore_ascii_case(&path)
