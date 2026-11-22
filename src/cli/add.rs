@@ -246,9 +246,10 @@ pub(super) async fn add(context: &Context, mut args: Add) -> Result<Report, Erro
         request = Request::Link(list_in_project(path, &project.root, &here)?);
     }
     if project.root != here {
-        context
-            .output
-            .aside(&format!("using the project in {}", project.root.display()));
+        context.output.aside(&format!(
+            "using the project in {}",
+            units::path(&project.root)
+        ));
     }
     if starting && dry_run {
         tell_would_start(context, &project.root, std::env::home_dir().as_deref());

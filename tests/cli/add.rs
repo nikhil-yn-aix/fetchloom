@@ -1199,6 +1199,22 @@ fn an_add_from_a_subfolder_names_the_project_and_shows_paths_from_there() -> Res
     Ok(())
 }
 
+/// add names a project below the home folder as status does, from `~`, not by its whole path.
+#[cfg(target_os = "linux")]
+#[test]
+fn add_names_a_project_below_home_as_status_does() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    sandbox.folder("home/proj/notebooks")?;
+    fs::write(sandbox.folder("home/proj")?.join("data.toml"), "")?;
+    let below = ["-C", "../home/proj/notebooks"];
+    let Some(screen) = sandbox.on_a_terminal(&[&below[..], &["add", &server.url]].concat())? else {
+        return Ok(());
+    };
+    assert!(screen.contains("using the project in ~/proj"), "{screen}");
+    Ok(())
+}
+
 /// q at the list of search results and no to starting a project in the home folder both cancel.
 #[cfg(all(target_os = "linux", debug_assertions))]
 #[test]
