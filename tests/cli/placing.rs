@@ -4058,6 +4058,53 @@ fn a_stopped_sync_says_where_it_kept_a_changed_copy() -> Result {
     Ok(())
 }
 
+/// a sync stopped while placing says how many of its files are in place, none here, and that the
+/// same command places them, as it then does.
+#[cfg(unix)]
+#[test]
+fn a_sync_stopped_while_placing_says_what_is_in_place() -> Result {
+    use crate::support::{Running, wait_until};
+    let sandbox = Sandbox::new()?;
+    let server = crate::support::Routes::start(vec![
+        ("/a.csv".to_owned(), file(V1, "\"a1\"")),
+        ("/b.csv".to_owned(), file(V1, "\"b1\"")),
+    ])?;
+    sandbox.allow(&server.url);
+    for name in ["a", "b"] {
+        let added = sandbox.run(&["add", &format!("{}/{name}.csv", server.url)])?;
+        assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+        fs::remove_file(sandbox.work().join(format!("data/{name}/{name}.csv")))?;
+    }
+    let release = sandbox.folder("hold")?.join("release");
+    let held = sandbox.folder("hold")?.join("release.held");
+    let mut command = sandbox.command(&["sync"]);
+    command.env("FETCHLOOM_TEST_HOLD_PLACING", &release);
+    let running = Running::start(&mut command)?;
+    wait_until("sync to start placing", || Ok(held.exists()))?;
+    running.interrupt()?;
+    running.wait_for("Stopping")?;
+    fs::write(&release, b"")?;
+    let output = running.finish()?;
+
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert!(
+        stderr
+            .contains("Stopped at your request while placing, so none of the 2 files is in place"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("again to place them"), "{stderr}");
+    let again = sandbox.run(&["sync"])?;
+    assert_eq!(again.status.code(), Some(0), "{}", text(&again.stderr)?);
+    for name in ["a", "b"] {
+        assert_eq!(
+            fs::read(sandbox.work().join(format!("data/{name}/{name}.csv")))?,
+            V1
+        );
+    }
+    Ok(())
+}
+
 /// a fresh clone's `sync --locked --verify` checks the cached bytes it places: an object changed
 /// under its size and time, as a cache restored from elsewhere can hold, is fetched again, never
 /// placed.

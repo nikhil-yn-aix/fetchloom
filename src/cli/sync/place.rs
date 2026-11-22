@@ -2025,6 +2025,8 @@ impl<'a> Placing<'a> {
             let placing = crate::units::count(*files as u64, "file", "files");
             output.beginning(begun, "Placing", &placing);
         }
+        #[cfg(debug_assertions)]
+        crate::stop::hold("FETCHLOOM_TEST_HOLD_PLACING");
         let (tallies, failure) = put_all(project, &mut placer, cache, &todo, state, checked, work);
         let failure = unsettled.or(failure);
         // one look at the stop decides flushing, taking back an add's files and the result, so
@@ -2064,6 +2066,8 @@ impl<'a> Placing<'a> {
         tell::set_aside(output, manifest, &state.aside);
         // an add rolled back takes back its markers even when none of its files was placed
         let rolled_back = (stopped || failure.is_some() || flushed.is_err()) && adding.is_some();
+        // a sync passes an empty add, which takes back nothing
+        let adds = adding.as_ref().is_some_and(|adding| !adding.is_empty());
         let undone = rolled_back
             && adding.is_some_and(|adding| undo(project, &root, threads, state, &adding, checked));
         let taken_back = rolled_back && mark::take_back(&project.root, &mut placer, state, &made);
@@ -2127,8 +2131,12 @@ impl<'a> Placing<'a> {
             needs_writing || dropped || marks || noted,
         )
         .map_err(ended)?;
-        if stopped {
+        if stopped && adds {
             return Err(ended(Stop::stopped()));
+        }
+        if stopped {
+            let in_place = tallies.values().map(|tally| tally.files).sum();
+            return Err(ended(stopped_placing(in_place, todo.len())));
         }
         if let Some(error) = failure {
             return Err(ended(error));
@@ -2234,6 +2242,26 @@ pub(crate) fn tell_marked(output: &Output, placement: &Placement) {
         );
     }
     mark::tell_made(output, &placement.marked, placement.in_git, "Ignored");
+}
+
+/// the stop of a sync that placed `placed` of its `todo` files: how many are in place, as each
+/// file is placed whole or not at all, and that a rerun places the rest.
+fn stopped_placing(placed: u64, todo: usize) -> Error {
+    let files = crate::units::count(todo as u64, "file", "files");
+    let (left, rest) = match placed {
+        0 if todo == 1 => ("the file is not in place".to_owned(), "it"),
+        0 => (format!("none of the {files} is in place"), "them"),
+        placed => (
+            format!(
+                "{} of the {files} are in place",
+                crate::units::grouped(placed)
+            ),
+            "the rest",
+        ),
+    };
+    let mut error = Stop::stopped();
+    error.message = format!("{} while placing, so {left}", error.message);
+    error.help(format!("run the same command again to place {rest}"))
 }
 
 /// `error` with a line for each changed copy of a cache link the run kept beside its file, which a
