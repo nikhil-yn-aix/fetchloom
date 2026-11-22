@@ -12,15 +12,15 @@ fetchloom avoids repeated requests and byte copies while preserving checked iden
 | repeated placement and no-op work | [placement](../architecture/placing.md) and [settled sync](../architecture/sync-loop.md#settled-sync-shortcut) | [placement observations](measurements/historical.md#placement-and-settled-sync) |
 | windows scanning | [archive staging](../architecture/archives.md) | [defender observations](measurements/historical.md#windows-defender) |
 | the cache report's look at every placed file | [cache usage](../architecture/cache-retention.md#retention-and-cleanup) | [cache report](measurements/placement.md#the-cache-report-on-100000-placed-files-2026-11-11) |
-| whole commands against main and other tools | [benchmark design](benchmark-design.md) | [final benchmark](measurements/README.md#final-benchmark-on-the-linux-lab-2026-11-09) |
+| whole commands against other tools | [benchmark design](benchmark-design.md) | [final benchmark](measurements/README.md#final-benchmark-on-the-linux-lab-2026-11-09) |
 
 historical timings have [evidence limits](measurements/historical.md#evidence-limits). the [benchmark suite](benchmark-design.md) records new comparisons with their commands and checker results.
 
 ## measurement rules
 
-use release builds and keep cache state, filesystem, machine load, run counts and network conditions with each result. interleave old and new builds when load or a live service can vary. keep a performance change only when it gains at least 10% on one workload or network profile without a regression elsewhere.
+use release builds and keep cache state, filesystem, machine load, run counts and network conditions with each result. interleave the builds you compare when load or a live service can vary. keep a performance change only when it gains at least 10% on one workload or network profile without a regression elsewhere.
 
-elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. [benchmark design](benchmark-design.md) describes the implemented linux suite. reproduce the named workload and record the conditions before treating an old timing as a baseline.
+elapsed time is not a CI assertion. work counters catch extra requests, downloads and copies on controlled workloads. [benchmark design](benchmark-design.md) describes the implemented linux suite. reproduce the named workload and record the conditions before treating an earlier timing as a baseline.
 
 `Cargo.toml` sets fat LTO, one codegen unit, `panic = "abort"` and stripped symbols for release builds. a probe thread started before the runtime lets the CLI report a system that refuses threads as `local.io`; [the a/b passes](measurements/network.md#ab-passes-on-the-linux-lab-2026-11) kept abort, since unwinding was no faster and made the binary 14.5% larger.
 
