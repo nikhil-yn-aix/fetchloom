@@ -198,14 +198,15 @@ impl Alone<'_> {
 
 /// work told once it lasts, as [`Output::lasting`] makes it, until dropped.
 pub(crate) struct Lasting {
-    _setup: Setup,
+    setup: Setup,
     ticker: Ticker,
 }
 
 impl Lasting {
-    /// what says whether the work's plain lines said what it does, for a step that says it first.
+    /// what says whether the work's plain lines said what it does, for a step that says it first,
+    /// after which its live line tells only its time.
     pub(crate) fn begun(&self) -> Begun {
-        self.ticker.begun()
+        self.ticker.begun().naming(self.setup.told())
     }
 }
 
@@ -1069,7 +1070,7 @@ impl Output {
             .unwrap_or_else(PoisonError::into_inner)
             .push(format!("{verb} {what}"));
         Lasting {
-            _setup: self.untold(verb, what.clone()),
+            setup: self.untold(verb, what.clone()),
             ticker: self.ticker(verb, what, [None]),
         }
     }
@@ -1086,7 +1087,7 @@ impl Output {
     fn lasting_at(&self, verb: &'static str, what: String, now: Instant) -> Lasting {
         let left = (self.started + self.untold).saturating_duration_since(now);
         Lasting {
-            _setup: self.untold_for(left, verb, what.clone()),
+            setup: self.untold_for(left, verb, what.clone()),
             ticker: self.ticker(verb, what, [None]),
         }
     }

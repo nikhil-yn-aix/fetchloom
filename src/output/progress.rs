@@ -105,6 +105,9 @@ struct Moved {
     foreseen: Mutex<Option<String>>,
     /// the most room the bar's counters took so far, which they keep.
     room: Mutex<Room>,
+    /// whether a line above already says what the bar's work does, so the bar tells only its
+    /// time.
+    told: Arc<AtomicBool>,
 }
 
 /// a download's next try, as its bar tells it.
@@ -134,6 +137,7 @@ impl Moved {
             untimed: AtomicBool::new(false),
             foreseen: Mutex::new(None),
             room: Mutex::new(Room::default()),
+            told: Arc::default(),
         }
     }
 
@@ -302,10 +306,23 @@ impl Bar {
         bars: &MultiProgress,
         verb: &'static str,
         message: String,
-        (color, unicode): (bool, bool),
+        look: (bool, bool),
         stopping: Arc<AtomicBool>,
     ) -> Bar {
-        let moved = Arc::new(Moved::new(stopping));
+        Bar::live(bars, (verb, message), look, (stopping, Arc::default()))
+    }
+
+    /// [`Bar::add`] for work that `told` says a line above names once set, from then on.
+    fn live(
+        bars: &MultiProgress,
+        (verb, message): (&'static str, String),
+        (color, unicode): (bool, bool),
+        (stopping, told): (Arc<AtomicBool>, Arc<AtomicBool>),
+    ) -> Bar {
+        let moved = Arc::new(Moved {
+            told,
+            ..Moved::new(stopping)
+        });
         let bar = bars.add(ProgressBar::no_length().with_message(message));
         bar.set_style(style(verb, color, unicode, &bar.message(), moved.clone()));
         bar.enable_steady_tick(TICK);
@@ -663,10 +680,27 @@ fn style(
                 }
                 let width = usize::from(console::Term::stderr().size().1);
                 let meter = bar.as_ref().map(|(bar, percent)| (bar.as_str(), *percent));
-                let line = render(&name, &heading, meter, &counters, width, color);
+                let line = if moved.told.load(Ordering::Relaxed) {
+                    told_below(&mut counters, stopping);
+                    render("", &" ".repeat(11), meter, &counters, width, color)
+                } else {
+                    render(&name, &heading, meter, &counters, width, color)
+                };
                 let _ = out.write_str(&super::shown(&line, unicode));
             },
         )
+}
+
+/// the counters of a live line under a line that says what its work does, which keeps the verb
+/// column blank: its time, said as the time so far, since nothing beside it says so.
+fn told_below(counters: &mut Counters, stopping: bool) {
+    if let Some(then) = counters
+        .then
+        .as_mut()
+        .filter(|_| !counters.timed && !stopping)
+    {
+        then.push_str(" so far");
+    }
 }
 
 /// how far `done` got of `total`, in whole percent, rounded down, so a bar short of its end never
@@ -1144,6 +1178,8 @@ impl TermLike for Rested {
 pub(crate) struct Setup {
     ended: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<JoinHandle<()>>,
+    /// set once a line above names the step, after which its live line tells only its time.
+    told: Arc<AtomicBool>,
 }
 
 /// how long a step before a command's own work goes untold at a terminal.
@@ -1154,7 +1190,13 @@ impl Setup {
         Setup {
             ended: Arc::default(),
             thread: None,
+            told: Arc::default(),
         }
+    }
+
+    /// what a line above sets once it names the step.
+    pub(super) fn told(&self) -> Arc<AtomicBool> {
+        self.told.clone()
     }
 
     /// shows `verb` and `what` on `bars` once the step has lasted `untold`, usually [`UNTOLD`],
@@ -1170,6 +1212,8 @@ impl Setup {
         let watched = ended.clone();
         let bars = bars.clone();
         let began = Instant::now();
+        let told: Arc<AtomicBool> = Arc::default();
+        let named = told.clone();
         // without a thread the step goes untold, which costs nothing but the line
         let thread = std::thread::Builder::new()
             .name("setup".to_owned())
@@ -1182,7 +1226,7 @@ impl Setup {
                 if *ended {
                     return;
                 }
-                let bar = Bar::add(&bars, verb, what, look, stopping);
+                let bar = Bar::live(&bars, (verb, what), look, (stopping, named));
                 if let Some(drawn) = &bar.drawn {
                     drawn.set_elapsed(began.elapsed());
                 }
@@ -1192,7 +1236,11 @@ impl Setup {
                 drop(bar);
             })
             .ok();
-        Setup { ended, thread }
+        Setup {
+            ended,
+            thread,
+            told,
+        }
     }
 }
 
@@ -1267,15 +1315,25 @@ impl Shared {
 
 /// whether a batch's plain lines said what it does, shared with a step that may say it first.
 #[derive(Clone)]
-pub(crate) struct Begun(Option<Arc<Shared>>);
+pub(crate) struct Begun(Option<Arc<Shared>>, Option<Arc<AtomicBool>>);
 
 impl Begun {
     /// whether this is the first to say what the batch does, which its plain lines then never
-    /// say: always, where the batch has none.
+    /// say: always, where the batch has none. the first leaves a live line only its time.
     pub(crate) fn first(&self) -> bool {
-        self.0
+        let first = self
+            .0
             .as_ref()
-            .is_none_or(|shared| !shared.begun.swap(true, Ordering::Relaxed))
+            .is_none_or(|shared| !shared.begun.swap(true, Ordering::Relaxed));
+        if let Some(told) = self.1.as_ref().filter(|_| first) {
+            told.store(true, Ordering::Relaxed);
+        }
+        first
+    }
+
+    /// this, telling the live line `told` names once the batch says what it does.
+    pub(super) fn naming(self, told: Arc<AtomicBool>) -> Begun {
+        Begun(self.0, Some(told))
     }
 }
 
@@ -1375,7 +1433,7 @@ impl Ticker {
 
     /// what says whether the batch said what it does, for a step that may say it first.
     pub(crate) fn begun(&self) -> Begun {
-        Begun(self.shared.clone())
+        Begun(self.shared.clone(), None)
     }
 
     /// adds the size a download just told; the one that makes its batch's size known says what the
@@ -1674,6 +1732,49 @@ mod tests {
         );
         assert!(screen.shows("Opening the cache"), "no line for a long step");
         drop(setup);
+    }
+
+    /// a live line under a line that names its work, as `Placing 100,000 files` told at once,
+    /// tells only its time so far from the frame after that line is told, never the work again.
+    #[test]
+    fn a_live_line_under_a_line_naming_its_work_tells_only_its_time() {
+        let screen = Screen::default();
+        let bars = MultiProgress::with_draw_target(ProgressDrawTarget::term_like(Box::new(
+            screen.clone(),
+        )));
+        let told: Arc<AtomicBool> = Arc::default();
+        let bar = Bar::live(
+            &bars,
+            ("Placing", "100,000 files".to_owned()),
+            (false, false),
+            (Arc::default(), told.clone()),
+        );
+        // past the moment a time first shows, so its time shows at once; the second it reads is
+        // the clock's
+        if let Some(drawn) = &bar.drawn {
+            drawn.set_elapsed(Duration::from_secs(8));
+        }
+        assert!(screen.shows("Placing 100,000 files"));
+        told.store(true, Ordering::Relaxed);
+        assert!(screen.shows(" s so far"));
+        let records = screen.records();
+        let below = records
+            .iter()
+            .position(|record| record.contains(" s so far"))
+            .unwrap_or_default();
+        let line = records[below]
+            .strip_prefix("text ")
+            .or_else(|| records[below].strip_prefix("line "))
+            .unwrap_or_default();
+        let time = line.strip_prefix(&" ".repeat(12)).unwrap_or_default();
+        assert!(time.starts_with(|c: char| c.is_ascii_digit()), "{line:?}");
+        assert!(
+            records[below..]
+                .iter()
+                .all(|record| !record.contains("100,000 files")),
+            "{records:?}"
+        );
+        drop(bar);
     }
 
     /// waiting for each bar's next tick once kept a busy machine showing `9 s left` for 6 s.
