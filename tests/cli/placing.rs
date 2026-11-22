@@ -4459,3 +4459,26 @@ fn only_a_placing_sync_says_what_it_places_as_it_starts() -> Result {
     assert!(!removed.contains("Placing"), "{removed}");
     Ok(())
 }
+
+/// an edit of a file copy = true placed is what copy = true is for, so the warning that sync keeps
+/// it never says to set copy = true again.
+#[test]
+fn an_edit_of_a_copy_is_never_told_to_set_copy() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start("/iris.csv", vec![file(V1, "\"v1\"")])?;
+    copy_iris(&sandbox, &server)?;
+    fs::write(sandbox.work().join("data/iris/iris.csv"), V2)?;
+    let output = sandbox.run(&["sync"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(0), "{stderr}");
+    assert!(
+        stderr.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("set copy = true"), "{stderr}");
+    assert!(
+        stderr.contains("copy = true lets you edit it here"),
+        "{stderr}"
+    );
+    Ok(())
+}

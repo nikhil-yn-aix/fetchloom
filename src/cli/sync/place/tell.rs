@@ -1019,11 +1019,11 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                         "{} has changed, so it stays, but it is an edit of an earlier version of {dataset}, not what data.lock pins now",
                         kept.path
                     ),
-                    keeping_edits(dataset, &force),
+                    keeping_edits(manifest, dataset, &force),
                 ),
                 Some(dataset) => (
                     format!("{} has changed, so it stays", kept.path),
-                    keeping_edits(dataset, &force),
+                    keeping_edits(manifest, dataset, &force),
                 ),
                 None => (
                     format!("{} has changed, so it stays", kept.path),
@@ -1043,7 +1043,7 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
                     kept.path
                 ),
                 match kept.dataset.as_deref() {
-                    Some(dataset) if kept.copied_edit => keeping_edits(dataset, &force),
+                    Some(dataset) if kept.copied_edit => keeping_edits(manifest, dataset, &force),
                     _ => format!("`{force}` replaces it"),
                 },
             ),
@@ -1080,7 +1080,17 @@ fn warn_changed_outputs(output: &Output, placement: &Placement) {
 }
 
 /// the ways to keep an edit of a file of `dataset`, then `force`, the command that discards it.
-fn keeping_edits(dataset: &str, force: &str) -> String {
+/// a dataset `manifest` sets copy = true for is edited in place already, as it asks.
+fn keeping_edits(manifest: &Manifest, dataset: &str, force: &str) -> String {
+    if manifest
+        .datasets
+        .get(dataset)
+        .is_some_and(|entry| entry.copy)
+    {
+        return format!(
+            "copy = true lets you edit it here, while data.lock still pins the original: keep your version as a file or dataset of your own for others to get it; `{force}` discards your edit"
+        );
+    }
     format!(
         "keep your version as a file or dataset of your own, or set copy = true for {dataset} in data.toml to edit its files in place; `{force}` discards your edit"
     )

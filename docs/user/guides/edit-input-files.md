@@ -43,7 +43,7 @@ an edited file stays. `status` lists it as edited, and `sync` keeps it and says 
 ```text
 $ fetchloom sync
 warning: data/penguins/penguins.csv has changed, so it stays
-  help: `fetchloom sync --force` replaces it
+  help: copy = true lets you edit it here, while data.lock still pins the original: keep your version as a file or dataset of your own for others to get it; `fetchloom sync --force` discards your edit
      Synced 2 datasets into data, 1 file left unchanged; see the warnings above
 ```
 
