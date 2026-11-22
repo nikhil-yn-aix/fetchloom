@@ -635,10 +635,11 @@ fn style(
             "line",
             move |state: &ProgressState, out: &mut dyn fmt::Write| {
                 let (done, total) = moved.shown(state.pos(), state.len());
+                let drawn = (color, unicode);
                 let bar = matches!(verb, "Downloading" | "Unpacking" | "Checking").then(|| {
                     total.map_or_else(
-                        || (meter(0, 1, color), None),
-                        |total| (meter(done, total, color), Some(percent(done, total))),
+                        || (meter(0, 1, drawn), None),
+                        |total| (meter(done, total, drawn), Some(percent(done, total))),
                     )
                 });
                 // unpacking and checking read local files, whose pauses mean nothing
@@ -677,13 +678,20 @@ fn percent(done: u64, total: u64) -> u8 {
     u8::try_from(u128::from(done.min(total)) * 100 / u128::from(total)).unwrap_or(100)
 }
 
-fn meter(done: u64, total: u64, color: bool) -> String {
+/// a bar 20 wide filled as far as `done` got of `total`. in color with `unicode` the fill is told
+/// by its color alone; with plain ASCII it is `#`, colored or not, since the ASCII `-` both would
+/// become shows no fill where color is hard to tell apart.
+fn meter(done: u64, total: u64, (color, unicode): (bool, bool)) -> String {
     let filled = if total == 0 {
         20
     } else {
         usize::try_from(u128::from(done.min(total)) * 20 / u128::from(total)).unwrap_or(20)
     };
-    let (fill, empty) = if color { ("━", "━") } else { ("#", "-") };
+    let (fill, empty) = if color && unicode {
+        ("━", "━")
+    } else {
+        ("#", "-")
+    };
     let tone = super::paint(color, super::tinted(super::Tone::Work));
     let dim = super::paint(color, anstyle::Style::new().dimmed());
     format!(
@@ -1761,14 +1769,22 @@ mod tests {
             (0, 0, "####################"),
             (u64::MAX, u64::MAX, "####################"),
         ] {
-            let bar = meter(done, total, false);
+            let bar = meter(done, total, (false, true));
             assert_eq!(bar, expected);
             assert!(!bar.contains('\u{1b}'));
         }
         assert_eq!(
-            meter(25, 100, true),
+            meter(25, 100, (true, true)),
             "\u{1b}[36m━━━━━\u{1b}[0m\u{1b}[2m━━━━━━━━━━━━━━━\u{1b}[0m"
         );
+    }
+
+    /// in color without unicode, as with LANG=C, the fill is `#` beside `-`, so a bar shows how
+    /// far it got by its characters too, as its ASCII form makes every `━` a `-`.
+    #[test]
+    fn an_ascii_bar_in_color_shows_its_fill_by_its_characters() {
+        let bar = meter(25, 100, (true, false));
+        assert_eq!(console::strip_ansi_codes(&bar), "#####---------------");
     }
 
     /// counters as `amount` shows them, ` · ` between them: the count first where the first is a
@@ -1818,7 +1834,7 @@ mod tests {
         let mib = 1024 * 1024;
         for color in [false, true] {
             for done in [0, 1, 25, 50, 99, 100, 150] {
-                let bar = meter(done, 100, color);
+                let bar = meter(done, 100, (color, true));
                 let shown = (bar.as_str(), percent(done, 100));
                 for width in [0, 1, 7, 8, 12, 20, 40, 60, 80, 120] {
                     let amount = ("12.3/39.4 MiB · 4.1 MiB/s · 7 s left", 39 * mib);
