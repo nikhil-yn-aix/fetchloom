@@ -645,10 +645,10 @@ impl Approval {
     }
 
     /// the most a download of no stated size may take, with what bounds it, from what the cache's
-    /// disk has `free` and what such downloads `taken` already: the disk, or the budget when that
-    /// leaves less. none when neither is known.
+    /// disk has `free` and what such downloads `taken` already: the disk, as [`spared`] leaves it,
+    /// or the budget when that leaves less. none when neither is known.
     fn unbounded_room(&self, free: Option<u64>, taken: u64) -> Option<(u64, Bound)> {
-        let disk = free.map(|free| (free, Bound::Disk));
+        let disk = free.map(|free| (spared(free), Bound::Disk));
         let budget = self.budget.map(|(held, budget)| {
             (
                 budget.saturating_sub(held).saturating_sub(taken),
@@ -661,6 +661,13 @@ impl Approval {
             (None, budget) => budget,
         }
     }
+}
+
+/// what a download of no stated size may take of the `free` room on the cache's disk: all but 1%
+/// of it, and at least 1 MiB, which the blocks, records and metadata of the file take past its
+/// bytes, so the download stops before the disk is full.
+fn spared(free: u64) -> u64 {
+    free.saturating_sub((free / 100).max(1 << 20))
 }
 
 /// what ends a download of no stated size: the free room on the cache's disk, or what the
@@ -680,14 +687,24 @@ fn unbounded(
     cache: &std::path::Path,
     (by_variable, projectless): (bool, bool),
 ) -> (String, String) {
+    let disk_help = || {
+        "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again".to_owned()
+    };
     let (took, help) = match bound {
+        Bound::Disk if room == 0 => (
+            format!(
+                "the disk holding the cache at {} had no room to spare for downloading {label}",
+                units::path(cache)
+            ),
+            disk_help(),
+        ),
         Bound::Disk => (
             format!(
-                "downloading {label} took the {} the disk holding the cache at {} had free",
+                "downloading {label} took the {} the disk holding the cache at {} could spare",
                 units::size(room),
                 units::path(cache)
             ),
-            "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again".to_owned(),
+            disk_help(),
         ),
         Bound::Budget { budget, held } if held >= budget => (
             format!(
@@ -1132,13 +1149,13 @@ impl<'a> Watch<'a> {
     }
 
     /// once a download of no stated size may go past its room, the room the disk holding `cache`
-    /// has free now bounds it, past the `taken` bytes the downloads of no stated size took since
+    /// can spare now bounds it, past the `taken` bytes the downloads of no stated size took since
     /// it began.
     fn on_the_disk(&self, taken: u64, cache: &std::path::Path) {
         let free = (self.approval.free)(cache);
         *self.bound.lock().unwrap_or_else(PoisonError::into_inner) = Bound::Disk;
         self.free.store(
-            free.map_or(u64::MAX, |free| taken.saturating_add(free)),
+            free.map_or(u64::MAX, |free| taken.saturating_add(spared(free))),
             Ordering::Relaxed,
         );
     }
@@ -2943,8 +2960,9 @@ mod tests {
     }
 
     /// a body of no stated size stops at the room it may take, with --yes too and where no one
-    /// can answer, naming what bounds it: the disk's free room, or `cache_budget` when that leaves
-    /// less. a stated size was weighed against the disk before the download began.
+    /// can answer, naming what bounds it: the disk's free room less what keeps the disk from
+    /// filling, or `cache_budget` when that leaves less. a stated size was weighed against the
+    /// disk before the download began.
     #[test]
     fn a_download_of_no_stated_size_stops_at_the_room_it_may_take() {
         let output = Output::new(
@@ -2982,7 +3000,7 @@ mod tests {
                 true,
                 1000,
                 Kind::LocalIo,
-                "downloading big.bin took the 1000 B the disk holding the cache at /cache had free, and its server never said its size",
+                "downloading big.bin took the 1000 B the disk holding the cache at /cache could spare, and its server never said its size",
                 "free space on that disk, or set FETCHLOOM_CACHE to a folder on a bigger one, then run the same command again",
             ),
             (
@@ -2995,7 +3013,8 @@ mod tests {
             ),
         ] {
             let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
-            approval.free = |_| Some(1000);
+            // 1 MiB stays free, so the disk spares 1,000 bytes
+            approval.free = |_| Some((1 << 20) + 1000);
             if let Some((budget, held)) = budget {
                 approval = approval.with_budget(budget, held);
             }
@@ -3015,7 +3034,7 @@ mod tests {
         let mut approval = Approval::new(crate::settings::ASK_ABOVE)
             .with_room(cache)
             .with_budget(9000, 8500);
-        approval.free = |_| Some(1000);
+        approval.free = |_| Some((1 << 20) + 1000);
         let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
         watch.on(&started(None)).unwrap();
         watch.on(&Event::Bytes(501)).unwrap();
@@ -3024,7 +3043,17 @@ mod tests {
         assert_eq!(stopped.kind, Kind::LocalIo);
         assert_eq!(
             stopped.message,
-            "downloading big.bin took the 1.5 KiB the disk holding the cache at /cache had free, and its server never said its size"
+            "downloading big.bin took the 1.5 KiB the disk holding the cache at /cache could spare, and its server never said its size"
+        );
+        // a disk with less than 1 MiB free spares nothing
+        let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
+        approval.free = |_| Some(1000);
+        let watch = Watch::new(&job, &output, &overall, &approval, true, &held);
+        watch.on(&started(None)).unwrap();
+        let stopped = watch.on(&Event::Bytes(1)).unwrap_err();
+        assert_eq!(
+            stopped.message,
+            "the disk holding the cache at /cache had no room to spare for downloading big.bin, and its server never said its size"
         );
     }
 
@@ -3141,9 +3170,11 @@ mod tests {
         let cache = std::path::Path::new("/cache");
         for budget in [Some((1000, 0)), None] {
             let mut approval = Approval::new(crate::settings::ASK_ABOVE).with_room(cache);
-            approval.free = |_| Some(1000);
+            approval.free = |_| Some((1 << 20) + 1000);
             if let Some((budget, held)) = budget {
                 approval = approval.with_budget(budget, held);
+                // the disk spares more, so the budget bounds them
+                approval.free = |_| Some(2 << 20);
             }
             let first = Watch::new(&one, &output, &overall, &approval, false, &held);
             let second = Watch::new(&two, &output, &overall, &approval, false, &held);

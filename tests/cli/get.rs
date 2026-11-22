@@ -3324,9 +3324,10 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
         ["--json", "get", server.url.as_str()].as_slice(),
         ["--json", "get", "--yes", server.url.as_str()].as_slice(),
     ] {
+        // 1 MiB stays free, so the disk spares 1,000 bytes
         let output = sandbox
             .command(args)
-            .env("FETCHLOOM_TEST_FREE", "1000")
+            .env("FETCHLOOM_TEST_FREE", ((1 << 20) + 1000).to_string())
             .output()?;
         assert_eq!(output.status.code(), Some(50), "{}", text(&output.stderr)?);
         let document = json(&output)?;
@@ -3335,7 +3336,7 @@ fn a_download_of_unknown_size_stops_once_it_passes_the_free_space() -> Result {
         assert_eq!(
             error["message"],
             format!(
-                "downloading iris.csv took the 1000 B the disk holding the cache at {} had free, and its server never said its size",
+                "downloading iris.csv took the 1000 B the disk holding the cache at {} could spare, and its server never said its size",
                 sandbox.cache().display()
             ),
             "{args:?}"
