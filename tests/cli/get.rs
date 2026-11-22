@@ -3938,7 +3938,9 @@ fn get_never_writes_over_a_projects_own_files() -> Result {
     assert_eq!(std::fs::read(work.join("data.toml"))?, manifest);
     assert_eq!(std::fs::read(work.join("data.lock"))?, lock);
     assert!(!work.join("data.lock.d").exists());
-    assert!(!work.join("data.loc\u{212a}").exists());
+    // a disk that takes the kelvin sign for k finds data.lock itself there, unchanged above
+    let kelvin = work.join("data.loc\u{212a}");
+    assert!(!kelvin.exists() || same_file::is_same_file(&kelvin, work.join("data.lock"))?);
     assert!(!work.join("data.loc\u{212a}.d").exists());
     assert!(!work.join("new").exists());
     Ok(())
