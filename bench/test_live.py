@@ -212,6 +212,17 @@ class RecordTests(unittest.TestCase):
         self.assertEqual(sorted(ran[:2]), ["fetchloom", "zenodo_get"])
         self.assertEqual(ran, [first, second, second, first] * 5)
         self.assertEqual([order["tools"] for order in meta["orders"]], [ran[at:at + 2] for at in range(0, 20, 2)])
+        # --rounds sets another count, such as one round of every service for a projection
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder).resolve()
+            (root / "owned.json").write_text("{}")
+            code, _, _ = self.campaign(root, ["--services", "zenodo", "--rounds", "1", "--out", str(root / "results")],
+                                       catalog=mock.patch.object(live, "catalog", return_value=self.dataset()),
+                                       reference=mock.patch.object(live, "reference", return_value={"input.bin": "digest"}),
+                                       measure=mock.patch.object(run, "measure", side_effect=measured),
+                                       fingerprint=mock.patch.object(live, "fingerprint", return_value={"input.bin": "digest"}))
+            once = [json.loads(line) for line in (root / "results/runs.jsonl").read_text().splitlines()]
+        self.assertEqual((code, sorted(row["tool"] for row in once if row["kind"] == "live")), (0, ["fetchloom", "zenodo_get"]))
         # which tool starts comes from the seed, not from the code
         self.assertEqual({live.abba(("a", "b"), 2, random.Random(seed))[0][0] for seed in range(20)}, {"a", "b"})
 
