@@ -2253,8 +2253,9 @@ fn stopped_placing(placed: u64, todo: usize) -> Error {
         0 => (format!("none of the {files} is in place"), "them"),
         placed => (
             format!(
-                "{} of the {files} are in place",
-                crate::units::grouped(placed)
+                "{} of the {files} {} in place",
+                crate::units::grouped(placed),
+                if placed == 1 { "is" } else { "are" }
             ),
             "the rest",
         ),
@@ -4631,6 +4632,24 @@ pub(crate) fn doubtful(doubt: &Doubt) -> Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// the count of files a stop left in place agrees with its verb: one is, more are.
+    #[test]
+    fn a_stop_while_placing_counts_what_is_in_place() {
+        let said = |placed, todo| stopped_placing(placed, todo).message;
+        assert_eq!(
+            said(1, 100_000),
+            "stopped at your request while placing, so 1 of the 100,000 files is in place"
+        );
+        assert_eq!(
+            said(2, 100_000),
+            "stopped at your request while placing, so 2 of the 100,000 files are in place"
+        );
+        assert_eq!(
+            said(0, 3),
+            "stopped at your request while placing, so none of the 3 files is in place"
+        );
+    }
 
     /// a data folder on a disk taking no file past a size, as FAT32, refuses the first file placing
     /// puts there that is larger, whether the cache holds it or not, and leaves one the cache's
