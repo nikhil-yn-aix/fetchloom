@@ -2158,6 +2158,20 @@ fn labelled((index, mut job): (usize, Job)) -> (usize, Job) {
     (index, job)
 }
 
+/// the files a running download keeps open: its claim and the file it writes.
+const OPEN_PER_DOWNLOAD: u64 = crate::cache::OPEN_PER_CLAIM + 1;
+
+/// how many downloads run at once: two for each of the `jobs` slots keep every slot busy and few
+/// enough keep memory flat, and no more than fill a quarter of `open_files`, since each claims
+/// its file before it waits for a slot.
+fn admitted(jobs: usize, open_files: Option<u64>) -> usize {
+    let busy = jobs.saturating_mul(2);
+    open_files.map_or(busy, |open| {
+        let room = usize::try_from(open / 4 / OPEN_PER_DOWNLOAD).unwrap_or(usize::MAX);
+        busy.min(room).max(1)
+    })
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "each is one part of the run that a batch of downloads shares"
@@ -2176,8 +2190,10 @@ async fn run_each(
     let mut results: Vec<Option<Result<Fetched, Error>>> =
         std::iter::repeat_with(|| None).take(count).collect();
     let mut tasks = JoinSet::new();
-    // more tasks than download slots keep every slot busy, and few enough keep memory flat
-    let in_flight = context.settings.jobs.value * 2;
+    let in_flight = admitted(
+        context.settings.jobs.value,
+        context.settings.machine.open_files,
+    );
     let approval = Arc::new(approving(context, cache, &overall).await);
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
@@ -3094,6 +3110,71 @@ mod tests {
             made.get()
         );
         assert_eq!(context.work.counts().requests, 0);
+    }
+
+    #[test]
+    fn downloads_in_flight_keep_to_a_quarter_of_the_open_files() {
+        // each holds its claim and the file it writes: three open files
+        assert_eq!(admitted(8, None), 16);
+        assert_eq!(admitted(8, Some(1 << 20)), 16);
+        assert_eq!(admitted(8, Some(128)), 10);
+        assert_eq!(admitted(8, Some(64)), 5);
+        assert_eq!(admitted(8, Some(4)), 1);
+        assert_eq!(admitted(256, Some(1024)), 85);
+    }
+
+    #[test]
+    fn a_low_open_file_limit_admits_fewer_downloads_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let mut context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: false,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Quiet,
+            false,
+            false,
+        ));
+        context.settings.jobs.value = 8;
+        context.settings.machine.open_files = Some(64);
+        context.offline = crate::net::Offline::Flag;
+        let net = Arc::new(context.net());
+        let (descriptions, urls): (Vec<_>, Vec<_>) = (0..32)
+            .map(|index| {
+                Description::take(Job {
+                    fetch: Fetch::new(Url::parse(&format!("https://example.org/{index}")).unwrap()),
+                    label: index.to_string(),
+                    dataset: None,
+                    named_by_caller: false,
+                    again: None,
+                })
+            })
+            .unzip();
+        let made = std::cell::Cell::new(0);
+        let result = crate::source::recorded::block_on(prepared(
+            &context,
+            &net,
+            &cache,
+            (descriptions, None),
+            urls,
+            |index, url| {
+                made.set(made.get() + 1);
+                Job {
+                    fetch: Fetch::new(url),
+                    label: index.to_string(),
+                    dataset: None,
+                    named_by_caller: false,
+                    again: None,
+                }
+            },
+        ));
+        assert_eq!(result.unwrap_err().kind, Kind::OfflineMissing);
+        assert!(made.get() <= 5, "{} jobs were admitted", made.get());
     }
 
     #[test]

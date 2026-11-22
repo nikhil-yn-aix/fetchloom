@@ -62,6 +62,10 @@ const FOLDERS: [&str; 10] = [
 /// the file that keeps spotlight out of the cache on macos, made just before the tag.
 const NEVER_INDEX: &str = ".metadata_never_index";
 
+/// the files a download's claim keeps open until it takes its name: its lock and its partial
+/// folder.
+pub(crate) const OPEN_PER_CLAIM: u64 = 2;
+
 /// what a system keeps in a folder that holds nothing of a person's: a new disk's lost+found, and
 /// what macos and windows put at a disk's top or in a folder someone looked at.
 const SYSTEM_NAMES: [&str; 7] = [
@@ -1221,6 +1225,16 @@ impl Cache {
         if crate::volume::out_of_files(&err, folder) {
             return crate::volume::files_ran_out(err, folder, crate::error::FEWER_FILES);
         }
+        if let Some((words, help)) = crate::error::out_of_handles(&err) {
+            return io::Error::new(
+                err.kind(),
+                crate::error::Explained {
+                    words: words.to_owned(),
+                    help: Some(help.to_owned()),
+                    cause: err,
+                },
+            );
+        }
         let mut taken = None;
         let words = match err.kind() {
             io::ErrorKind::PermissionDenied => {
@@ -1981,6 +1995,42 @@ pub(crate) mod tests {
             bytes.message,
             "could not write to the cache: the disk is full"
         );
+    }
+
+    /// a run with as many files open as the shell allows says so and how to raise the limit, and
+    /// one the whole system refused says to close programs, never that the cache's folder refused
+    /// it. the words survive being explained, as a warning about the cache reads them later.
+    #[cfg(unix)]
+    #[test]
+    fn a_run_out_of_open_files_says_which_limit_and_what_to_do() {
+        let (_dir, cache) = cache();
+        let partial = cache.root.join("partial");
+        let limits = [
+            (
+                rustix::io::Errno::MFILE,
+                "fetchloom has as many files open as this shell allows",
+                crate::error::MORE_HANDLES,
+            ),
+            (
+                rustix::io::Errno::NFILE,
+                "the system has as many files open as it allows",
+                crate::error::FEWER_PROGRAMS,
+            ),
+        ];
+        for (errno, words, help) in limits {
+            let explained =
+                cache.explained(&partial, io::Error::from_raw_os_error(errno.raw_os_error()));
+            assert_eq!(
+                crate::error::out_of_handles(&explained).map(|(_, help)| help),
+                Some(help)
+            );
+            let written = crate::error::Error::io("could not write to the cache", &explained);
+            assert_eq!(
+                written.message,
+                format!("could not write to the cache: {words}")
+            );
+            assert_eq!(written.help.as_deref(), Some(help));
+        }
     }
 
     /// a full disk under the cache says how much of it unfinished downloads hold and how to free

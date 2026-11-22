@@ -489,6 +489,48 @@ pub(crate) const FEWER_FILES: &str =
 /// [`FEWER_FILES`] where an archive's members were being made, which keeping it packed avoids.
 pub(crate) const FEWER_MEMBERS: &str = "remove files you no longer need from that disk, or keep the archive packed with extract = false in data.toml or --no-extract, then run the same command again";
 
+/// what a run that already has as many files open as it may was refused: the shell's limit on
+/// open files, not anything about the disk or the cache.
+#[cfg(unix)]
+pub(crate) const NO_HANDLES: &str = "fetchloom has as many files open as this shell allows";
+
+/// what to do about [`NO_HANDLES`].
+#[cfg(unix)]
+pub(crate) const MORE_HANDLES: &str = "raise the shell's limit on open files, such as with `ulimit -n 4096`, then run the same command again";
+
+/// what a run was refused when the whole system has as many files open as it allows, which no
+/// limit of the shell's changes.
+#[cfg(unix)]
+pub(crate) const NO_SYSTEM_HANDLES: &str = "the system has as many files open as it allows";
+
+/// what to do about [`NO_SYSTEM_HANDLES`].
+#[cfg(unix)]
+pub(crate) const FEWER_PROGRAMS: &str =
+    "close programs you no longer need, then run the same command again";
+
+/// the words and help for `err`, or the system failure inside it, when this process or the whole
+/// system has no room for another open file.
+pub(crate) fn out_of_handles(err: &io::Error) -> Option<(&'static str, &'static str)> {
+    let code = io_cause(err).and_then(io::Error::raw_os_error)?;
+    #[cfg(unix)]
+    let limits = [
+        (
+            rustix::io::Errno::MFILE.raw_os_error(),
+            (NO_HANDLES, MORE_HANDLES),
+        ),
+        (
+            rustix::io::Errno::NFILE.raw_os_error(),
+            (NO_SYSTEM_HANDLES, FEWER_PROGRAMS),
+        ),
+    ];
+    #[cfg(not(unix))]
+    let limits: [(i32, (&str, &str)); 0] = [];
+    limits
+        .into_iter()
+        .find(|&(limit, _)| limit == code)
+        .map(|(_, said)| said)
+}
+
 /// an io error in words that say what to fix, with the help that fits it better than its kind's,
 /// which keeps the error it explains as its source, so the system's own code stays within reach of
 /// [`io_cause`].
@@ -518,6 +560,9 @@ pub(crate) fn explained_help(err: &io::Error) -> Option<&str> {
 
 /// what a person can do about an io error, when its cause is one they can change.
 pub(crate) fn advice(err: &io::Error) -> Option<&'static str> {
+    if let Some((_, help)) = out_of_handles(err) {
+        return Some(help);
+    }
     // windows refuses a file another program opened without sharing it, with a sharing or a
     // lock violation
     if cfg!(windows) && matches!(err.raw_os_error(), Some(32 | 33)) {
@@ -850,6 +895,8 @@ pub(crate) mod tests {
                 (1, "check its permissions"),
                 (13, "check its permissions"),
                 (28, "free some space"),
+                (23, "close programs"),
+                (24, "limit on open files"),
             ]
         };
         for (code, help) in codes {

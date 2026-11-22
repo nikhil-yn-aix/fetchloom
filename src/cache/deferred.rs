@@ -13,7 +13,7 @@ use super::{Cache, Stored};
 use crate::digest::{Md5, Sha256};
 
 /// the most finished downloads that wait for one flush before they take their names. each keeps
-/// its claim's file open until then, and linux lets a process open 1,024 files by default.
+/// its claim open until then, and linux lets a process open 1,024 files by default.
 const GROUP: usize = 256;
 
 /// how long the first download in a group waits for it to fill before it is flushed and named
@@ -131,15 +131,17 @@ impl Group {
     }
 }
 
-/// how many finished downloads wait for one flush: a quarter of `open_files`, at most [`GROUP`],
-/// leaving the rest to the downloads still running, the cache's own files and placing.
+/// how many finished downloads wait for one flush: as many as fill a quarter of `open_files`, at
+/// most [`GROUP`], leaving the rest to the downloads still running, the cache's own files and
+/// placing.
 #[cfg_attr(
     not(target_os = "linux"),
     expect(dead_code, reason = "only linux flushes a group of downloads at once")
 )]
 fn group(open_files: Option<u64>) -> usize {
     open_files.map_or(GROUP, |open| {
-        usize::try_from(open / 4).map_or(GROUP, |quarter| quarter.clamp(1, GROUP))
+        usize::try_from(open / 4 / super::OPEN_PER_CLAIM)
+            .map_or(GROUP, |claims| claims.clamp(1, GROUP))
     })
 }
 

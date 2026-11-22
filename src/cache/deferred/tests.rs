@@ -449,3 +449,15 @@ fn downloads_wait_in_groups_a_low_open_file_limit_can_hold() {
         );
     }
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn a_group_holds_its_claims_to_a_quarter_of_the_open_files() {
+    // each finished download keeps its lock and its partial folder open until the group is named
+    assert_eq!(group(Some(128)), 16);
+    assert_eq!(group(Some(64)), 8);
+    assert_eq!(group(Some(1024)), 128);
+    assert_eq!(group(Some(1 << 20)), GROUP);
+    assert_eq!(group(Some(4)), 1);
+    assert_eq!(group(None), GROUP);
+}

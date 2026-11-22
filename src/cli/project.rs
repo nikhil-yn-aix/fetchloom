@@ -1962,9 +1962,18 @@ pub(super) fn register(work: &Loop<'_>) {
                 "could not add this project to the cache's list of projects in {}: {err}. `fetchloom cache gc` may then delete files this project needs",
                 work.cache.root().display()
             ),
-            "check the cache folder's permissions, then run the command again",
+            unregistered_help(&err),
         );
     }
+}
+
+/// what to do when the cache could not list this project: the open-file limit's own help when
+/// it ran out of files to open, however the error was explained on its way here.
+fn unregistered_help(err: &std::io::Error) -> &'static str {
+    crate::error::out_of_handles(err).map_or(
+        "check the cache folder's permissions, then run the command again",
+        |(_, help)| help,
+    )
 }
 
 /// the folders a project's data folder may be a link into, as the run's settings list them.
@@ -2597,6 +2606,21 @@ pub(super) fn known_with_rest(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// the warning that the cache could not list a project gives the open-file limit's help when
+    /// the cache ran out of files to open, even once the error was wrapped on its way here.
+    #[cfg(unix)]
+    #[test]
+    fn an_unlisted_project_out_of_open_files_says_to_raise_the_limit() {
+        let open = std::io::Error::from_raw_os_error(rustix::io::Errno::MFILE.raw_os_error());
+        let wrapped = std::io::Error::other(open);
+        assert_eq!(
+            super::unregistered_help(&wrapped),
+            crate::error::MORE_HANDLES
+        );
+        let denied = std::io::Error::from_raw_os_error(rustix::io::Errno::ACCESS.raw_os_error());
+        assert!(super::unregistered_help(&denied).contains("permissions"));
+    }
+
     /// every folder below that holds a project counts, a name a shell needs quoted too, but one
     /// no command in backticks can carry is never named, so no clone's folder name steers the
     /// help, or the `fix` taken from it.
