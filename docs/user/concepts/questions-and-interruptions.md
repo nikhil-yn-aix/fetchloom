@@ -26,7 +26,7 @@ fetchloom also checks the free space on the cache's disk. a run that needs more 
 | ctrl-c comes | fetchloom prints | exit |
 |---|---|---|
 | at a question, a sign-in prompt or the dataset picker | one `Cancelled` line, such as `Cancelled the download of huge.bin (2.0 GiB), so nothing changed`, since a cancel you chose is not an error | 130 |
-| during other work | `Stopping (press ctrl-c again to quit at once)`, keeps what it downloaded, and ends with one `Stopped` line, such as `Stopped while talking to 127.0.0.1` | 130 |
+| during other work | `Stopping (press ctrl-c again to quit at once)`, keeps what it downloaded, and ends with one `Stopped` line, such as `Stopped while talking to 127.0.0.1`, or before a host answered, `Stopped while connecting to 192.0.2.1` or `Stopped while waiting for 127.0.0.1 to answer` | 130 |
 | once every byte is downloaded and only the disk is still writing | `Finishing (the download is complete; ctrl-c again to quit at once)`, and the run finishes | 0 |
 | once a command is writing its changes or its last lines | `Finishing what it started (ctrl-c again to quit at once)`, then its usual closing line, such as `Added iris` | 0 |
 | a second time | `Quit at once`, without waiting for the work to wind down | 130 |

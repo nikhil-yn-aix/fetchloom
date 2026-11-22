@@ -1113,7 +1113,9 @@ impl Net {
             (carrier, reason) = watched(wire, carrier) => {
                 return Err(Failure::Final(failure::proxy_down(hop, carrier, &reason)));
             }
-            () = self.stop.asked() => return Err(Failure::Final(failure::interrupted(hop))),
+            () = self.stop.asked() => {
+                return Err(Failure::Final(failure::interrupted_unanswered(hop, opening.connecting())));
+            }
         };
         self.outage.answered();
         if let Some(carrier) = carrier {

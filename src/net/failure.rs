@@ -1206,6 +1206,18 @@ pub(super) fn interrupted(url: &Url) -> Error {
     )
 }
 
+/// the stop of a request to `url` before any answer came: while its connection was still
+/// `connecting`, or while the host it reached had yet to answer, as no talk began.
+pub(super) fn interrupted_unanswered(url: &Url, connecting: bool) -> Error {
+    let host = host(url);
+    let doing = if connecting {
+        format!("connecting to {host}")
+    } else {
+        format!("waiting for {host} to answer")
+    };
+    Error::new(Kind::Interrupted, format!("stopped while {doing}"))
+}
+
 /// the error once the `tries` for `url` ran out, of the `retries` it may get, each of which may
 /// last the `timeout`, `through` the proxy that carries it, if one does. `silent` says no host
 /// answered or sent a byte this run, as on a network that drops what it does not let out, where

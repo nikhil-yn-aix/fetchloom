@@ -1498,6 +1498,42 @@ fn recorded(sandbox: &Sandbox) -> Option<u64> {
         })
 }
 
+/// a stop before a host answered never says fetchloom was talking to it: a server that took the
+/// connection and never answered is one fetchloom waited for.
+#[cfg(unix)]
+#[test]
+fn a_stop_before_an_answer_says_it_waited_for_one() -> Result {
+    use crate::support::{Running, wait_until};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let sandbox = Sandbox::new()?;
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    let port = listener.local_addr()?.port();
+    let taken = std::sync::Arc::new(AtomicBool::new(false));
+    let took = std::sync::Arc::clone(&taken);
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in listener.incoming().flatten() {
+            held.push(stream);
+            took.store(true, Ordering::Relaxed);
+        }
+    });
+    let link = format!("http://127.0.0.1:{port}/x.csv");
+    let running = Running::start(&mut sandbox.command(&["get", &link]))?;
+    wait_until("the server to take the connection", || {
+        Ok(taken.load(Ordering::Relaxed))
+    })?;
+    running.interrupt()?;
+    let output = running.finish()?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(130), "{stderr}");
+    assert!(
+        stderr.contains("    Stopped while waiting for 127.0.0.1 to answer"),
+        "{stderr}"
+    );
+    assert!(!stderr.contains("talking to"), "{stderr}");
+    Ok(())
+}
+
 /// a stop the person asked for is no error: a note offers a second ctrl-c, then a `Stopped` line
 /// says where and a dim line what the download kept, with exit code 130.
 #[cfg(unix)]

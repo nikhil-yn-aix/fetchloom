@@ -41,6 +41,12 @@ impl Opening {
         }
     }
 
+    /// whether a new connection began to open for the request and has not opened yet.
+    pub(super) fn connecting(&self) -> bool {
+        let (began, opened) = *self.state.lock().unwrap_or_else(PoisonError::into_inner);
+        began && opened.is_none()
+    }
+
     fn began(&self) {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).0 = true;
     }
@@ -121,5 +127,18 @@ mod tests {
             fresh.answer_by(sent, idle),
             Some(sent + Duration::from_secs(45))
         );
+    }
+
+    /// a request is connecting only between its connection beginning to open and opening, so a
+    /// stop then names the connection, and one after names the wait for an answer.
+    #[test]
+    fn a_request_is_connecting_until_its_connection_opens() {
+        let reused = Opening::default();
+        assert!(!reused.connecting());
+        let fresh = Opening::default();
+        fresh.began();
+        assert!(fresh.connecting());
+        fresh.opened();
+        assert!(!fresh.connecting());
     }
 }
