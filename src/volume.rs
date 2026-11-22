@@ -341,6 +341,33 @@ pub(crate) fn refuses_links(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::Unsupported || err.raw_os_error().is_some_and(refusal_code)
 }
 
+/// whether the filesystem holding `path`, or the nearest folder above it that is there, counts
+/// its files and has none left to give while it still has bytes, so a full disk there is one out
+/// of files. false when the system cannot tell, and on windows.
+pub(crate) fn no_files_left(path: &Path) -> bool {
+    #[cfg(test)]
+    if let Some(left) = NO_FILES_LEFT.get() {
+        return left;
+    }
+    #[cfg(unix)]
+    {
+        path.ancestors()
+            .find_map(|at| rustix::fs::statvfs(at).ok())
+            .is_some_and(|vfs| vfs.f_files > 0 && vfs.f_favail == 0 && vfs.f_bavail > 0)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+        false
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// what [`no_files_left`] answers in a test that sets it.
+    pub(crate) static NO_FILES_LEFT: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
 /// whether the filesystem holding `path` is mounted read-only. false when the system cannot tell,
 /// and on windows.
 pub(crate) fn read_only(path: &Path) -> bool {

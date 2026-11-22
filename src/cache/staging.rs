@@ -323,7 +323,15 @@ impl Staging {
         self.namespace.check_parent(path)
     }
 
+    /// a new object among the archive's members, or why the disk refused it: a disk out of files
+    /// says so, and that keeping the archive packed needs none.
     pub(crate) fn new_object(self: &Arc<Self>) -> io::Result<NewObject> {
+        self.new_object_here().map_err(|err| {
+            crate::error::files_ran_out(err, &self.folder, crate::error::FEWER_MEMBERS)
+        })
+    }
+
+    fn new_object_here(self: &Arc<Self>) -> io::Result<NewObject> {
         let shard = fastrand::usize(..self.shards.len());
         let folder = self.folder.join(format!("{shard:02x}"));
         if !self.shards[shard].load(Ordering::Relaxed) {

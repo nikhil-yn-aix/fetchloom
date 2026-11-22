@@ -1218,6 +1218,9 @@ impl Cache {
         if err.raw_os_error().is_none() {
             return err;
         }
+        if crate::error::out_of_files(&err, folder) {
+            return crate::error::files_ran_out(err, folder, crate::error::FEWER_FILES);
+        }
         let mut taken = None;
         let words = match err.kind() {
             io::ErrorKind::PermissionDenied => {
@@ -1938,6 +1941,46 @@ pub(crate) mod tests {
         let mut object = cache.new_object().unwrap();
         object.write_all(bytes).unwrap();
         object.seal(true).unwrap().publish(cache).unwrap()
+    }
+
+    /// a full disk that ran out of files, not bytes, says so, and what needs fewer of them: an
+    /// archive's members kept packed where they were being made. one with bytes run out says the
+    /// disk is full, as before.
+    #[test]
+    fn a_disk_out_of_files_says_so() {
+        let (_dir, cache) = cache();
+        let partial = cache.root.join("partial");
+        let full = || io::Error::from_raw_os_error(if cfg!(windows) { 112 } else { 28 });
+        crate::volume::NO_FILES_LEFT.set(Some(true));
+        let written = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, full()),
+        );
+        let member = crate::error::files_ran_out(full(), &partial, crate::error::FEWER_MEMBERS);
+        let unpacked =
+            crate::error::Error::io("could not write \"d02/f0205.txt\" into the cache", &member);
+        let denied = cache.explained(&partial, io::Error::from_raw_os_error(13));
+        crate::volume::NO_FILES_LEFT.set(Some(false));
+        let bytes = crate::error::Error::io(
+            "could not write to the cache",
+            &cache.explained(&partial, full()),
+        );
+        crate::volume::NO_FILES_LEFT.set(None);
+        assert_eq!(
+            written.message,
+            "could not write to the cache: the disk has no room for more files"
+        );
+        assert_eq!(written.help.as_deref(), Some(crate::error::FEWER_FILES));
+        assert_eq!(
+            unpacked.message,
+            "could not write \"d02/f0205.txt\" into the cache: the disk has no room for more files"
+        );
+        assert_eq!(unpacked.help.as_deref(), Some(crate::error::FEWER_MEMBERS));
+        assert_ne!(denied.to_string(), crate::error::NO_FILES);
+        assert_eq!(
+            bytes.message,
+            "could not write to the cache: the disk is full"
+        );
     }
 
     /// a full disk under the cache says how much of it unfinished downloads hold and how to free

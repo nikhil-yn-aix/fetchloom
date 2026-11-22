@@ -478,6 +478,40 @@ pub(crate) fn said(err: &io::Error) -> String {
     }
 }
 
+/// what a disk out of files, though not of bytes, refused, as [`out_of_files`] tells it.
+pub(crate) const NO_FILES: &str = "the disk has no room for more files";
+
+/// what to do about [`NO_FILES`].
+pub(crate) const FEWER_FILES: &str =
+    "remove files you no longer need from that disk, then run the command again";
+
+/// [`FEWER_FILES`] where an archive's members were being made, which keeping it packed avoids.
+pub(crate) const FEWER_MEMBERS: &str = "remove files you no longer need from that disk, or keep the archive packed with extract = false in data.toml or --no-extract, then run the same command again";
+
+/// whether `err`, the system's own full disk, came from the disk at `path` running out of files
+/// with bytes to spare, as a disk of many small files does.
+pub(crate) fn out_of_files(err: &io::Error, path: &std::path::Path) -> bool {
+    err.kind() == io::ErrorKind::StorageFull
+        && err.raw_os_error().is_some()
+        && crate::volume::no_files_left(path)
+}
+
+/// `err` as it is, or, when [`out_of_files`] says the disk at `path` ran out of files, an error
+/// that says so, with `help`.
+pub(crate) fn files_ran_out(err: io::Error, path: &std::path::Path, help: &str) -> io::Error {
+    if !out_of_files(&err, path) {
+        return err;
+    }
+    io::Error::new(
+        err.kind(),
+        Explained {
+            words: NO_FILES.to_owned(),
+            help: Some(help.to_owned()),
+            cause: err,
+        },
+    )
+}
+
 /// an io error in words that say what to fix, with the help that fits it better than its kind's,
 /// which keeps the error it explains as its source, so the system's own code stays within reach of
 /// [`io_cause`].

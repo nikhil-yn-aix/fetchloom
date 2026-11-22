@@ -59,7 +59,7 @@ a cluster's disk usually limits how many files you may keep, an inode quota, whi
 fetchloom add s3://bucket/shards/ --no-extract
 ```
 
-or set `extract = false` on the dataset in `data.toml` before its first sync. `add`, `get` and `sync` hint this before downloading when a dataset holds at least 8 numbered `.tar` shards in one folder, and `add` of a folder of them before copying it into the cache; [webdataset shards](../reference/archives.md#webdataset-shards) shows the hint.
+or set `extract = false` on the dataset in `data.toml` before its first sync. a disk that runs out of files while it still has bytes stops an unpacking with `local.io`, exit 50, saying the disk has no room for more files, with this way out in its help. `add`, `get` and `sync` hint this before downloading when a dataset holds at least 8 numbered `.tar` shards in one folder, and `add` of a folder of them before copying it into the cache; [webdataset shards](../reference/archives.md#webdataset-shards) shows the hint.
 
 ## the cache on a shared disk
 
