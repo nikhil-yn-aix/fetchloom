@@ -171,9 +171,17 @@ impl Cited {
         let mut said = Vec::new();
         if !self.missing.is_empty() {
             let missing = units::listed(&self.missing, "or");
+            // the entry still needs a title to be cited at all, so it stands in the dataset's name
+            let stand_in = if self.title.is_none() {
+                ", so its title is the dataset's name"
+            } else {
+                ""
+            };
             said.push(match self.from {
-                "doi.org" => format!("Incomplete: its DOI record gives no {missing}."),
-                _ => format!("Incomplete: built from data.lock, which gives no {missing}."),
+                "doi.org" => format!("Incomplete: its DOI record gives no {missing}{stand_in}."),
+                _ => {
+                    format!("Incomplete: built from data.lock, which gives no {missing}{stand_in}.")
+                }
             });
         }
         if license && let Some(license) = &self.license {
@@ -860,7 +868,7 @@ mod tests {
         assert_eq!(
             alone.note(true).as_deref(),
             Some(
-                "Incomplete: built from data.lock, which gives no author, year, title or link. License: cc-by-4.0."
+                "Incomplete: built from data.lock, which gives no author, year, title or link, so its title is the dataset's name. License: cc-by-4.0."
             )
         );
     }
