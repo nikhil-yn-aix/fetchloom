@@ -1651,8 +1651,32 @@ fn project_commands_outside_a_project_say_how_to_start_one() -> Result {
     );
     assert_eq!(
         error["help"],
-        "go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project here, run `fetchloom add <link>`"
+        "go into your project's folder first, or run `fetchloom -C <folder> <command>`; to start a project here, run `fetchloom add <link>`"
     );
+    Ok(())
+}
+
+/// at a terminal 40 or 80 columns wide, the help for a command outside a project leaves no word
+/// alone on its line.
+#[cfg(target_os = "linux")]
+#[test]
+fn the_help_outside_a_project_leaves_no_word_alone() -> Result {
+    let sandbox = Sandbox::new()?;
+    let status = sandbox.command(&["status"]);
+    for size in ["rows 30 cols 40", "rows 30 cols 80"] {
+        let Some((code, screen)) = crate::support::typed(&sandbox.work(), &status, size, "", "")?
+        else {
+            return Ok(());
+        };
+        assert_eq!(code, Some(50), "{screen}");
+        let screen = screen.replace('\r', "");
+        assert!(
+            screen
+                .lines()
+                .all(|line| line.contains('`') || line.split_whitespace().count() != 1),
+            "{size}\n{screen}"
+        );
+    }
     Ok(())
 }
 

@@ -2294,11 +2294,11 @@ pub(super) fn find(context: &Context) -> Result<Project, Error> {
         let Some(first) = below.iter().flatten().next() else {
             return error.help(match repository {
                 Some(_) => format!("run `{}` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`", command("add <link>")),
-                None if here.parent().is_none() => format!("{} is the root of a disk: go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`", here.display()),
+                None if here.parent().is_none() => format!("{} is the root of a disk: go into your project's folder first, or run `fetchloom -C <folder> <command>`", here.display()),
                 // add asks before starting a project in the home folder, which takes in every
                 // folder below it, so the help starts one in a folder of its own
-                None if is_home(&here) => format!("go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project, make a folder for it, such as with `mkdir my-project` and `cd my-project`, then run `{}`", command("add <link>")),
-                None => format!("go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project here, run `{}`", command("add <link>")),
+                None if is_home(&here) => format!("go into your project's folder first, or run `fetchloom -C <folder> <command>`; to start a project, make a folder for it, such as with `mkdir my-project` and `cd my-project`, then run `{}`", command("add <link>")),
+                None => format!("go into your project's folder first, or run `fetchloom -C <folder> <command>`; to start a project here, run `{}`", command("add <link>")),
             });
         };
         // after -C, the folder below it is named whole, as the run's own folder is
