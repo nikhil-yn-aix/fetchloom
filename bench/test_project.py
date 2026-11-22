@@ -122,14 +122,47 @@ class PilotTests(unittest.TestCase):
             ("a warmup", whole["rows"] + [dict(first, round=0, warmup=True)], whole["metas"], "one round"),
             ("a cost it never recorded", [dict(first, run_seconds=None)] + whole["rows"][1:], whole["metas"], "no cost"),
             ("a cost that is not a number", [dict(first, run_seconds=float("nan"))] + whole["rows"][1:], whole["metas"], "no cost"),
-            ("no live pilot", [row for row in whole["rows"] if row["kind"] == "lab"], [lab_meta], "live"),
-            ("a live service it skipped", [row for row in whole["rows"] if row.get("service") != "kaggle"],
-             [lab_meta, dict(live_meta, datasets=[d for d in live_meta["datasets"] if d["service"] != "kaggle"])], "kaggle"),
+            # a smoke run, more rounds or a run with no cost refuses on the live link too
+            ("a second live round", whole["rows"] + [dict(whole["rows"][-1], round=2)], whole["metas"], "one round"),
+            ("a live run with no cost", whole["rows"][:-1] + [dict(whole["rows"][-1], run_seconds=None)], whole["metas"], "no cost"),
         ]:
             with self.subTest(label):
                 told = self.refused(rows, metas)
                 self.assertIn("the pilot cannot stand for the real run", told)
                 self.assertIn(said, told)
+
+
+class LiveGapTests(unittest.TestCase):
+    def test_a_live_pilot_that_missed_a_service_or_a_round_moves_live_to_the_daytime_run(self):
+        whole = pilot()
+        lab_meta, live_meta = whole["metas"]
+        lab_rows = [row for row in whole["rows"] if row["kind"] == "lab"]
+        lab_alone = project.rules(lab_rows, [lab_meta])
+        for label, rows, metas, said in [
+            ("a service it could not reach", [row for row in whole["rows"] if row.get("service") != "kaggle"],
+             [lab_meta, dict(live_meta, datasets=[d for d in live_meta["datasets"] if d["service"] != "kaggle"])],
+             "live kaggle never measured"),
+            ("a round it never made", whole["rows"][:-1], whole["metas"], "no pilot run of live dataverse dataverse-tool"),
+            ("a round that failed", whole["rows"][:-1] + [dict(whole["rows"][-1], status="failed")], whole["metas"],
+             "live dataverse dataverse-tool failed its pilot round"),
+            ("no live pilot at all", lab_rows, [lab_meta], "no live pilot"),
+        ]:
+            with self.subTest(label):
+                decided = project.decide(rows, metas)
+                self.assertEqual(decided["live"], "daytime")
+                self.assertIn(said, decided["live_reason"])
+                # the lab goes ahead as its own pilot projects it, with no live hours in it
+                self.assertNotIn("live", decided["hours"])
+                self.assertEqual({key: decided[key] for key in ("hours", "scale", "comparators", "apart", "total_hours")},
+                                 {key: lab_alone[key] for key in ("hours", "scale", "comparators", "apart", "total_hours")})
+
+    def test_a_lab_gap_still_refuses_beside_a_live_one(self):
+        whole = pilot()
+        lab_meta, live_meta = whole["metas"]
+        with self.assertRaises(ValueError) as refused:
+            project.decide([row for row in whole["rows"] if row.get("service") != "kaggle"],
+                           [dict(lab_meta, cases=lab_meta["cases"][1:]), live_meta])
+        self.assertIn("never measured", str(refused.exception))
 
 
 if __name__ == "__main__":

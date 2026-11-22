@@ -78,28 +78,28 @@ def finite(value):
 
 
 def lacking(name, runs):
-    """why one arm's pilot runs cannot stand for it: none, more than one round or a warmup, or no
-    finite cost on record."""
-    if not runs:
-        return [f"no pilot run of {name}"]
+    """why one arm's pilot runs cannot stand for it: more than one round or a warmup, or no finite
+    cost on record; none when it ran once with a cost."""
     if len(runs) > 1 or any(row.get("round") != 1 or row.get("warmup") for row in runs):
         return [f"{name} ran other than one round"]
-    if not finite(runs[0].get("run_seconds")):
+    if runs and not finite(runs[0].get("run_seconds")):
         return [f"{name} has no cost on record"]
     return []
 
 
 def unfit(rows, metas):
-    """why these results cannot stand for the real run, each a phrase, or none: a smoke run, a case or
-    a live service of the real run it never measured, an arm of a case with no run, more than one
-    round or a warmup, or a run with no finite cost."""
-    found = []
+    """why these results cannot stand for the real run, as two lists of phrases. the first refuses any
+    projection: a smoke run, a case of the lab part it never measured or an arm of one with no run,
+    more than one round or a warmup, or a run with no finite cost, on any link. the second moves only
+    the live part to the daytime run: a live service of the real run it never measured, or a round
+    of one it never made or that failed."""
+    refused, missed = [], []
     labs = [meta for meta in metas if meta.get("kind") == "lab"]
     lives = [meta for meta in metas if meta.get("kind") == "live"]
     if any(meta.get("quick") for meta in metas) or any(row.get("quick") for row in rows):
-        found.append("a smoke run, not a full-size pilot")
+        refused.append("a smoke run, not a full-size pilot")
     planned = {(case.get("filesystem"), case.get("profile"), case.get("id")): case for meta in labs for case in meta.get("cases") or []}
-    found += [f"{'/'.join(key)} never measured" for key in sorted(expected_cases() - planned.keys())]
+    refused += [f"{'/'.join(key)} never measured" for key in sorted(expected_cases() - planned.keys())]
     measured = defaultdict(list)
     for row in rows:
         if row.get("kind") == "lab" and "tool" in row:
@@ -108,36 +108,47 @@ def unfit(rows, metas):
         name = "/".join(map(str, key))
         arms = case.get("arm_rounds") or {}
         if not arms or case.get("warmup") or any(rounds != 1 for rounds in arms.values()):
-            found.append(f"{name} is not planned as one round of each arm with no warmup")
+            refused.append(f"{name} is not planned as one round of each arm with no warmup")
         for arm in sorted(arms):
-            found += lacking(f"{name} {arm}", measured.pop((*key, arm), []))
-    found += [f"{'/'.join(map(str, key[:3]))} {key[3]} ran outside its plan" for key in sorted(measured, key=str)]
+            runs = measured.pop((*key, arm), [])
+            refused += lacking(f"{name} {arm}", runs) if runs else [f"no pilot run of {name} {arm}"]
+    refused += [f"{'/'.join(map(str, key[:3]))} {key[3]} ran outside its plan" for key in sorted(measured, key=str)]
     if not lives:
-        found.append("no live pilot")
+        missed.append("no live pilot")
     if any(meta.get("rounds") != 1 for meta in lives):
-        found.append("the live pilot is not one round")
+        refused.append("the live pilot is not one round")
     datasets = {dataset.get("service"): dataset for meta in lives for dataset in meta.get("datasets") or []}
     for service in live.RUN if lives else ():
         dataset = datasets.get(service)
         if dataset is None:
-            found.append(f"live {service} never measured")
+            missed.append(f"live {service} never measured")
             continue
         if not finite(dataset.get("reference_seconds")):
-            found.append(f"live {service} has no reference download's cost on record")
+            refused.append(f"live {service} has no reference download's cost on record")
         for tool in ("fetchloom", dataset.get("tool")):
-            found += lacking(f"live {service} {tool}", [row for row in rows if row.get("kind") == "live"
-                                                         and row.get("service") == service and row.get("tool") == tool])
-    return found
+            name = f"live {service} {tool}"
+            runs = [row for row in rows if row.get("kind") == "live" and row.get("service") == service and row.get("tool") == tool]
+            refused += lacking(name, runs)
+            if not runs:
+                missed.append(f"no pilot run of {name}")
+            elif len(runs) == 1 and runs[0].get("status") != "passed":
+                missed.append(f"{name} failed its pilot round")
+    return refused, missed
 
 
 def decide(rows, metas):
     """the pilot's rules applied to a pilot that can stand for the real run; ValueError naming what it
-    lacks otherwise, since a run it never made would count as no time and freeze no rival."""
-    found = unfit(rows, metas)
-    if found:
-        shown = "; ".join(found[:12]) + (f"; and {len(found) - 12} more" if len(found) > 12 else "")
+    lacks otherwise, since a run it never made would count as no time and freeze no rival. a live
+    pilot that missed a service or a round instead moves the live part to the daytime run, which
+    takes its own pilot, and the lab part goes ahead as its own pilot projects it."""
+    refused, missed = unfit(rows, metas)
+    if refused:
+        shown = "; ".join(refused[:12]) + (f"; and {len(refused) - 12} more" if len(refused) > 12 else "")
         raise ValueError(f"the pilot cannot stand for the real run: {shown}")
-    return rules(rows, metas)
+    if not missed:
+        return rules(rows, metas)
+    plan = rules([row for row in rows if row.get("kind") != "live"], [meta for meta in metas if meta.get("kind") != "live"])
+    return dict(plan, live="daytime", live_reason="the live pilot missed a service or a round: " + "; ".join(missed))
 
 
 def rules(rows, metas):
@@ -165,6 +176,7 @@ def rules(rows, metas):
     large, many = fixtures.scaled("poor", scale)
     return dict(comparators=comparators, hours=before, scale=scale, poor_sizes=dict(large_bytes=large, files=many),
                 hours_after=after, live="daytime" if deferred else "with the run",
+                live_reason=f"the projection is over {DEFER_ABOVE} hours once the poor sizes shrink" if deferred else None,
                 apart=list(APART) if apart else [], apart_hours=block, total_hours=total)
 
 
