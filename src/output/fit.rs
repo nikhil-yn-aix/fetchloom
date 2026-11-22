@@ -183,6 +183,8 @@ const PROGRAMS: &[&str] = &[
     "uname",
     "security",
     "md5",
+    // powershell's call operator, which starts the windows 7-zip command
+    "&",
     "add",
     "remove",
     "exclude",

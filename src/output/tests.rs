@@ -1990,6 +1990,9 @@ fn a_backtick_in_a_name_never_opens_a_command_early() {
     let start = help.find("`fetchloom add").unwrap();
     let end = start + 1 + help[start + 1..].find('`').unwrap();
     keeps_whole("help", &help, &help[start..=end]).unwrap();
+    let seven = "`& \"C:\\Program Files\\7-Zip\\7z.exe\" x \"da.7z\" -o\"data\"`";
+    let hint = format!("unpack da`ta.7z with {seven}, once `winget install 7zip.7zip` is done");
+    keeps_whole("hint", &hint, seven).unwrap();
 }
 
 /// stray backticks at any place in the prose of the line-ends help, one, two or one before a
