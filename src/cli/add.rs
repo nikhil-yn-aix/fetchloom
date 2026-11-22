@@ -1336,6 +1336,15 @@ async fn resolve_add(
     let told = kept.as_deref().ok();
     engine::tell_kept(&context.output, &listing, told.unwrap_or(&listing.files));
     kept?;
+    engine::tell_unmatched_excludes(
+        &context.output,
+        (
+            &parsed.reference.shown(),
+            crate::plan::Patterns::OnCommandLine,
+        ),
+        (&entry.source.exclude, entry.source.extract),
+        &listing,
+    );
     Ok(Addition {
         listing,
         reference,

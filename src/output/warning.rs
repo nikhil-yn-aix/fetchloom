@@ -161,6 +161,8 @@ pub(crate) enum Warning {
     SettingsUnknownVariable,
     /// a file is gone from its link in data.lock, or changed there, and came from a web archive.
     SourceArchived,
+    /// an exclude pattern matches no file the source lists, so it leaves nothing out.
+    SourceExcludeUnmatched,
     /// a file is gone from its link in data.lock and came from where the source lists it now.
     SourceMoved,
     /// what a source lists may not be all of the dataset.
@@ -242,6 +244,7 @@ impl Warning {
             Warning::SettingsSwitchUnread => "settings.switch_unread",
             Warning::SettingsUnknownVariable => "settings.unknown_variable",
             Warning::SourceArchived => "source.archived",
+            Warning::SourceExcludeUnmatched => "source.exclude_unmatched",
             Warning::SourceModified => "source.modified",
             Warning::SourceMoved => "source.moved",
             Warning::SourcePartial => "source.partial",
@@ -338,6 +341,7 @@ mod tests {
             SettingsSwitchUnread,
             SettingsUnknownVariable,
             SourceArchived,
+            SourceExcludeUnmatched,
             SourceModified,
             SourceMoved,
             SourcePartial,

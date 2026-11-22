@@ -1576,6 +1576,23 @@ fn told(
     let files = selected(args, parsed, listing);
     let kept = files.as_deref().unwrap_or(listing.files.as_slice());
     engine::tell_kept(&context.output, listing, kept);
+    if files.is_ok() {
+        let exclude: Vec<crate::glob::Glob> = args
+            .filter
+            .exclude
+            .iter()
+            .filter_map(|pattern| crate::glob::Glob::new(pattern).ok())
+            .collect();
+        engine::tell_unmatched_excludes(
+            &context.output,
+            (
+                &parsed.reference.shown(),
+                crate::plan::Patterns::OnCommandLine,
+            ),
+            (&exclude, !args.no_extract),
+            listing,
+        );
+    }
     files
 }
 

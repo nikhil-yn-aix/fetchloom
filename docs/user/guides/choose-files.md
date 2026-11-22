@@ -36,6 +36,6 @@ exclude = ["bezdekIris.data"]
 
 ## choosing files
 
-`--select` and `--exclude` match the paths a source lists, before anything downloads. quote them so your shell passes them unchanged. each select pattern must match at least one path before exclusions, and some files must remain. patterns do not reach members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom exclude`](../commands/exclude.md) writes one.
+`--select` and `--exclude` match the whole path a source lists, such as `all/train-0.parquet`, before anything downloads. `*` and `?` stop at `/`, so `*train*` matches only files at the dataset's top, and `**/*train*` matches them in every folder. quote patterns so your shell passes them unchanged. each select pattern must match at least one path before exclusions, and some files must remain. an exclude pattern that matches no path leaves nothing out, so it gets a `source.exclude_unmatched` warning, with the `**/` form when that would match. patterns do not reach members inside an archive; a [members table](../reference/data-toml.md#files-inside-archives) in data.toml does, and [`fetchloom exclude`](../commands/exclude.md) writes one.
 
 the limit on how many files a dataset lists applies before filtering, and filters cannot get around a source's access checks, such as zenodo's, figshare's or dataverse's. a selected google docs entry is different: exclude it, and the fixed files around it still download.

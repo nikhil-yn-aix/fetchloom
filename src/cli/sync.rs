@@ -1563,10 +1563,7 @@ impl<'a> Loop<'a> {
                 let listing = list
                     .read_in(&self.project.root, crate::net::Api::most_files(&*self.net))
                     .map_err(|err| cite_place(err, entry, "ref"))?;
-                match filter(&name, entry, &listing) {
-                    Ok(kept) => tell_kept(&self.context.output, &listing, &kept),
-                    Err(_) => tell_resolved(&self.context.output, &listing),
-                }
+                tell_listing(&self.context.output, &name, entry, &listing);
                 listings.push((name, listing));
                 continue;
             }
@@ -1631,10 +1628,12 @@ impl<'a> Loop<'a> {
             })?;
             let listing = listing.map_err(|error| fetch::page_in_entry(error, &name))?;
             // the files the dataset keeps, counted as an add counts them
-            match filter(&name, &manifest.datasets[&name], &listing) {
-                Ok(kept) => tell_kept(&self.context.output, &listing, &kept),
-                Err(_) => tell_resolved(&self.context.output, &listing),
-            }
+            tell_listing(
+                &self.context.output,
+                &name,
+                &manifest.datasets[&name],
+                &listing,
+            );
             listings.push((name, listing));
         }
         listings.sort_by(|a, b| a.0.cmp(&b.0));
@@ -2797,7 +2796,7 @@ fn first_pin(
     )
 }
 
-pub(super) use draft::{filter, without_files};
+pub(super) use draft::{filter, tell_unmatched_excludes, unmatched_exclude, without_files};
 
 /// resolves a reference, with progress or plain lines while its source takes its time, listing
 /// only the folders that may hold a file the `select` patterns match where the source can, and
@@ -3178,6 +3177,23 @@ pub(super) fn tell_kept(output: &Output, listing: &Listing, kept: &[Remote]) {
     for warning in &listing.warnings {
         output.warn(Warning::SourcePartial, warning);
     }
+}
+
+/// tells what `listing` resolved to and the files `name`'s `entry` keeps of it, warning of each
+/// exclude pattern that matches none of them.
+fn tell_listing(output: &Output, name: &str, entry: &Entry, listing: &Listing) {
+    let Ok(kept) = filter(name, entry, listing) else {
+        tell_resolved(output, listing);
+        return;
+    };
+    tell_kept(output, listing, &kept);
+    let source = &entry.source;
+    draft::tell_unmatched_excludes(
+        output,
+        (name, draft::written(entry)),
+        (&source.exclude, source.extract),
+        listing,
+    );
 }
 
 fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {

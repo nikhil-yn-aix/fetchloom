@@ -701,9 +701,13 @@ fn tell_skipped(output: &Output, shown: &str, skipped: &[String]) {
 }
 
 /// says what an import left out of `walked`: links and special files, and what the system or a
-/// tool keeps beside files, such as finder's `.DS_Store` and vim's swap files.
+/// tool keeps beside files, such as finder's `.DS_Store` and vim's swap files, and warns of each
+/// exclude pattern that left nothing out.
 pub(super) fn tell_left_out(output: &Output, shown: &str, walked: &Walked) {
     tell_skipped(output, shown, &walked.skipped);
+    for (message, help) in &walked.unmatched {
+        output.warn_with(Warning::SourceExcludeUnmatched, message, help);
+    }
     let kept_beside = [
         (
             &walked.system,
@@ -1101,6 +1105,8 @@ pub(super) struct Walked {
     pub(super) system: Vec<String>,
     /// what tools keep beside the files they work on, such as vim's swap files, left out.
     pub(super) dropped: Vec<String>,
+    /// the warning, and its help, for each exclude pattern that matches no file found.
+    unmatched: Vec<(String, String)>,
 }
 
 impl Walked {
@@ -1249,6 +1255,21 @@ fn kept(walked: &mut Walked, source: &Source, shown: &str) -> Result<(), Error> 
             format!("--select \"{}\" keeps no file of {shown}", glob.as_str()),
         )
         .help("check the pattern against the paths below the folder, such as \"**/*.csv\""));
+    }
+    let unpacks = |path: &str| {
+        archive::by_name(path) == Some(archive::Packed::Archive) && !matches(&source.exclude, path)
+    };
+    if !(source.extract && walked.files.iter().any(|file| unpacks(&file.path))) {
+        let paths = || walked.files.iter().map(|file| file.path.as_str());
+        walked.unmatched = source
+            .exclude
+            .iter()
+            .filter(|glob| !paths().any(|path| glob.matches(path)))
+            .map(|glob| {
+                let named = format!("--exclude \"{}\"", glob.as_str());
+                super::sync::unmatched_exclude(&named, glob, shown, paths)
+            })
+            .collect();
     }
     walked.files.retain(|file| {
         (source.select.is_empty() || matches(&source.select, &file.path))

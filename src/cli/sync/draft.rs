@@ -15,6 +15,7 @@ use crate::error::{Error, Kind};
 use crate::glob::{self, Glob};
 use crate::name;
 use crate::net::{Expect, Fetch, Fetched, Listed};
+use crate::output::{Output, Warning};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::{Entry, Source};
@@ -1474,7 +1475,7 @@ fn unavailable_selection(
 
 /// where an entry's patterns were written. `add` and `get` clear the lines of an entry they make
 /// from the command line, since no line of data.toml is to blame for it.
-fn written(entry: &Entry) -> Patterns {
+pub(super) fn written(entry: &Entry) -> Patterns {
     if entry.lines.is_empty() {
         Patterns::OnCommandLine
     } else {
@@ -1547,6 +1548,67 @@ fn unmatched(name: &str, entry: &Entry, source: &Source, glob: &Glob, listing: &
             }
         }),
     }
+}
+
+/// warns of each of `exclude`, the patterns written for `of` as `patterns` says, that matches no
+/// file `listing` names: it leaves nothing out, as a `*` meant to reach into folders, which stops
+/// at `/`, does. one that may name files inside an archive that unpacks is told of when placing,
+/// and one that kept a web server's folder out of the listing matched it there, so neither is.
+pub(in crate::cli) fn tell_unmatched_excludes(
+    output: &Output,
+    (of, patterns): (&str, Patterns),
+    (exclude, extract): (&[Glob], bool),
+    listing: &Listing,
+) {
+    let excluded = |path: &str| exclude.iter().any(|glob| glob.matches(path));
+    let unpacks = |path: &str| archive::by_name(path) == Some(Packed::Archive) && !excluded(path);
+    if extract && listing.paths().any(unpacks) {
+        return;
+    }
+    let pruned = matches!(listing.resolved, source::Reference::Folder(_));
+    for glob in exclude {
+        if (pruned && glob.as_str().contains("**"))
+            || listing.paths().any(|path| glob.matches(path))
+        {
+            continue;
+        }
+        let named = match patterns {
+            Patterns::OnCommandLine => format!("--exclude \"{}\"", glob.as_str()),
+            Patterns::InDataToml => {
+                format!("the exclude pattern \"{}\" in data.toml", glob.as_str())
+            }
+        };
+        let (message, help) = unmatched_exclude(&named, glob, of, || listing.paths());
+        output.warn_with(Warning::SourceExcludeUnmatched, &message, &help);
+    }
+}
+
+/// the warning, and its help, for the exclude pattern `glob`, `named` as it was written, that
+/// matches none of `paths`, the files of `of`.
+pub(in crate::cli) fn unmatched_exclude<'a, I: Iterator<Item = &'a str>>(
+    named: &str,
+    glob: &Glob,
+    of: &str,
+    paths: impl Fn() -> I,
+) -> (String, String) {
+    let message = format!("{named} matched no file of {of}, so it leaves nothing out");
+    let deeper = Glob::new(&format!("**/{}", glob.as_str()))
+        .ok()
+        .filter(|deeper| glob.is_top_level_only() && paths().any(|path| deeper.matches(path)));
+    let help = match deeper {
+        Some(deeper) => format!(
+            "patterns match the whole path, and * stops at /. try \"{}\"",
+            deeper.as_str()
+        ),
+        None => match examples(&paths).as_slice() {
+            [] => "check the pattern against the paths it should match".to_owned(),
+            shown => format!(
+                "patterns match the whole path, such as {}",
+                units::listed(shown, "or")
+            ),
+        },
+    };
+    (message, help)
 }
 
 /// the first few of `paths` to show as examples, leaving out hidden ones such as `.gitattributes`,

@@ -179,6 +179,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `settings.unknown_variable` | a variable set is one typo from one fetchloom reads, so it changes nothing; `details` names it |
 | `space.short` | a run told `--yes` goes on though a disk may lack the room it needs, or a dry run's downloads would lack it, which the message measures |
 | `source.archived` | a file is gone from its link in data.lock, or changed there, and came from software heritage or the wayback machine, named in the message, whose copy hashes to its pin: [offline and recovery](../concepts/offline-and-recovery.md#web-archives) |
+| `source.exclude_unmatched` | an exclude pattern matches no file the source or folder lists, so it leaves nothing out; the help gives the `**/` form when that matches, since `*` stops at `/` |
 | `source.modified` | `audit` found a file at its pinned size whose server says it changed after data.lock pinned it; `details` names each file |
 | `source.moved` | a file is gone from its link in data.lock and came from where the source lists it now |
 | `source.partial` | what a source lists may not be all of the dataset, as for an osf project with components or a record that holds only a README |

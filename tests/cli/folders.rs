@@ -1661,3 +1661,78 @@ fn an_exclude_of_a_whole_folder_adds_without_its_listing() -> Result {
     assert!(!lock.iter().any(|line| line.contains("big/")), "{lock:?}");
     Ok(())
 }
+
+/// an `--exclude` whose `*` was meant to reach into folders matches no path, since `*` stops at
+/// `/`, so it leaves nothing out: add, get and an import of a folder say so, before anything
+/// downloads, with the `**/` form that matches, and a pattern that does match says nothing.
+#[test]
+fn an_exclude_that_matches_nothing_says_so() -> Result {
+    let server = Routes::start(vec![
+        (
+            "/data/".to_owned(),
+            nginx("/data/", &["iris.csv", "all/", "aux_train/"]),
+        ),
+        (
+            "/data/all/".to_owned(),
+            nginx("/data/all/", &["aux_train-0.csv", "tips.csv"]),
+        ),
+        (
+            "/data/aux_train/".to_owned(),
+            nginx("/data/aux_train/", &["train.csv"]),
+        ),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/all/aux_train-0.csv".to_owned(), file(TIPS, "\"a1\"")),
+        ("/data/all/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+        ("/data/aux_train/train.csv".to_owned(), file(IRIS, "\"t2\"")),
+    ])?;
+    let sandbox = Sandbox::new()?;
+    sandbox.allow(&server.url);
+    let nested = sandbox.folder("nested/all")?;
+    fs::write(nested.join("aux_train-0.csv"), TIPS)?;
+    fs::write(nested.join("tips.csv"), TIPS)?;
+    let folder = format!("{}/data/", server.url);
+    let deeper = "patterns match the whole path, and * stops at /. try \"**/*aux_train*\"";
+    for (args, help) in [
+        (["add", &folder].as_slice(), deeper),
+        (&["get", &folder], deeper),
+        (&["add", "../nested"], deeper),
+    ] {
+        for (pattern, told) in [("*aux_train*", Some(help)), ("**/*aux_train*", None)] {
+            let output = sandbox
+                .command(&[&["--json"], args, &["--dry-run", "--exclude", pattern]].concat())
+                .output()?;
+            let document = json(&output)?;
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "{args:?} {pattern}: {document}"
+            );
+            let unmatched = warning(&document, "source.exclude_unmatched");
+            assert_eq!(
+                unmatched["help"].as_str(),
+                told,
+                "{args:?} {pattern}: {document}"
+            );
+        }
+        let output = sandbox
+            .command(&[&["--json"], args, &["--dry-run", "--exclude", "nomatch*"]].concat())
+            .output()?;
+        let document = json(&output)?;
+        let message = warning(&document, "source.exclude_unmatched")["message"].as_str();
+        assert!(
+            message.is_some_and(
+                |message| message.starts_with("--exclude \"nomatch*\" matched no file of")
+            ),
+            "{args:?}: {document}"
+        );
+    }
+    let said = sandbox
+        .command(&["add", &folder, "--dry-run", "--exclude", "*aux_train*"])
+        .output()?;
+    let stderr = text(&said.stderr)?;
+    assert!(
+        stderr.contains("matched no file of") && stderr.contains("**/*aux_train*"),
+        "{stderr}"
+    );
+    Ok(())
+}

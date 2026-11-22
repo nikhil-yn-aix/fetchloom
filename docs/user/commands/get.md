@@ -27,7 +27,7 @@ fetchloom get [options] <link>...
 | `-i <file>`, `--input-file <file>` | read links from a file, one per line, each with an optional MD5 or SHA-256, or from stdin for `-` |
 | `--sha256 <hex>` | check the one downloaded file against this SHA-256 before it takes its name or goes in the folder |
 | `--select <glob>` | keep files matching any supplied pattern; repeat for more |
-| `--exclude <glob>` | drop matching files; repeat for more. with one link, a web server's folder that a pattern leaves out whole, as `big/**` does `big`, is not listed |
+| `--exclude <glob>` | drop matching files; repeat for more. a pattern matches the whole path, and `*` stops at `/`, so `**/*train*` reaches into folders where `*train*` does not; one that matches no file gets a warning. with one link, a web server's folder that a pattern leaves out whole, as `big/**` does `big`, is not listed |
 | `--no-extract` | keep archives packed; webdataset loaders read `.tar` shards packed |
 | `--decompress` | decompress each single `.gz`, `.bz2`, `.xz` or `.zst` file to its name without the ending, or with `-o` to that file; `--sha256` checks the bytes as they downloaded, still compressed. a compressed tar, as `.tar.gz`, stays an archive |
 | `--web-page` | keep the web page a link answers with as the file; without it such a page is refused, see [web pages as data](../sources/urls-and-dois.md#web-pages-as-data) |
