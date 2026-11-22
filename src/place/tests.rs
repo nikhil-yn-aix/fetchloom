@@ -2755,8 +2755,16 @@ fn a_folder_a_removal_changed_must_be_flushed_or_gone() {
         return crate::test_skips::skip("unprivileged", "root ignores folder permissions");
     }
     assert_eq!(refused.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-    placer
-        .remove(&root.join("kept/note.txt"), true, None)
-        .unwrap();
-    placer.flush_removals().unwrap();
+    // the next run finds a.csv gone and flushes its folder all the same, with no unlink of its own
+    let mut retry = Placer::new(&root);
+    let flushed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let seen = std::rc::Rc::clone(&flushed);
+    crate::place::FLUSHED_FOLDER.set(Some(Box::new(move |folder: &Path| {
+        seen.borrow_mut().push(folder.to_path_buf());
+    })));
+    retry.gone(&root.join("kept/a.csv"));
+    let flushed_again = retry.flush_removals();
+    crate::place::FLUSHED_FOLDER.set(None);
+    flushed_again.unwrap();
+    assert_eq!(*flushed.borrow(), [root.join("kept"), root.clone()]);
 }

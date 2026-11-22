@@ -851,6 +851,25 @@ impl Placer {
         Ok(())
     }
 
+    /// has [`Placer::flush_removals`] flush each folder above `path`, a placed file gone already,
+    /// up to the root, as if this run removed it: the run that did may have ended before its
+    /// flush, and the record that forgets it must not outlive a removal a power cut could undo.
+    /// the folder that held it is the first still there. a file outside the root, as one a
+    /// changed data folder left, was removed by no run here.
+    pub(crate) fn gone(&mut self, path: &Path) {
+        let Ok((_, parent)) = self.within(path) else {
+            return;
+        };
+        let mut folder = Some(parent.as_path());
+        while let Some(current) = folder {
+            self.removed_from.insert(current.to_path_buf());
+            if current == self.root {
+                break;
+            }
+            folder = current.parent();
+        }
+    }
+
     /// flushes each folder whose entries [`Placer::remove`] changed and that is still there, so a
     /// record written next, which forgets what went, never outlives a removal a power cut undid:
     /// files that came back would be no one's to remove. a folder pruned with them, or put out of

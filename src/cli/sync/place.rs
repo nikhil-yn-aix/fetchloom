@@ -3666,30 +3666,30 @@ fn remove_unwanted(
         let Some(before) = survey.state.files.remove(&path) else {
             continue;
         };
+        let listed = survey.listed.get(&path).unwrap_or(&path);
+        let file = native(&project.root, listed);
         match fate {
-            Unwanted::Gone | Unwanted::Untrack => {}
-            Unwanted::Remove(look) => {
-                let listed = survey.listed.get(&path).unwrap_or(&path);
-                let file = native(&project.root, listed);
-                match now(&file) {
-                    Some(current) if current == look => {
-                        placer
-                            .remove(&file, true, Some(before.method))
-                            .map_err(|err| {
-                                Error::io(format_args!("could not remove {}", file.display()), &err)
-                            })?;
-                        placement.removed += 1;
-                        if unplaced(manifest, &before) {
-                            *placement.cut_short.entry(before.dataset).or_default() += 1;
-                        }
-                        if before.adopted {
-                            placement.removed_adopted.push(path);
-                        }
+            Unwanted::Untrack => {}
+            // it may have gone in a run that ended before it flushed the folder
+            Unwanted::Gone => placer.gone(&file),
+            Unwanted::Remove(look) => match now(&file) {
+                Some(current) if current == look => {
+                    placer
+                        .remove(&file, true, Some(before.method))
+                        .map_err(|err| {
+                            Error::io(format_args!("could not remove {}", file.display()), &err)
+                        })?;
+                    placement.removed += 1;
+                    if unplaced(manifest, &before) {
+                        *placement.cut_short.entry(before.dataset).or_default() += 1;
                     }
-                    Some(_) => placement.kept.push(Kept::new(path, Reason::Unneeded)),
-                    None => {}
+                    if before.adopted {
+                        placement.removed_adopted.push(path);
+                    }
                 }
-            }
+                Some(_) => placement.kept.push(Kept::new(path, Reason::Unneeded)),
+                None => placer.gone(&file),
+            },
             Unwanted::Keep => placement.kept.push(Kept::new(path, Reason::Unneeded)),
         }
     }
@@ -5144,6 +5144,104 @@ mod tests {
                 "{syncing}"
             );
             assert!(project.state().0.files.is_empty());
+        }
+    }
+
+    /// a file gone before a run forgets it, which a removal that ended before its flush leaves,
+    /// leaves the state only once the folders above it are flushed, whether the survey found it
+    /// gone or it went after: nothing says the earlier run's flush happened.
+    #[cfg(unix)]
+    #[test]
+    fn a_file_gone_already_leaves_the_state_only_once_its_folder_is_flushed() {
+        for (syncing, after_survey) in [(false, false), (false, true), (true, false), (true, true)]
+        {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let project = Project::at(dir.path().join("project"));
+            let file = project.root.join("data/kept/a.csv");
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(&file, b"a\n").unwrap();
+            fs::write(project.root.join("data/kept/note.txt"), b"mine\n").unwrap();
+            let mut state = State::default();
+            state.files.insert(
+                "data/kept/a.csv".to_owned(),
+                Placed {
+                    dataset: "gone".to_owned(),
+                    sha256: crate::digest::sha256(b"a\n"),
+                    method: Method::Copy,
+                    look: now(&file).unwrap(),
+                    writable: true,
+                    checked: 0,
+                    adopted: false,
+                    output: false,
+                    unlinkable: false,
+                    racy_intact: std::sync::OnceLock::new(),
+                },
+            );
+            project.write_state(&state).unwrap();
+            if !after_survey {
+                fs::remove_file(&file).unwrap();
+            }
+            let manifest =
+                Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                    .unwrap();
+            let flushed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen = std::rc::Rc::clone(&flushed);
+            let root = project.root.clone();
+            crate::place::FLUSHED_FOLDER.set(Some(Box::new(move |folder: &Path| {
+                let (recorded, _) = Project::at(root.clone()).state();
+                seen.borrow_mut()
+                    .push((folder.to_path_buf(), recorded.files.len()));
+            })));
+            let placing = Placing {
+                project: &project,
+                manifest: &manifest,
+                targets: Vec::new(),
+                unknown: Vec::new(),
+                waiting: Vec::new(),
+                actions: Vec::new(),
+                survey: surveyed(&project),
+                scope: Scope::All,
+                unlisted: plan::Unlisted::new(),
+                vouched: true,
+                outputs: Outputs::default(),
+                changed: Vec::new(),
+                extras: Vec::new(),
+                unmarking: Vec::new(),
+                still_marked: Vec::new(),
+                elsewhere: Vec::new(),
+                forced: Vec::new(),
+                told_at_once: None,
+            };
+            if after_survey {
+                fs::remove_file(&file).unwrap();
+            }
+            let placement = if syncing {
+                placing.apply(
+                    &quiet(),
+                    &Work::default(),
+                    &cache,
+                    None,
+                    None,
+                    &std::sync::Arc::default(),
+                )
+            } else {
+                placing.remove_only(&quiet())
+            }
+            .unwrap();
+            crate::place::FLUSHED_FOLDER.set(None);
+            let case = format!("syncing {syncing}, gone after the survey {after_survey}");
+            assert_eq!(placement.removed, 0, "{case}");
+            assert_eq!(
+                *flushed.borrow(),
+                [
+                    (project.root.join("data/kept"), 1),
+                    (project.root.join("data"), 1)
+                ],
+                "{case}"
+            );
+            assert!(project.state().0.files.is_empty(), "{case}");
+            assert!(project.root.join("data/kept/note.txt").exists(), "{case}");
         }
     }
 
