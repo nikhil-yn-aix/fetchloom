@@ -692,7 +692,11 @@ fn closing(
             next: None,
         };
     }
-    let warned = placement.kept.iter().any(|kept| !kept.told)
+    // an edit of a copy, which `copy = true` is for, is told as kept, never warned of
+    let warned = placement
+        .kept
+        .iter()
+        .any(|kept| !kept.told && !place::edited_copy(manifest, kept))
         || !placement.tracked.is_empty()
         || placement
             .changed_outputs
@@ -705,8 +709,13 @@ fn closing(
         .collect();
     // the files git tracks that no pin places stay too, beside the kept ones
     let extra: u64 = placement.tracked.iter().map(|held| held.added).sum();
+    let edits = placement
+        .kept
+        .iter()
+        .filter(|kept| place::edited_copy(manifest, kept))
+        .count();
     let kept = (
-        placement.kept.len() + usize::try_from(extra).unwrap_or(usize::MAX),
+        placement.kept.len() - edits + usize::try_from(extra).unwrap_or(usize::MAX),
         left.as_slice(),
         warned,
     );

@@ -4,7 +4,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::put::Tally;
-use super::{Blocker, ChangedCopy, Entry, LeftBehind, Placement, Planned, Preview, Reason, Scope};
+use super::{
+    Blocker, ChangedCopy, Entry, Kept, LeftBehind, Placement, Planned, Preview, Reason, Scope,
+};
 use crate::cli::sync::disk::is_inside;
 use crate::output::{Output, Warning};
 use crate::place::Method;
@@ -1013,6 +1015,10 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
             Reason::Blocked | Reason::Tracked => continue,
             Reason::Unneeded if moved(&kept.path) => continue,
             Reason::Changed | Reason::Foreign if kept.told => continue,
+            Reason::Changed if edited_copy(manifest, kept) => {
+                output.step("Kept", &format!("{} \u{b7} edited here", kept.path));
+                continue;
+            }
             Reason::Changed => match kept.dataset.as_deref() {
                 Some(dataset) if kept.earlier => (
                     format!(
@@ -1057,6 +1063,19 @@ fn warn_kept(output: &Output, manifest: &Manifest, scope: &Scope, placement: &Pl
         };
         output.warn_with(Warning::PlaceKept, &message, &help);
     }
+}
+
+/// whether `kept` is an edit of a file of a dataset whose files are copies to edit, `copy = true`,
+/// as data.lock pins them now: an edit a person meant to make, which a sync keeps without a word
+/// of warning.
+pub(crate) fn edited_copy(manifest: &Manifest, kept: &Kept) -> bool {
+    kept.reason == Reason::Changed
+        && !kept.earlier
+        && kept
+            .dataset
+            .as_deref()
+            .and_then(|dataset| manifest.datasets.get(dataset))
+            .is_some_and(|entry| entry.copy)
 }
 
 /// a warning for each output `placement` leaves whole, as its folder changed since it was pinned,

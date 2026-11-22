@@ -526,7 +526,7 @@ fn a_kept_edit_a_coarse_clock_hides_still_yields_to_force() -> Result {
 
     let kept = text(&sandbox.run(&["sync"])?.stderr)?;
     assert!(
-        kept.contains("data/iris/iris.csv has changed, so it stays"),
+        kept.contains("Kept data/iris/iris.csv \u{b7} edited here"),
         "{kept}"
     );
     let status = text(&sandbox.run(&["status"])?.stdout)?;
@@ -4244,7 +4244,7 @@ fn verify_keeps_an_edit_that_shows() -> Result {
     let stderr = text(&kept.stderr)?;
     assert_eq!(kept.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("data/iris/iris.csv has changed, so it stays"),
+        stderr.contains("Kept data/iris/iris.csv \u{b7} edited here"),
         "{stderr}"
     );
     assert_eq!(fs::read(&placed)?, grown);
@@ -4544,10 +4544,10 @@ fn only_a_placing_sync_says_what_it_places_as_it_starts() -> Result {
     Ok(())
 }
 
-/// an edit of a file copy = true placed is what copy = true is for, so the warning that sync keeps
-/// it never says to set copy = true again.
+/// an edit of a file copy = true placed is what copy = true is for, so sync keeps it with one
+/// line, without a warning, and its closing line points at no warning either.
 #[test]
-fn an_edit_of_a_copy_is_never_told_to_set_copy() -> Result {
+fn an_edit_of_a_copy_is_kept_without_a_warning() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/iris.csv", vec![file(V1, "\"v1\"")])?;
     copy_iris(&sandbox, &server)?;
@@ -4556,13 +4556,11 @@ fn an_edit_of_a_copy_is_never_told_to_set_copy() -> Result {
     let stderr = text(&output.stderr)?;
     assert_eq!(output.status.code(), Some(0), "{stderr}");
     assert!(
-        stderr.contains("warning: data/iris/iris.csv has changed, so it stays\n"),
+        stderr.contains("       Kept data/iris/iris.csv \u{b7} edited here\n"),
         "{stderr}"
     );
-    assert!(!stderr.contains("set copy = true"), "{stderr}");
-    assert!(
-        stderr.contains("copy = true lets you edit it here"),
-        "{stderr}"
-    );
+    assert!(!stderr.contains("warning:"), "{stderr}");
+    assert!(!stderr.contains("see the warnings above"), "{stderr}");
+    assert_eq!(fs::read(sandbox.work().join("data/iris/iris.csv"))?, V2);
     Ok(())
 }

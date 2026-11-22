@@ -159,7 +159,7 @@ a warning's `kind` says what it is about, so a script can act on one without rea
 | `place.blocked` | something in the way keeps files out of the data folder |
 | `place.copied` | files were copied rather than linked to the cache |
 | `place.exclude_unreached` | an `exclude` names files inside an archive, which only its members table reaches; `details` names them |
-| `place.kept` | a file differs from data.lock and stays as it is, as `result.placement.kept` says |
+| `place.kept` | a file differs from data.lock and stays as it is, as `result.placement.kept` says; an edit of a file a `copy = true` dataset placed, as pinned now, is listed there without this warning |
 | `place.left_behind` | files stay in a folder no dataset uses now; `details` names them |
 | `place.overwritten` | a dry run of `sync --force` would replace a file sync keeps |
 | `place.path_folder` | a dataset's `path` makes a folder named like the one file it holds |

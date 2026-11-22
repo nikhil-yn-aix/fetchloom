@@ -38,16 +38,15 @@ $ fetchloom sync
      Synced 2 datasets into data
 ```
 
-an edited file stays. `status` lists it as edited, and `sync` keeps it and says so:
+an edited file stays. `status` lists it as edited, and `sync` keeps it and says so in one line, since an edit is what copy = true is for:
 
 ```text
 $ fetchloom sync
-warning: data/penguins/penguins.csv has changed, so it stays
-  help: copy = true lets you edit it here, while data.lock still pins the original: keep your version as a file or dataset of your own for others to get it; `fetchloom sync --force` discards your edit
-     Synced 2 datasets into data, 1 file left unchanged; see the warnings above
+       Kept data/penguins/penguins.csv · edited here
+     Synced 2 datasets into data
 ```
 
-once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade`, the warning adds that the file is an edit of an earlier version, not what data.lock pins now. a file whose time moved while its bytes stayed as fetchloom placed them, as `touch` or a restore from a backup leaves it, is no edit: `status` lists it as outdated, and `sync` replaces it with the new pin.
+`fetchloom sync --force` puts the pinned bytes back, which discards your edit. once data.lock pins other bytes for that file, as after `fetchloom lock --upgrade`, sync warns that the file is an edit of an earlier version, not what data.lock pins now. a file whose time moved while its bytes stayed as fetchloom placed them, as `touch` or a restore from a backup leaves it, is no edit: `status` lists it as outdated, and `sync` replaces it with the new pin.
 
 the edit lives on this machine only. a teammate's sync places the pinned bytes, so a change others need belongs in a fixed copy added as a dataset of its own, as `fetchloom add ./fixes/measure.csv --as m_fixed`, which is pinned like any other, or, for a file that should not be there at all, in an [exclude](../commands/exclude.md).
 
