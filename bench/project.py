@@ -4,7 +4,8 @@ the pilot runs one round of every case and tool, with no warmup, and one live ro
 run_seconds is what the run cost the campaign, its untimed work included. the campaign runs every arm
 5 rounds and a warmup, and fetchloom, its control and each comparator the pilot freezes 5 rounds more
 in a headline case; a live service costs its reference download once and 10 rounds of both tools. a
-poor case's cost is taken as proportional to the size that shrinks in it.
+poor run's timed part is taken as proportional to the size that shrinks in it, its untimed work as
+fixed.
 """
 import argparse
 from collections import defaultdict
@@ -51,8 +52,10 @@ def hours(rows, metas, comparators, scale=1):
             continue
         key = (row["filesystem"], row["profile"], row["scenario"])
         longer = {run.tools.Fetchloom.name, run.CONTROL, *comparators.get("/".join(key), [])} if key in fixtures.HEADLINE else set()
-        cost = row["run_seconds"] * (1 + (run.HEADLINE_ROUNDS if row["tool"] in longer else run.ROUNDS))
-        seconds[part(row["profile"])] += cost * (shrink(row["scenario"], scale) if row["profile"] == "poor" else 1)
+        cost = row["run_seconds"]
+        if row["profile"] == "poor":
+            cost += min(row.get("wall_seconds") or 0, cost) * (shrink(row["scenario"], scale) - 1)
+        seconds[part(row["profile"])] += cost * (1 + (run.HEADLINE_ROUNDS if row["tool"] in longer else run.ROUNDS))
     if services:
         seconds["live"] += sum(references.get(service, 0) for service in services)
     return {name: value / 3600 for name, value in seconds.items()}

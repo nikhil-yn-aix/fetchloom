@@ -27,12 +27,15 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual(project.hours([dict(lab("s3", "lan", "curl", 36), warmup=True), dict(lab("s3", "lan", "dvc", 36), run_seconds=None)],
                                        [], {}), {})
 
-    def test_a_poor_case_shrinks_with_the_size_that_shrinks_in_it(self):
+    def test_a_poor_run_shrinks_its_timed_part_with_the_size_that_shrinks_in_it(self):
         rows = [lab("s1", "poor", "curl", 360), lab("s2r", "poor", "curl", 360)]
         full = project.hours(rows, [], {})["poor"]
         (large, many), (small, few) = fixtures.SIZES["poor"], fixtures.scaled("poor", .5)
         self.assertEqual((small, few), (large // 2, many // 2))
-        self.assertAlmostEqual(project.hours(rows, [], {}, .5)["poor"], full / 2)
+        # half of each run is timed and halves; the untimed half stays
+        self.assertAlmostEqual(project.hours(rows, [], {}, .5)["poor"], full * .75)
+        # a run with no timed part on record shrinks nothing
+        self.assertAlmostEqual(project.hours([dict(rows[0], wall_seconds=None)], [], {}, .5)["poor"], 360 * 6 / 3600)
         # never past the floor, however small the scale
         self.assertEqual(fixtures.scaled("poor", .01), fixtures.POOR_FLOOR)
         self.assertEqual(fixtures.scaled("home", .5), fixtures.SIZES["home"])
@@ -48,10 +51,10 @@ class ProjectionTests(unittest.TestCase):
         self.assertEqual((within["scale"], within["live"], within["comparators"]),
                          (1, "with the run", {"ext4/home/s2r": ["aria2c", "curl"], "ext4/poor/s1": ["curl"]}))
         # over it, the poor link shrinks by the largest scale, in hundredths, that brings the projection to 8 hours
-        over = project.decide(rows(6000, 36), [])
+        over = project.decide(rows(3000, 36), [])
         self.assertLess(over["scale"], 1)
         self.assertLessEqual(sum(over["hours_after"].values()), project.SHRINK_ABOVE)
-        self.assertGreater(sum(project.hours(rows(6000, 36), [], over["comparators"], over["scale"] + .01).values()), project.SHRINK_ABOVE)
+        self.assertGreater(sum(project.hours(rows(3000, 36), [], over["comparators"], over["scale"] + .01).values()), project.SHRINK_ABOVE)
         self.assertEqual(over["live"], "with the run")
         # still over 9 hours at the poor link's floor, the live part moves to a daytime run
         late = project.decide(rows(6000, 3600), [])
