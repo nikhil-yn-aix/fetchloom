@@ -105,7 +105,7 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
         // a break at the space that ends a label would leave the label alone on its line
         if let Some((space, before)) = last.take()
             && before >= indent
-            && (after[space] <= room || width - before - 1 < ROOM)
+            && (after[space] <= room || width.saturating_sub(before + 1) < ROOM)
         {
             breaks.push((space, indent));
             column = indent + column - before - 1;
@@ -115,8 +115,13 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
             }
         }
         // a word too wide for a line, as a long path or link, is cut at the edge, after the last
-        // `/` before it where it has one, so a name in it stays whole
-        let cut = (line + 1..at)
+        // `/` before it where it has one, so a name in it stays whole. the cut looks only in that
+        // word, past any command in it, which is never cut
+        let word = (line..at)
+            .rev()
+            .find(|&before| shown[before].1 == ' ' || ticked[before])
+            .map_or(line, |before| before + 1);
+        let cut = (word + 1..at)
             .rev()
             .find(|&before| shown[before - 1].1 == '/' && shown[before].1 != '/')
             .unwrap_or(at);
@@ -131,17 +136,21 @@ fn breaks(shown: &[(usize, char)], indent: usize, width: usize) -> Vec<(usize, u
     breaks
 }
 
-/// whether each of `shown` belongs to a command in backticks, the backticks with it.
+/// whether each of `shown` belongs to a command in backticks, the backticks with it, and the
+/// punctuation right after its closing one, as in `` `fetchloom sync`, ``, which goes with it.
 fn ticked(shown: &[(usize, char)]) -> Vec<bool> {
     let mut inside = false;
+    let mut closed = false;
     shown
         .iter()
         .map(|&(_, c)| {
             if c == '`' {
                 inside = !inside;
+                closed = !inside;
                 return true;
             }
-            inside
+            closed &= c.is_ascii_punctuation();
+            inside || closed
         })
         .collect()
 }
@@ -593,5 +602,57 @@ mod tests {
             format!("      Would fetch\n            {fits}\n            · 8.4 KiB"),
             "a path that fits past the indent stays there"
         );
+    }
+
+    /// a cut for a word too wide for a line looks only in that word, never back into a command
+    /// before it, and punctuation right after a command goes with it: each command here stays
+    /// on one line at 80 columns, where the terminal wraps one wider than a line.
+    #[test]
+    fn a_cut_never_lands_inside_a_command() {
+        let iris = format!("`fetchloom sync --force data/iris/{}`", "n".repeat(37));
+        let path = format!("/home/ada/{}/fetchloom", "c".repeat(118 - 20));
+        let chown = format!("`sudo chown -R $(id -u):$(id -g) {path}`");
+        let checkout = format!(
+            "`git -C /home/ada/projects/study-2026a checkout HEAD -- data.lock.d/{}.toml`",
+            "d".repeat(63)
+        );
+        for (line, command) in [
+            (
+                format!("  help: {iris}, then run `fetchloom status`"),
+                &iris,
+            ),
+            (
+                format!(
+                    "  help: root made it, as a container run as root does: take the cache back with {chown}, then run the command again"
+                ),
+                &chown,
+            ),
+            (
+                format!(
+                    "  help: bring it back from our side's commit with {checkout}, then run the same command again"
+                ),
+                &checkout,
+            ),
+        ] {
+            let fitted = fit(&line, 80);
+            assert!(
+                fitted
+                    .lines()
+                    .any(|shown| shown.contains(&format!("{command},"))),
+                "{fitted}"
+            );
+        }
+        // a word with no `/` that crosses the edge after a command is cut at the edge
+        let fitted = fit(
+            &format!(
+                "  help: run `sudo chown -R me /srv/cache` then{}",
+                "x".repeat(71)
+            ),
+            80,
+        );
+        assert!(fitted.contains("`sudo chown -R me /srv/cache`"), "{fitted}");
+        // a space ending exactly at the edge, before a word wider than the room past the label
+        let edge = format!("  help: {} {}", "a".repeat(12), "b".repeat(30));
+        assert!(fit(&edge, 20).contains(&"b".repeat(12)));
     }
 }
