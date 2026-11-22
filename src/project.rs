@@ -1711,7 +1711,7 @@ fn remove_empty_folders(folder: &Path) -> bool {
 /// whether `err` means `folder` takes no new entries from this user: the folder, or the disk it
 /// is on, is read-only. a refused rename into a folder says nothing about which side refused, so
 /// the folder is asked. elsewhere than unix only a read-only disk is known for sure.
-fn read_only(folder: &Path, err: &io::Error) -> bool {
+pub(crate) fn read_only(folder: &Path, err: &io::Error) -> bool {
     match err.kind() {
         io::ErrorKind::ReadOnlyFilesystem => true,
         #[cfg(unix)]

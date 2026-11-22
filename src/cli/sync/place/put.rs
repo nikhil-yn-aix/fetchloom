@@ -102,7 +102,7 @@ fn put_batch<'t>(
             Err(err) => {
                 failure = failure.or_else(|| {
                     let order = order(index);
-                    let error = failed(target, &order.object, &order.destination, &err);
+                    let error = failed(project, target, (&order.object, &order.destination), &err);
                     Some(full_with_unfinished(error, &err, project, cache))
                 });
                 continue;
@@ -132,8 +132,17 @@ fn put_batch<'t>(
     (tallies, failure)
 }
 
-/// what went wrong placing `target`: the cache losing its object, or the disk refusing.
-fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -> Error {
+/// what went wrong placing `target`: the cache losing its object, a folder of the project that
+/// takes no new files, or the disk refusing.
+fn failed(
+    project: &Project,
+    target: &Target,
+    (object, destination): (&Path, &Path),
+    err: &io::Error,
+) -> Error {
+    if let Some(error) = read_only_folder(project, target, destination, err) {
+        return error;
+    }
     if err.kind() == io::ErrorKind::NotFound && !object.exists() {
         return Error::new(
             Kind::LocalIo,
@@ -165,6 +174,42 @@ fn failed(target: &Target, object: &Path, destination: &Path, err: &io::Error) -
         )),
         None => error,
     }
+}
+
+/// the error for placing `target` at `destination` when `err` comes from the nearest folder of it
+/// that exists taking no new files, as `chmod a-w data/nums` leaves it: that folder, named in the
+/// project, is what to fix, not the cache's copy.
+fn read_only_folder(
+    project: &Project,
+    target: &Target,
+    destination: &Path,
+    err: &io::Error,
+) -> Option<Error> {
+    let folder = destination
+        .ancestors()
+        .skip(1)
+        .find(|folder| folder.is_dir())
+        .filter(|folder| crate::project::read_only(folder, err))?;
+    let shown = folder.strip_prefix(&project.root).map_or_else(
+        |_| folder.display().to_string(),
+        |inside| inside.to_string_lossy().replace('\\', "/"),
+    );
+    let name = target.path.rsplit('/').next().unwrap_or(&target.path);
+    let error = Error::new(
+        Kind::LocalIo,
+        format!("{shown} is read-only, so {name} could not be placed there"),
+    );
+    let how = if cfg!(unix) {
+        format!(
+            ", as `chmod u+w {}` does",
+            crate::suggested::shell_word(&shown)
+        )
+    } else {
+        String::new()
+    };
+    Some(error.help(format!(
+        "make {shown} writable for you{how}, then run the same command again"
+    )))
 }
 
 /// whether a symbolic link or a junction stands at `path`, looked at without following it.

@@ -4105,6 +4105,43 @@ fn a_sync_stopped_while_placing_says_what_is_in_place() -> Result {
     Ok(())
 }
 
+/// a dataset folder that takes no new files is what a sync names when it cannot place a file
+/// there, with how to make it writable, never the cache's copy it would have placed.
+#[cfg(unix)]
+#[test]
+fn a_read_only_dataset_folder_is_named_with_its_fix() -> Result {
+    use std::os::unix::fs::PermissionsExt;
+    let sandbox = Sandbox::new()?;
+    if !folders_refuse_files(&sandbox)? {
+        return skipped(
+            "permissions",
+            "this disk lets anyone write a read-only folder",
+        );
+    }
+    let server = Server::start("/files/numbers.txt", vec![file(V1, "\"v1\"")])?;
+    sandbox.allow(&server.url);
+    let added = sandbox.run(&["add", &server.url, "--as", "nums"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let folder = sandbox.work().join("data").join("nums");
+    fs::remove_file(folder.join("numbers.txt"))?;
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o555))?;
+    let output = sandbox.run(&["--json", "sync"])?;
+    fs::set_permissions(&folder, fs::Permissions::from_mode(0o755))?;
+
+    let document = json(&output)?;
+    let error = &document["errors"][0];
+    assert_eq!(
+        error["message"], "data/nums is read-only, so numbers.txt could not be placed there",
+        "{document}"
+    );
+    assert_eq!(
+        error["help"],
+        "make data/nums writable for you, as `chmod u+w data/nums` does, then run `fetchloom --json sync` again",
+        "{document}"
+    );
+    Ok(())
+}
+
 /// a fresh clone's `sync --locked --verify` checks the cached bytes it places: an object changed
 /// under its size and time, as a cache restored from elsewhere can hold, is fetched again, never
 /// placed.
