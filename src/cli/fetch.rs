@@ -347,6 +347,9 @@ struct Overall {
     /// what the batch downloads, which its counts and sizes take once each: never bytes the cache
     /// held as it began.
     counting: HashSet<Counted>,
+    /// the first two files of the batch that expect each SHA-256 two or more of its downloads
+    /// share, so one waiting for the other's bytes says so.
+    twins: HashMap<Sha256, (String, String)>,
     /// what those downloads told the batch so far.
     told: std::sync::Mutex<HashSet<(Counted, Telling)>>,
 }
@@ -395,14 +398,30 @@ impl Overall {
     /// bytes, and none whose bytes the cache held.
     fn from_files(context: &Context, files: &[Batched<'_>]) -> Overall {
         let mut counting = HashSet::new();
+        let mut shared = HashMap::new();
         let downloads: Vec<&Batched<'_>> = files
             .iter()
             .filter(|file| {
-                file.counted
-                    .as_ref()
-                    .is_some_and(|counted| counting.insert(counted.clone()))
+                file.counted.as_ref().is_some_and(|counted| {
+                    let first = counting.insert(counted.clone());
+                    if !first && let Counted::Bytes(digest) = counted {
+                        shared.entry(*digest).or_insert(file.label);
+                    }
+                    first
+                })
             })
             .collect();
+        // the first file of each shared SHA-256, looked for only when the batch shares any
+        let mut twins = HashMap::new();
+        if !shared.is_empty() {
+            for file in files {
+                if let Some(Counted::Bytes(digest)) = &file.counted
+                    && let Some(second) = shared.remove(digest)
+                {
+                    twins.insert(*digest, (file.label.to_owned(), second.to_owned()));
+                }
+            }
+        }
         let what = match downloads.as_slice() {
             [only] => only.label.to_owned(),
             _ => units::count(downloads.len() as u64, "file", "files"),
@@ -416,7 +435,14 @@ impl Overall {
                 downloads.iter().map(|file| file.size)
             });
         overall.counting = counting;
+        overall.twins = twins;
         overall
+    }
+
+    /// another file of the batch whose download brings the bytes `job` expects, if one does.
+    fn twin(&self, job: &Job) -> Option<&str> {
+        let (first, second) = self.twins.get(&job.fetch.expect.sha256?)?;
+        Some(if *first == job.label { second } else { first })
     }
 
     /// counts the download of `job` done on the batch's bar, once for the bytes it shares.
@@ -477,6 +503,7 @@ impl Overall {
             alone: downloads == 1,
             plan: std::sync::Mutex::new(None),
             counting: HashSet::new(),
+            twins: HashMap::new(),
             told: std::sync::Mutex::new(HashSet::new()),
             downloads,
             done: AtomicUsize::new(0),
@@ -1525,7 +1552,10 @@ impl<'a> Watch<'a> {
         let label = &self.job.label;
         match *event {
             Event::Waiting => {
-                let what = format!("{label} · another fetchloom is downloading it");
+                let what = match self.overall.twin(self.job) {
+                    Some(twin) => format!("{label} · the same bytes as {twin}, downloaded once"),
+                    None => format!("{label} · another fetchloom is downloading it"),
+                };
                 self.bar().message("Waiting", what.clone());
                 *self.waited() = Some(self.output.ticker("Waiting", what, [None]));
             }
@@ -2735,6 +2765,7 @@ mod tests {
             alone: false,
             plan: std::sync::Mutex::default(),
             counting: HashSet::new(),
+            twins: HashMap::new(),
             told: std::sync::Mutex::default(),
             downloads: 0,
             done: AtomicUsize::new(0),
@@ -3669,6 +3700,62 @@ mod tests {
             "{}",
             stopped.message
         );
+    }
+
+    /// a file that waits for bytes another file of its batch downloads names that file, never
+    /// another fetchloom, which a file with no such twin still names.
+    #[test]
+    fn a_file_waiting_for_its_twin_names_it() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = |name: &str, bytes: &[u8]| {
+            let mut fetch = Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap());
+            fetch.expect.sha256 = Some(crate::digest::sha256(bytes));
+            Job {
+                fetch,
+                label: format!("a/{name}"),
+                dataset: None,
+                named_by_caller: false,
+                again: None,
+            }
+        };
+        let jobs = [
+            job("one.csv", b"same"),
+            job("copy.csv", b"same"),
+            job("other.csv", b"other"),
+        ];
+        let overall = Overall::new(&context, &jobs);
+        let approval = Approval::new(crate::settings::ASK_ABOVE);
+        let held = Held::default();
+        for (job, told) in [
+            (
+                &jobs[1],
+                "a/copy.csv · the same bytes as a/one.csv, downloaded once",
+            ),
+            (
+                &jobs[0],
+                "a/one.csv · the same bytes as a/copy.csv, downloaded once",
+            ),
+            (
+                &jobs[2],
+                "a/other.csv · another fetchloom is downloading it",
+            ),
+        ] {
+            let watch = Watch::new(job, &context.output, &overall, &approval, false, &held);
+            watch.on(&Event::Waiting).unwrap();
+            assert_eq!(watch.bar().told().as_deref(), Some(told));
+        }
     }
 
     #[test]
