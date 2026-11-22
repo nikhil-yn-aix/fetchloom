@@ -2158,14 +2158,7 @@ async fn run_each(
     let mut tasks = JoinSet::new();
     // more tasks than download slots keep every slot busy, and few enough keep memory flat
     let in_flight = context.settings.jobs.value * 2;
-    // unknown source sizes share one answer, once headers or received bytes show a large file
-    let mut approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
-    approval.projectless = context.projectless;
-    approval.data = context
-        .placing_in
-        .get()
-        .and_then(|folder| DataDisk::of(folder, cache.root()));
-    let approval = Arc::new(budgeted(context, cache, approval, overall.sizes.1 > 0).await);
+    let approval = Arc::new(approving(context, cache, &overall).await);
     let listings = again::Listings::default();
     // what each unfinished download holds, which a stop keeps for the next run
     let held: Arc<[Held]> = std::iter::repeat_with(Held::default).take(count).collect();
@@ -2353,6 +2346,18 @@ fn stopped(
         .collect();
     failed.push((index, stopping));
     together(labels, failed).unwrap_or_else(|| Error::new(Kind::LocalIo, "the downloads stopped"))
+}
+
+/// the one answer the downloads of `overall` share once headers or received bytes show a large
+/// file of no stated size, weighed against the room on the cache's disk and the data folder's.
+async fn approving(context: &Context, cache: &Cache, overall: &Overall) -> Approval {
+    let mut approval = Approval::new(context.settings.ask_above.value).with_room(cache.root());
+    approval.projectless = context.projectless;
+    approval.data = context
+        .placing_in
+        .get()
+        .and_then(|folder| DataDisk::of(folder, cache.root()));
+    budgeted(context, cache, approval, overall.sizes.1 > 0).await
 }
 
 /// `approval`, bounding downloads of no stated size by what the `cache_budget` setting leaves
