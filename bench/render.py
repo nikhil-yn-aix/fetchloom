@@ -225,16 +225,17 @@ def over_budget(measured):
     return f"went over the budget in {over} of {len(measured)} runs" if over else None
 
 
-def standing(base, measured, comparison, minimum=ab.MIN_PAIRS):
+def standing(base, measured, comparison, minimum=ab.MIN_PAIRS, within=False):
     """why a comparison with fetchloom cannot stand, as a phrase after the tool's name, or None: a
-    failed run, a run over the politeness budget, rounds other than fetchloom's, or fewer than
-    `minimum` paired rounds. the measurements stay in the table either way."""
+    failed run, a run over the politeness budget, rounds other than fetchloom's, or, `within`, rounds
+    fetchloom did not run, as a description in a headline case runs the first of fetchloom's rounds
+    alone, or fewer than `minimum` paired rounds. the measurements stay in the table either way."""
     failed = sum(row.get("status") != "passed" for row in measured.values())
     if failed:
         return f"failed {failed} of {len(measured)} runs"
     if over_budget(measured):
         return over_budget(measured)
-    if measured.keys() != base.keys():
+    if (not measured.keys() <= base.keys()) if within else (measured.keys() != base.keys()):
         return "ran other rounds than fetchloom"
     if comparison["pairs"] < minimum or comparison["interval"] is None or None in comparison["interval"]:
         return f"has {comparison['pairs']} paired rounds, fewer than {minimum}"
@@ -243,10 +244,11 @@ def standing(base, measured, comparison, minimum=ab.MIN_PAIRS):
 
 def judge(case, runs, comparators=None, level=FAMILY):
     """a case's comparisons and verdicts: each other tool's time over fetchloom's, rounds paired, at
-    `level` in a headline case and 95% elsewhere; the control arm's 95% interval; and a headline case's
-    verdict against each comparator frozen before its runs, or the reason there is none. every other
-    comparison only describes, as a case outside the headline set does against the fastest other tool
-    that passed every run. a reason that holds for the whole case, such as a noisy machine, a run
+    `level` and on the headline rounds for a comparator frozen for a headline case, and at 95% on the
+    rounds a description needs for every other tool and the control arm; and a headline case's
+    verdict against each frozen comparator, or the reason there is none. every other comparison only
+    describes, as a case outside the headline set does against the fastest other tool that passed
+    every run. a reason that holds for the whole case, such as a noisy machine, a run
     cut short of the rounds it planned or no frozen comparator, withholds every verdict."""
     if isinstance(comparators, str):
         comparators = [comparators]
@@ -257,14 +259,17 @@ def judge(case, runs, comparators=None, level=FAMILY):
     plan = set(range(1, planned + 1)) if isinstance(planned, int) and planned > 0 else None
     rounds = {tool: {row["round"]: row for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
     base = rounds.get(ab.BASE, {})
+    frozen_here = set(comparators or []) if headline else set()
     comparisons = {}
     for tool, measured in rounds.items():
         if tool == ab.BASE:
             continue
-        comparison = ab.paired(base, measured, level=.95 if tool == CONTROL else level, seed=f"{SEED}/{'/'.join(key)}/{tool}")
+        comparison = ab.paired(base, measured, level=level if tool in frozen_here else .95, seed=f"{SEED}/{'/'.join(key)}/{tool}")
+        # the control arm gates a headline verdict, so it needs the headline rounds as the comparator does
+        full = tool in frozen_here or (headline and tool == CONTROL)
         comparisons[tool] = dict(comparison, failed=sum(row.get("status") != "passed" for row in measured.values()),
                                  rounds=len(measured),
-                                 unmet=standing(base, measured, comparison, ab.MIN_PAIRS if headline else DESCRIBED))
+                                 unmet=standing(base, measured, comparison, ab.MIN_PAIRS if full else DESCRIBED, within=headline and not full))
     control = comparisons.get(CONTROL)
     own_failed = sum(row.get("status") != "passed" for row in base.values())
     if not base:
@@ -676,8 +681,9 @@ def method(comparators):
             "s10 and s12 at home, fetchloom, its control and each comparator frozen from the pilot run 5 rounds more, so each "
             "verdict rests on 10 pairs. a case freezes the pilot's fastest other tool that passed every run within the budget, "
             "and the next fastest too when its time was within 5% of it. "
-            f"every headline interval is {percent(family(comparators))}, since the {count} comparisons share a 5% error; "
-            "elsewhere intervals are 95%. only a frozen comparator's row in a headline case gets a verdict: fetchloom "
+            f"a frozen comparator's interval in a headline case is {percent(family(comparators))}, marked in its row, since the "
+            f"{count} comparisons share a 5% error; every other interval is 95%, the control arm's and the other tools' in a "
+            "headline case too, which run 5 rounds and describe. only a frozen comparator's row in a headline case gets a verdict: fetchloom "
             "faster when the interval's lower end is above 1.05, the other tool faster when its upper end is below 0.95, even "
             "when the whole interval sits inside 0.95 to 1.05, and inconclusive otherwise. every other row describes and claims "
             "nothing. the control arm, fetchloom run again, is never a rival: on every link without loss its 95% interval must "
@@ -798,7 +804,7 @@ def case_section(case):
     floor = max((item.get("in_flight_floor_ms") or 0 for item in summaries.values() if item.get("requests")), default=0)
     lines = [f"## {case['scenario']}: {title}, {link(case['profile'])} ({case['filesystem']})\n",
              f"{case['link']}: {story(case['scenario'], case['count'], case['file_size'])}, median of {rounds} runs.\n",
-             f"| tool | median | min to max | time over fetchloom's, {percent(judged['level'])} interval | verdict | CPU | peak memory | largest process | written | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
+             f"| tool | median | min to max | time over fetchloom's, 95% interval unless marked | verdict | CPU | peak memory | largest process | written | disk | requests | connections | most in flight to a host{', estimated' if floor else ''} | failures |",
              "|---|---:|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
     for tool, entry in sorted(summaries.items(), key=lambda item: item[1]["median"] or float("inf")):
         lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {over(tool, judged)} | {said(tool, judged)} | {seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['largest'])} | {size(entry['written'])} | {size(entry['disk'])} | {shown(entry['requests'])} | {shown(entry['connections'])} | {in_flight(entry)} | {failures(entry)} |")
@@ -899,7 +905,8 @@ def over(tool, judged):
         return "n/a"
     interval = comparison["interval"]
     shown_interval = f" [{interval[0]:.2f}, {interval[1]:.2f}]" if interval and None not in interval else ""
-    return f"{comparison['median_ratio']:.2f}{shown_interval}"
+    marked = f" at {percent(comparison['level'])}" if shown_interval and comparison.get("level", .95) != .95 else ""
+    return f"{comparison['median_ratio']:.2f}{shown_interval}{marked}"
 
 
 def said(tool, judged):
@@ -940,8 +947,8 @@ def verdict_lines(case):
             compared = (f"fetchloom {seconds(case['summaries'][ab.BASE]['median'])} against {seconds(case['summaries'][rival]['median'])} "
                         f"for {rival}, {chosen}; {rival}'s time over fetchloom's is {comparison['median_ratio']:.2f}, "
                         f"interval {bounds(comparison)}")
-            lines.append(f"\nverdict (headline, {percent(judged['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
-                         else f"\ndescriptive, {percent(judged['level'])} interval, no verdict: {compared}.")
+            lines.append(f"\nverdict (headline, {percent(comparison['level'])} interval): {compared}: {comparison['word']}." if judged["headline"]
+                         else f"\ndescriptive, {percent(comparison['level'])} interval, no verdict: {compared}.")
     control = judged["control"]
     if control is not None and control["interval"] is not None:
         noise = "" if case["profile"] in GATED else ", on this lossy link the network's own randomness"

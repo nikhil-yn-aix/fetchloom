@@ -409,7 +409,7 @@ class PageTests(Quiet):
         # every arm stopped after 10 of the 20 planned rounds, so each still pairs with fetchloom
         rows = headline_rows(curl=2)
         page = self.render(rows, lab_meta(rows, rounds=20, comparators={"ext4/home/s1": "curl"}))
-        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | withheld |", page)
+        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] at 99.375% | withheld |", page)
         self.assertIn("\nno verdict: fetchloom ran 10 of the 20 planned rounds.", page)
         cards = Path(self.printed.getvalue().split(" and ")[1].strip())
         self.assertEqual(sorted(card.name for card in cards.glob("hero-*")), [])
@@ -532,9 +532,9 @@ class PageTests(Quiet):
     def test_a_verdict_gives_the_seconds_before_the_ratio(self):
         rows = headline_rows(curl=2, aria2c=1.5)
         page = self.render(rows, lab_meta(rows, comparators={"ext4/home/s1": "curl"}))
-        self.assertIn("| time over fetchloom's, 99.375% interval | verdict |", page)
+        self.assertIn("| time over fetchloom's, 95% interval unless marked | verdict |", page)
         self.assertIn("downloaded and checked, median of 10 runs.", page)
-        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] | fetchloom faster |", page)
+        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] at 99.375% | fetchloom faster |", page)
         # faster in these runs, but not the comparator frozen before them, so it only describes
         self.assertIn("| aria2c | 1.50 s | 1.50 s to 1.50 s | 1.50 [1.50, 1.50] | descriptive |", page)
         self.assertIn("| fetchloom+control | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | control arm, never a rival |", page)
@@ -542,6 +542,20 @@ class PageTests(Quiet):
         self.assertIn("\nverdict (headline, 99.375% interval): fetchloom 1.00 s against 2.00 s for curl, the comparator frozen "
                       "before these runs; curl's time over fetchloom's is 2.00, interval 2.00 to 2.00: fetchloom faster.", page)
         self.assertIn("the control arm, fetchloom run again, came to 1.00, 95% interval 1.00 to 1.00.", page)
+
+    def test_each_row_shows_the_level_its_own_interval_was_computed_at(self):
+        # fetchloom, its control and the frozen comparator run 10 rounds; a descriptive arm runs 5
+        rows = headline_rows(curl=2) + [row for row in headline_rows(control=(), aria2c=1.5) if row["tool"] == "aria2c" and row["round"] <= 5]
+        page = self.render(rows, lab_meta(rows, rounds=10, comparators={"ext4/home/s1": "curl"}))
+        self.assertIn("median of 5 or 10 runs.", page)
+        self.assertIn("| curl | 2.00 s | 2.00 s to 2.00 s | 2.00 [2.00, 2.00] at 99.375% | fetchloom faster |", page)
+        self.assertIn("| aria2c | 1.50 s | 1.50 s to 1.50 s | 1.50 [1.50, 1.50] | descriptive |", page)
+        self.assertIn("| fetchloom+control | 1.00 s | 1.00 s to 1.00 s | 1.00 [1.00, 1.00] | control arm, never a rival |", page)
+        self.assertIn("\nverdict (headline, 99.375% interval): fetchloom 1.00 s against 2.00 s for curl", page)
+        judged = VerdictTests.judged(self, rows, comparator="curl")
+        levels = {tool: (comparison["level"], comparison["unmet"]) for tool, comparison in judged["comparisons"].items()}
+        # only the frozen comparison takes the family's level and its 10 pairs; the rest describe at 95% on their 5
+        self.assertEqual(levels, {"curl": (render.FAMILY, None), "aria2c": (.95, None), "fetchloom+control": (.95, None)})
 
     def test_a_no_op_says_what_each_tool_checks(self):
         page = self.render([lab_row(scenario="s6"), lab_row(scenario="s6", tool="pooch", wall_seconds=3)], dict(kind="lab", quick=True))
