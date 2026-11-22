@@ -958,7 +958,7 @@ fn render(
         if room < least.min(named) {
             continue;
         }
-        let shown = middle(name, room);
+        let shown = fitted(name, room);
         return [
             verb.map(str::to_owned),
             Some(shown).filter(|shown| !shown.is_empty()),
@@ -971,6 +971,23 @@ fn render(
         .join(" ");
     }
     middle(name, width)
+}
+
+/// `name` in `width` columns: a batch's label, as `2 files · 1 done`, gives up its last parts
+/// whole before its words are cut, and a file's name is cut in the middle.
+fn fitted(name: &str, width: usize) -> String {
+    let counted = name.split(" \u{b7} ").next().is_some_and(|first| {
+        first.starts_with(|c: char| c.is_ascii_digit())
+            && (first.ends_with(" file") || first.ends_with(" files"))
+    });
+    let mut label = name;
+    while counted && console::measure_text_width(label) > width {
+        match label.rsplit_once(" \u{b7} ") {
+            Some((rest, _)) => label = rest,
+            None => break,
+        }
+    }
+    middle(label, width)
 }
 
 fn middle(name: &str, width: usize) -> String {
@@ -2132,6 +2149,25 @@ mod tests {
         let amount = ("0.36/57.2 MiB · under 10 s left", 60_000_000);
         let started = drawn(shard, ("-".repeat(20).as_str(), 0), amount, 80, false);
         assert!(started.starts_with("Downloading train-0"), "{started}");
+    }
+
+    /// a batch's label at 40 columns was cut like a file name, as `2 fi~ done`: it gives up its
+    /// count of files done first, and its words stay whole.
+    #[test]
+    fn a_batch_label_gives_up_its_parts_before_its_words() {
+        let amount = ("0.10/5.7 MiB", 6_000_000);
+        let line = drawn("2 files \u{b7} 1 done", ("#---", 1), amount, 40, false);
+        assert_eq!(line, "Downloading 2 files   1%");
+        let wide = drawn("2 files \u{b7} 1 done", ("#---", 1), amount, 80, false);
+        assert!(wide.contains("2 files \u{b7} 1 done"), "{wide}");
+        let file = drawn(
+            "report \u{b7} final edition.csv",
+            ("#---", 1),
+            amount,
+            40,
+            false,
+        );
+        assert!(file.contains('~'), "{file}");
     }
 
     /// the cut in a name once moved as the numbers beside it changed width, so the name jumped
