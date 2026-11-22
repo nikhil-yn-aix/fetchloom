@@ -175,15 +175,15 @@ on disk: nothing. prints the exact reference of each match, such as zenodo:36089
   fetchloom auth login hf
   fetchloom auth logout zenodo
 
-on disk: a key is saved where the source's own tools read it, so one key works in all of them";
+on disk: nothing. `auth login` saves hugging face and kaggle keys where their own tools read them, logins in .netrc, and other keys in the system's credential store, or where there is none, in credentials.json in fetchloom's settings folder, ~/.config/fetchloom on linux, readable only by you";
 
     pub(super) const LOGIN: &str = "examples:
   fetchloom auth login hf
   fetchloom auth login demo.dataverse.org --header x-dataverse-key
   fetchloom auth login data.example.org --browser firefox
-  fetchloom auth login hf --with-token
+  fetchloom auth login hf --with-token < token.txt    # the key on stdin
 
-on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in .netrc for curl and wget too, and other keys in the system's credential store. asks before saving";
+on disk: hugging face keys go where `hf auth login` puts them, kaggle keys in ~/.kaggle, logins in .netrc, which curl and wget read too unless the login names a port, and other keys in the system's credential store, or where there is none, in credentials.json in fetchloom's settings folder, ~/.config/fetchloom on linux, readable only by you. asks before saving";
 
     pub(super) const LOGOUT: &str = "examples:
   fetchloom auth logout zenodo
@@ -811,7 +811,7 @@ pub(crate) struct Auth {
 
 #[derive(Clone, Debug, Subcommand)]
 pub(crate) enum AuthAction {
-    /// sign in once; the key also works in the source's own tools
+    /// sign in once, for fetchloom and for the source's own tools where it has them
     #[command(override_usage = "fetchloom auth login [options] <account>", help_template = TEMPLATE, after_help = examples::LOGIN)]
     Login(Login),
 
@@ -1666,6 +1666,32 @@ mod tests {
         assert!(!verify.contains("deletes cached files"), "{verify}");
     }
 
+    /// where `auth login` saves a key that has no tool's file to go in is named, folder and all,
+    /// and a .netrc login is promised to curl and wget only without a port, which they skip.
+    #[test]
+    fn auth_help_names_where_a_key_goes_without_a_credential_store() {
+        let screens = every_help();
+        let flat = |name: &str| {
+            let help = &screens.iter().find(|(shown, _)| shown == name).unwrap().1;
+            help.split_whitespace().collect::<Vec<_>>().join(" ")
+        };
+        for name in ["auth", "auth login"] {
+            let help = flat(name);
+            assert!(
+                help.contains("other keys in the system's credential store, or where there is none, in credentials.json in fetchloom's settings folder, ~/.config/fetchloom on linux, readable only by you"),
+                "{name}: {help}"
+            );
+            assert!(!help.contains("works in all of them"), "{name}: {help}");
+        }
+        assert!(
+            flat("auth login").contains(
+                "logins in .netrc, which curl and wget read too unless the login names a port"
+            ),
+            "{}",
+            flat("auth login")
+        );
+    }
+
     #[test]
     fn every_command_shows_examples_to_copy_and_what_it_changes_on_disk() {
         for (name, help) in every_help() {
@@ -1688,7 +1714,10 @@ mod tests {
                     "{name}: {example}"
                 );
                 // a redirect, a pipe or a comment belongs to the shell, not to fetchloom
-                let command = example.split(['>', '|', '#']).next().unwrap_or(example);
+                let command = example
+                    .split(['<', '>', '|', '#'])
+                    .next()
+                    .unwrap_or(example);
                 let words = words(command);
                 if let Err(err) = Args::try_parse_from(&words) {
                     panic!("{name}: `{example}` does not parse: {err}");

@@ -22,7 +22,7 @@ fetchloom adds, pins, restores and checks research data from one executable.
 | [`cache gc`](cache.md#gc) | remove unneeded cached bytes after a day, or with `--now` | clean up the cache |
 | [`cache verify`](cache.md#verify) | check cached files, so a changed one is downloaded again | investigate suspected cache damage |
 | [`settings`](settings.md) | show each setting, its value and where it came from | check what a run will use, and why |
-| [`auth`](auth.md) | sign in once, with the key shared with each source's own tools | download private, restricted or gated data |
+| [`auth`](auth.md) | sign in once, for fetchloom and for each source's own tools where it has them | download private, restricted or gated data |
 | [`completions`](completions.md) | print a shell completion script | let your shell complete commands, options and dataset names |
 | bare `fetchloom` | show project status or the welcome | find your next command |
 
