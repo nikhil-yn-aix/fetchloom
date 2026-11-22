@@ -116,6 +116,52 @@ fn a_checksum_list_at_a_link_pins_every_file_it_lists() -> Result {
     Ok(())
 }
 
+/// a batch counts what it downloads: files a list gives one SHA-256 are one download, and a file
+/// the cache holds already is none, so the line saying what the add downloads, told once the sizes
+/// of its downloads are known, counts two files of the four it places.
+#[test]
+fn a_batch_counts_its_downloads_not_its_files() -> Result {
+    const WINE: &[u8] = b"grape,acid\n8.1,0.3\n";
+    let sums = format!(
+        "{}  copy/iris.csv\n{}{}  wine.csv\n",
+        sha256_hex(IRIS),
+        gnu(),
+        sha256_hex(WINE)
+    );
+    let server = Routes::start(vec![
+        (
+            "/data/SHA256SUMS".to_owned(),
+            file(sums.as_bytes(), "\"l1\""),
+        ),
+        ("/data/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/copy/iris.csv".to_owned(), file(IRIS, "\"i1\"")),
+        ("/data/sub/tips.csv".to_owned(), file(TIPS, "\"t1\"")),
+        ("/data/wine.csv".to_owned(), file(WINE, "\"w1\"")),
+    ])?;
+    let sandbox = Sandbox::new()?;
+    sandbox.allow(&server.url);
+    let tips = format!("{}/data/sub/tips.csv", server.url);
+    let added = sandbox.run(&["add", &tips, "--as", "tips"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let list = format!("{}/data/SHA256SUMS", server.url);
+    let added = sandbox
+        .command(&["add", &list, "--as", "listed"])
+        .env("FETCHLOOM_TEST_TICKER", "on")
+        .output()?;
+    let stderr = text(&added.stderr)?;
+    assert_eq!(added.status.code(), Some(0), "{stderr}");
+    let told: Vec<&str> = stderr
+        .lines()
+        .filter(|line| line.starts_with("Downloading "))
+        .collect();
+    assert!(
+        matches!(told.first(), Some(line) if line.starts_with("Downloading 2 files")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Downloaded 2 files"), "{stderr}");
+    Ok(())
+}
+
 /// files a list states one SHA-256 for share their bytes, which the add downloads once: its dry
 /// run counts that one download, as get's does, and the add places every file.
 #[test]
