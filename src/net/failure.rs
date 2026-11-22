@@ -232,7 +232,7 @@ impl<'a> Retry<'a> {
     ) -> Result<(), Error> {
         let heard = self.net.heard();
         if heard != self.heard {
-            return self.wait(reason, None, has_copy).await;
+            return self.waiting(reason, None, (has_copy, false)).await;
         }
         let unreached = cut.unreached(self.net.routed);
         if let Some(unreached) = unreached
@@ -244,7 +244,7 @@ impl<'a> Retry<'a> {
         let lost = self.net.outage.lost(heard, tokio::time::Instant::now());
         // no retries asks for no waiting either
         if self.net.retries == 0 || lost.gone >= self.net.outage_wait {
-            let waited = self.wait(reason, None, has_copy).await;
+            let waited = self.waiting(reason, None, (has_copy, false)).await;
             return waited.map_err(|error| match unreached {
                 Some(unreached) if error.kind == Kind::NetworkUnreachable => {
                     let help = offline_help(self.url, unreached);
@@ -315,6 +315,18 @@ impl<'a> Retry<'a> {
         asked: Option<Duration>,
         has_copy: bool,
     ) -> Result<(), Error> {
+        let silent = self.net.heard() == 0;
+        self.waiting(reason, asked, (has_copy, silent)).await
+    }
+
+    /// [`Retry::wait`], whose error once no try is left says, when `silent`, that no host
+    /// answered this run. a try [`Retry::unreachable`] waits after has a help of its own.
+    async fn waiting(
+        &mut self,
+        reason: String,
+        asked: Option<Duration>,
+        (has_copy, silent): (bool, bool),
+    ) -> Result<(), Error> {
         self.ended();
         if self.attempt > self.net.retries || self.spent >= MOST_TRIES {
             let through = self
@@ -326,7 +338,7 @@ impl<'a> Retry<'a> {
                 self.url,
                 (self.tries, self.net.retries, self.net.idle),
                 &reason,
-                has_copy,
+                (has_copy, silent),
                 through.as_ref(),
             );
             if self.limited == 0 {
@@ -1163,12 +1175,14 @@ pub(super) fn interrupted(url: &Url) -> Error {
 }
 
 /// the error once the `tries` for `url` ran out, of the `retries` it may get, each of which may
-/// last the `timeout`, `through` the proxy that carries it, if one does.
+/// last the `timeout`, `through` the proxy that carries it, if one does. `silent` says no host
+/// answered or sent a byte this run, as on a network that drops what it does not let out, where
+/// more tries reach nothing and what the cache holds is all there is.
 fn gave_up(
     url: &Url,
     (tries, retries, timeout): (u32, u32, Duration),
     reason: &str,
-    has_copy: bool,
+    (has_copy, silent): (bool, bool),
     through: Option<&address::Carrier>,
 ) -> Error {
     let message = format!(
@@ -1210,6 +1224,10 @@ fn gave_up(
     let more = if retries < 10 { 10 } else { MOST_RETRIES };
     let help = if has_copy {
         format!("{check}, or add --offline to use the copy downloaded earlier")
+    } else if silent {
+        format!(
+            "nothing answered this run, as on a network that drops connections it does not let out: {check}, then run the same command again. what the cache already holds needs no network: add --offline, or set FETCHLOOM_OFFLINE=1, to use it"
+        )
     } else if retries >= MOST_RETRIES {
         format!("{check} and run the same command again")
     } else {
@@ -1855,7 +1873,7 @@ mod tests {
             &url,
             (5, RETRIES, crate::net::TIMEOUT),
             &reason,
-            false,
+            (false, false),
             None,
         );
         assert_eq!(
@@ -1900,7 +1918,7 @@ mod tests {
                 &url,
                 (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
                 "connection broke",
-                has_copy,
+                (has_copy, false),
                 None,
             );
             assert_eq!(error.kind, Kind::NetworkUnreachable);
@@ -2105,7 +2123,7 @@ mod tests {
                 &url,
                 (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
                 "connection broke",
-                false,
+                (false, false),
                 through,
             )
             .help
@@ -2198,7 +2216,7 @@ mod tests {
             &url,
             (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
             "example.org answered 429",
-            false,
+            (false, false),
             None,
         );
         assert_eq!(limited.kind, Kind::NetworkRateLimited);
@@ -2207,7 +2225,7 @@ mod tests {
             &url,
             (RETRIES + 1, RETRIES, crate::net::TIMEOUT),
             "example.org answered 503",
-            true,
+            (true, false),
             None,
         );
         assert_eq!(down.kind, Kind::NetworkStatus);
@@ -2587,6 +2605,34 @@ mod tests {
         }
     }
 
+    /// a request that times out on every try while no host answered or sent a byte this run, as
+    /// behind a firewall that drops what it does not let out, gives up naming offline use rather
+    /// than more tries; one on a network some host answered on keeps offering more tries.
+    #[tokio::test(start_paused = true)]
+    async fn timing_out_with_nothing_heard_names_offline_use() {
+        let url = Url::parse("https://example.org/file").unwrap();
+        for heard in [false, true] {
+            let (net, _) = told();
+            if heard {
+                net.outage.answered();
+            }
+            let mut retry = Retry::new(&net, &url);
+            let error = loop {
+                let tried = retry.wait(
+                    "the request to example.org timed out".to_owned(),
+                    None,
+                    false,
+                );
+                if let Err(error) = tried.await {
+                    break error;
+                }
+            };
+            let help = error.help.unwrap_or_default().to_string();
+            assert_eq!(help.contains("add --offline"), !heard, "{help}");
+            assert_eq!(help.contains("FETCHLOOM_RETRIES="), heard, "{help}");
+        }
+    }
+
     /// the hint's promise of more tries is what the waits between them take on average.
     #[test]
     fn running_out_of_tries_offers_more_for_as_long_as_they_take() {
@@ -2596,7 +2642,7 @@ mod tests {
                 &url,
                 (retries + 1, retries, timeout),
                 "connection broke",
-                false,
+                (false, false),
                 None,
             )
             .help
