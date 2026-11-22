@@ -2345,14 +2345,15 @@ impl<'a> Loop<'a> {
         };
         let lacking: Vec<&str> = unlearned.iter().chain(missing).copied().collect();
         let error = Error::new(Kind::OfflineMissing, message).details_up_to(&lacking, NAMED);
+        let them = if lacking.len() == 1 { "it" } else { "them" };
         // a folder mirror is read by SHA-256, which an unlearned file has none of yet
         let help = if unlearned.is_empty() {
             format!(
-                "{}, or name a folder mirror that holds them with `--mirror <folder>`",
-                offline.missing_help("them")
+                "{}, or name a folder mirror that holds {them} with `--mirror <folder>`",
+                offline.missing_help(them)
             )
         } else {
-            offline.missing_help("them")
+            offline.missing_help(them)
         };
         let remote: Vec<&crate::mirror::Location> = self
             .context
@@ -3771,6 +3772,33 @@ mod tests {
         assert_eq!(fetched[0].origin, Origin::Cache);
         assert_eq!(fetched[0].digest, digest::sha256(b"data"));
         assert_eq!(context.work.counts().requests, 0);
+    }
+
+    /// an offline refusal's help names one missing file "it" and many "them", as its count does.
+    #[test]
+    fn an_offline_refusal_names_one_file_it_and_many_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = Project::at(dir.path().to_path_buf());
+        let cache = Cache::open(dir.path().join("cache")).unwrap();
+        let context = context();
+        let runner = Loop::new(&context, &project, Arc::new(context.net()), cache);
+        let one = runner.offline_missing(&[], &["a/1.csv"]);
+        assert_eq!(
+            (one.message.as_str(), one.help.as_deref()),
+            (
+                "offline, and 1 file data.lock names is not in the cache",
+                Some(
+                    "run it again without --offline to download it, or set FETCHLOOM_CACHE to a cache folder that already holds it, or name a folder mirror that holds it with `--mirror <folder>`"
+                )
+            )
+        );
+        let many = runner.offline_missing(&[], &["a/1.csv", "a/2.csv"]);
+        assert_eq!(
+            many.help.as_deref(),
+            Some(
+                "run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`"
+            )
+        );
     }
 
     /// an offline refusal of files of both kinds counts each kind, and names first those whose

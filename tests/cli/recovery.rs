@@ -389,7 +389,7 @@ fn offline_says_a_web_mirror_was_not_asked_and_names_a_folder_mirror() -> Result
     assert_eq!(document["errors"][0]["kind"], "offline.missing");
     assert_eq!(
         document["errors"][0]["help"],
-        "offline asks no web mirror, so http://127.0.0.1:9 was not asked: run it again without --offline to download them, or set FETCHLOOM_CACHE to a cache folder that already holds them, or name a folder mirror that holds them with `--mirror <folder>`"
+        "offline asks no web mirror, so http://127.0.0.1:9 was not asked: run it again without --offline to download it, or set FETCHLOOM_CACHE to a cache folder that already holds it, or name a folder mirror that holds it with `--mirror <folder>`"
     );
     let mirror = sandbox.folder("mirror")?;
     let mirror = mirror.to_string_lossy();
