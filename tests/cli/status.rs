@@ -653,3 +653,29 @@ fn a_file_no_one_can_read_is_unreadable_not_untracked() -> Result {
     ok(&sandbox.run(&["status", "--check"])?)?;
     Ok(())
 }
+
+/// offline, a status whose sync must download says that sync waits for a network, so the next
+/// step it names is no sync that fails offline.
+#[test]
+fn an_offline_status_says_its_sync_needs_the_network() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?)?;
+    delete(&sandbox.work().join("data/iris/iris.csv"))?;
+    let empty = sandbox.folder("empty-cache")?;
+    let online = ", once this machine is online to download what the cache lacks";
+    for (args, said) in [
+        (&["--offline", "status"][..], true),
+        (&["status"][..], false),
+    ] {
+        let output = sandbox
+            .command(args)
+            .env("FETCHLOOM_CACHE", &empty)
+            .output()?;
+        let stderr = text(&output.stderr)?;
+        assert!(stderr.contains("Found 1 difference"), "{args:?}: {stderr}");
+        assert_eq!(stderr.contains(online), said, "{args:?}: {stderr}");
+    }
+    Ok(())
+}

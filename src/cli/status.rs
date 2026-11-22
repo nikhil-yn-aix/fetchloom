@@ -243,8 +243,13 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
             };
             // a sync refuses while an import waits for the steps above
             let then = if status.sync_refused { "then " } else { "" };
+            let online = if context.offline.enabled() && status.to_download.files > 0 {
+                ", once this machine is online to download what the cache lacks"
+            } else {
+                ""
+            };
             output.hint(&format!(
-                "{then}`{}` {does}",
+                "{then}`{}` {does}{online}",
                 super::project::command("sync")
             ));
         }

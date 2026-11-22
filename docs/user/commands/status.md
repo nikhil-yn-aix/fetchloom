@@ -48,6 +48,8 @@ and stderr the closing line and the hints, the second since git never sees `note
   hint: git sees none of the files you put in data/iris, since its .gitignore hides the folder: keep files of your own in a folder outside it
 ```
 
+with `--offline`, when the cache lacks files the sync must download, the first hint ends `, once this machine is online to download what the cache lacks`.
+
 ## categories
 
 | JSON field | difference |
