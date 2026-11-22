@@ -704,7 +704,7 @@ fn write(path: &Path, text: &str, found: bool) -> Result<(), Error> {
             .map_err(|err| failed(&err))?
             .permissions();
         // the rename would replace a file its mode keeps from writes, which someone set so
-        if permissions.readonly() || !may_write(path) {
+        if read_only(path) {
             return Err(Error::new(
                 Kind::LocalIo,
                 format!(
@@ -737,6 +737,13 @@ fn write(path: &Path, text: &str, found: bool) -> Result<(), Error> {
     // the rename is done; a folder that cannot be flushed leaves it to the system to write
     let _ = crate::volume::sync_directory(folder);
     Ok(())
+}
+
+/// whether the settings file at `path` is there and this user may not change it, as its mode
+/// and owner say, so `settings set` leaves it as it is.
+pub(crate) fn read_only(path: &Path) -> bool {
+    fs::metadata(path).is_ok_and(|found| found.permissions().readonly())
+        || (path.exists() && !may_write(path))
 }
 
 /// whether this user may write the file at `path`, as its mode and owner say.

@@ -95,7 +95,13 @@ pub(super) fn run(context: &Context) -> Report {
         Some(path) => output.label("Settings", &format!("{} (no file yet)", units::path(path))),
         None => output.label("Settings", "no folder for a settings file"),
     }
-    output.hint("`fetchloom settings set <key> <value>` saves a setting for every run, and `fetchloom settings unset <key>` takes it out; a FETCHLOOM_* variable wins where it is set");
+    match &file.path {
+        Some(path) if crate::settings::edit::read_only(path) => output.hint(&format!(
+            "{} is read-only here, so `fetchloom settings set` cannot change it: a FETCHLOOM_* variable sets a value for the runs it is set in, or FETCHLOOM_SETTINGS can name a settings file of your own",
+            units::path(path)
+        )),
+        _ => output.hint("`fetchloom settings set <key> <value>` saves a setting for every run, and `fetchloom settings unset <key>` takes it out; a FETCHLOOM_* variable wins where it is set"),
+    }
     Report {
         settings: shown,
         machine: Machine {

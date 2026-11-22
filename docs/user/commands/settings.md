@@ -64,6 +64,8 @@ a file `FETCHLOOM_SETTINGS` names is read in place of the usual one, never besid
    Settings /srv/lab/settings.toml, which FETCHLOOM_SETTINGS names, so ~/.config/fetchloom/settings.toml is not read
 ```
 
+where you may not change that file, as a lab's shared one, the hint below it says so in place of offering `fetchloom settings set`, and names a `FETCHLOOM_*` variable or a settings file of your own as the ways to change a value.
+
 JSON returns `result.settings`, an array of `name`, `value`, `origin` and `variable` records; a setting only its variable sets keeps its `origin` there, as `default` or `machine` where no variable sets it. `value` is a number for counts, bytes and seconds, text for folders and the split mode, a list of text for `allowed_origins`, `s3_buckets`, `gcs_buckets`, `azure_containers`, `drive_folders`, `mirrors` and `reuse`, true or false for `mirrors_only`, `web_archives` and `accessible`, and null for no rate cap or no folder. `origin` is `environment`, `file`, `machine`, `default`, `flag` or `resources`, as in the table above, and `flag,environment` or `flag,file` for mirrors from both. `result.machine` and `result.file` hold what stderr says; [JSON output](../reference/json-output.md#command-results) gives their fields.
 
 ## exit codes

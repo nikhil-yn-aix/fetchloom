@@ -1464,3 +1464,31 @@ fn a_dataset_too_big_for_its_container_is_refused_without_naming_path_again() ->
     assert_eq!(one.status.code(), Some(0), "{}", text(&one.stdout)?);
     Ok(())
 }
+
+/// a settings file this user may not change, as a lab's shared one, is no file `settings set`
+/// writes, so `settings` never offers that: it names the variables and `FETCHLOOM_SETTINGS`.
+#[cfg(unix)]
+#[test]
+fn a_read_only_settings_file_is_never_offered_to_settings_set() -> Result {
+    use std::os::unix::fs::PermissionsExt as _;
+    let sandbox = Sandbox::new()?;
+    let shared = sandbox.folder("shared")?.join("settings.toml");
+    std::fs::write(&shared, "jobs = 4\n")?;
+    let said = |path: &std::path::Path| -> Result<String> {
+        let output = sandbox
+            .command(&["settings"])
+            .env("FETCHLOOM_SETTINGS", path)
+            .output()?;
+        assert!(output.status.success(), "{}", text(&output.stderr)?);
+        text(&output.stderr)
+    };
+    assert!(said(&shared)?.contains("`fetchloom settings set <key> <value>` saves"));
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o444))?;
+    let stderr = said(&shared)?;
+    assert!(
+        !stderr.contains("`fetchloom settings set <key> <value>` saves"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("is read-only here"), "{stderr}");
+    Ok(())
+}
