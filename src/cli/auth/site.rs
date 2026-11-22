@@ -77,11 +77,12 @@ fn site_host(typed: &str) -> Result<String, Error> {
 /// signs in to the website `login` names with its own credential, saved for its host alone. a
 /// key in the header a source names for its installations, as dataverse's `x-dataverse-key`, is
 /// checked as that source checks one first; `chosen` says the person typed the host, rather than
-/// a refusal naming it, so the check may reach it on a private network.
+/// a refusal naming it, so the check may reach it on a private network. with `rerun` the command
+/// runs again after, which a key the person would rather not save still serves.
 pub(super) async fn sign_in(
     context: &Arc<Context>,
     login: &Login,
-    chosen: bool,
+    (chosen, rerun): (bool, bool),
 ) -> Result<Outcome, Error> {
     let host = site_host(&login.account)?;
     let asked = match &login.header {
@@ -119,7 +120,26 @@ pub(super) async fn sign_in(
         // the key is in hand, so a ctrl-c at the question below cancels it and any other stop
         // lets it finish
         context.stop.finish();
-        let origin = keep(context, &host, &saved, told)?;
+        let Some(origin) = keep(context, &host, &saved, told)? else {
+            if !rerun {
+                return Err(answered_no().help(
+                    "nothing was saved. a command that needs the key asks for it when refused, and a no to saving it there uses it for that run alone",
+                ));
+            }
+            context.output.done(
+                "Signed in",
+                &format!(
+                    "to {host} with {} for this run alone, not saved",
+                    described(&saved)
+                ),
+            );
+            context
+                .unsaved_sites
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((host.clone(), saved));
+            return Ok(None);
+        };
         let when = expiring(&saved, SystemTime::now());
         context.output.done(
             "Signed in",
@@ -129,13 +149,13 @@ pub(super) async fn sign_in(
                 origin.shown()
             ),
         );
-        Ok::<Origin, Error>(origin)
+        Ok::<Option<Origin>, Error>(Some(origin))
     };
     let origin = run.await.map_err(|error| error.cancelling(&cancelled))?;
     Ok(Outcome {
         account: format!("site:{host}"),
         user: None,
-        saved_to: Some(origin.to_string()),
+        saved_to: origin.map(|origin| origin.to_string()),
     })
 }
 
@@ -151,7 +171,7 @@ pub(super) async fn sign_in_key(
         header: Some(key.header.to_owned()),
         ..Login::default()
     };
-    sign_in(context, &login, false).await.map(drop)
+    sign_in(context, &login, (false, true)).await.map(drop)
 }
 
 /// asks `host` whether `secret` works as the key of one installation that `key` shapes, as its
@@ -280,7 +300,7 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
     if !wanted(&login) {
         return Ok(false);
     }
-    sign_in(context, &login, false).await?;
+    sign_in(context, &login, (false, true)).await?;
     Ok(true)
 }
 
@@ -363,7 +383,11 @@ fn replacing(context: &Context, host: &str) -> Result<(), Error> {
         "Found",
         &format!("{} for {host} in {}", described(&before), origin.shown()),
     );
-    agrees(context, host, &before, "replace it?", false)
+    if agrees(context, host, &before, "replace it?", false)? {
+        Ok(())
+    } else {
+        Err(answered_no())
+    }
 }
 
 /// the cookies for `host` in the cookies.txt file at `path`, once they are shown, by name,
@@ -693,18 +717,18 @@ fn guide(context: &Context, host: &str, asked: &Asked, key: Option<&crate::accou
 }
 
 /// whether the person agrees to `question` about saving `saved` for `host`: a yes, or `--yes`
-/// where nobody can be asked. a no is a cancel; no answer at all needs `--yes`.
+/// where nobody can be asked. no answer at all needs `--yes`.
 fn agrees(
     context: &Context,
     host: &str,
     saved: &Saved,
     question: &str,
     default: bool,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     match agree(context, question, default)? {
-        Some(true) => Ok(()),
-        None if context.yes => Ok(()),
-        Some(false) => Err(answered_no()),
+        Some(true) => Ok(true),
+        None if context.yes => Ok(true),
+        Some(false) => Ok(false),
         None => Err(Error::new(
             Kind::Unconfirmed,
             format!(
@@ -717,8 +741,9 @@ fn agrees(
 }
 
 /// saves `saved` for `host` once the person agrees, or without asking when `told`: in the
-/// system's credential store, or in fetchloom's own file where the machine has none.
-fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Origin, Error> {
+/// system's credential store, or in fetchloom's own file where the machine has none. none when
+/// the person would rather not save it.
+fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Option<Origin>, Error> {
     let var = &crate::machine::env;
     let failed = |err: std::io::Error| {
         Error::io(format!("could not save {} for {host}", saved.what()), &err)
@@ -731,11 +756,14 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
     if store::KEYRING.usable(var) {
         if !told {
             let question = format!("save {it} in {}?", auth::keyring_name());
-            agrees(context, host, saved, &question, true)?;
+            if !agrees(context, host, saved, &question, true)? {
+                return Ok(None);
+            }
         }
         return super::asking_store(&context.output, || {
             site::save(var, host, saved, store::Place::Keyring)
         })
+        .map(Some)
         .map_err(|err| not_saved(host, saved, &err, it));
     }
     let file = crate::machine::settings_folder(var)
@@ -754,7 +782,9 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
             privacy.file(),
             crate::units::path(&file)
         );
-        agrees(context, host, saved, &question, false)?;
+        if !agrees(context, host, saved, &question, true)? {
+            return Ok(None);
+        }
     }
     let left = site::kept_out(var, host);
     let origin = site::save(var, host, saved, store::Place::File).map_err(failed)?;
@@ -776,7 +806,7 @@ fn keep(context: &Context, host: &str, saved: &Saved, told: bool) -> Result<Orig
         );
     }
     super::warn_if_shared(&context.output, &file, super::KEYRING_OR_PROFILE);
-    Ok(origin)
+    Ok(Some(origin))
 }
 
 /// the error for `saved`, which the credential store would not keep for `host`, for `err`, with

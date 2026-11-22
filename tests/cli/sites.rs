@@ -688,7 +688,7 @@ fn a_site_sign_in_at_a_terminal_reads_each_key_hidden() -> Result {
             .map_or(host, |(host, _)| host)
             .to_owned()
     };
-    let save = "save it to ~/.config/fetchloom/credentials.json? [y/N] y\n";
+    let save = "save it to ~/.config/fetchloom/credentials.json? [Y/n] y\n";
     let typed = |command: &crate::support::Fetchloom, after: &str, keys: &str| {
         crate::support::typed(&sandbox.work(), command, "", after, keys)
     };
@@ -769,6 +769,67 @@ fn a_site_sign_in_at_a_terminal_reads_each_key_hidden() -> Result {
             "  Cancelled signing in to {}, so nothing changed\n",
             host_of(&nothing)
         )),
+        "{screen}"
+    );
+    Ok(())
+}
+
+/// a website's key typed in after a refusal is saved when enter answers the question, as any key
+/// typed in defaults to yes, and a no still serves the run it was asked for, unsaved.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_site_key_not_saved_still_serves_the_run_it_was_asked_for() -> Result {
+    let sandbox = Sandbox::new()?;
+    let gated = || {
+        Server::start(
+            "/data.csv",
+            vec![
+                reply("403 Forbidden", &[("Content-Length", "0")], b""),
+                file(b"a,b\n", "\"v1\""),
+            ],
+        )
+    };
+    let host_of = |server: &Server| {
+        let host = server.url.trim_start_matches("http://");
+        host.split_once('/')
+            .map_or(host, |(host, _)| host)
+            .to_owned()
+    };
+    let signed = |server: &Server, keys: &str| {
+        let get = sandbox.command(&["get", &server.url, "-o", "data.csv", "--force"]);
+        let asked = format!("sign in to {} with", host_of(server));
+        crate::support::typed(&sandbox.work(), &get, "", &asked, keys)
+    };
+    let unsaved = gated()?;
+    let Some((code, screen)) = signed(&unsaved, "3t-once\rn\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(screen.contains("credentials.json? [Y/n] n"), "{screen}");
+    assert!(
+        screen.contains(&format!(
+            "Signed in to {} with a token for this run alone, not saved",
+            host_of(&unsaved)
+        )),
+        "{screen}"
+    );
+    let heads = unsaved.requests();
+    assert!(
+        heads
+            .get(1)
+            .is_some_and(|head| head.contains("authorization: bearer t-once")),
+        "{heads:?}"
+    );
+    let listed = sandbox.run(&["auth"])?;
+    let told = format!("{}{}", text(&listed.stdout)?, text(&listed.stderr)?);
+    assert!(!told.contains(&host_of(&unsaved)), "{told}");
+    let saved = gated()?;
+    let Some((code, screen)) = signed(&saved, "3t-kept\r\r")? else {
+        return Ok(());
+    };
+    assert_eq!(code, Some(0), "{screen}");
+    assert!(
+        screen.contains("saved to ~/.config/fetchloom/credentials.json"),
         "{screen}"
     );
     Ok(())

@@ -77,6 +77,9 @@ struct Context {
     needed: std::sync::Mutex<Option<Refusal>>,
     /// a key signed in with during this command but not saved, which the run again still uses.
     unsaved: std::sync::Mutex<Vec<crate::auth::Credential>>,
+    /// a website's key signed in with during this command but not saved, with its host, which
+    /// the run again still sends there.
+    unsaved_sites: std::sync::Mutex<Vec<(String, crate::auth::site::Saved)>>,
     /// whether this run has already warned about keys it cannot use safely or at all.
     cautioned: Arc<std::sync::atomic::AtomicBool>,
     /// the mirrors asked for pinned files before their sources, and what they answered.
@@ -135,6 +138,7 @@ impl Context {
             stop: Arc::default(),
             needed: std::sync::Mutex::default(),
             unsaved: std::sync::Mutex::default(),
+            unsaved_sites: std::sync::Mutex::default(),
             cautioned: Arc::default(),
             mirrors: fetch::mirrors::Mirrored::default(),
             reuse: fetch::reuse::Reused::default(),
@@ -183,6 +187,12 @@ impl Context {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
+        // a key the person would rather not save comes first, as the one this run signed in with
+        let mut sites = self
+            .unsaved_sites
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
         let output = Arc::clone(&self.output);
         let cautioned = Arc::clone(&self.cautioned);
         // checking a key goes through `net_with`, so hugging face's token is checked with
@@ -194,7 +204,10 @@ impl Context {
                 caution(&output, &cautioned, &credentials);
                 credentials
             })
-            .finding_sites(|| crate::auth::site::sites(&crate::machine::env))
+            .finding_sites(move || {
+                sites.extend(crate::auth::site::sites(&crate::machine::env));
+                sites
+            })
     }
 
     /// the `allowed_origins` setting, and whether only its variable changes it for this run: the

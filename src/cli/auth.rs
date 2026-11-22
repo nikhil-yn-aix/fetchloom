@@ -76,7 +76,7 @@ pub(super) async fn run(context: &Arc<Context>, args: Auth) -> Result<Report, Er
     match args.action {
         None => status(context).await,
         Some(AuthAction::Login(login)) if site::wanted(&login) => {
-            site::sign_in(context, &login, true)
+            site::sign_in(context, &login, (true, false))
                 .await
                 .map(Report::Login)
         }
@@ -821,8 +821,8 @@ fn save(
         |err: std::io::Error| Error::io(format!("could not save the {} key", title(account)), &err);
     match account.home(var, secret) {
         Home::File(path) => {
-            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
-            if !agrees(question, default)? {
+            let question = save_question(account, &path, false, Privacy::of(var, &path));
+            if !agrees(question, true)? {
                 return Ok(None);
             }
             let text = if path.file_name().is_some_and(|name| name == "kaggle.json") {
@@ -835,8 +835,8 @@ fn save(
             Ok(Some(path.display().to_string()))
         }
         Home::Netrc(path) => {
-            let (question, default) = save_question(account, &path, false, Privacy::of(var, &path));
-            if !agrees(question, default)? {
+            let question = save_question(account, &path, false, Privacy::of(var, &path));
+            if !agrees(question, true)? {
                 return Ok(None);
             }
             let Account::Login(host) = account else {
@@ -866,13 +866,13 @@ fn save(
                 .unwrap_or_default()
                 .join("credentials.json");
             if !told {
-                let (question, default) = save_question(
+                let question = save_question(
                     account,
                     &file,
                     !store::keyring_allowed(var),
                     Privacy::of(var, &file),
                 );
-                if !agrees(question, default)? {
+                if !agrees(question, true)? {
                     output.hint(&format!(
                         "to keep it out of files, set {} in your environment instead",
                         variable(account)
@@ -1014,29 +1014,22 @@ pub(super) fn asking_store<T>(output: &crate::output::Output, call: impl FnOnce(
     call()
 }
 
-/// the question before saving `account`'s key to the file `path`, and the answer enter gives:
-/// yes for a file the source's own tools read, no for the file keys go in without a credential
-/// store, which `off` says `FETCHLOOM_KEYRING` turned off and `privacy` says how it is kept. the
-/// tools are named once the key is saved, so the question fits a terminal.
-fn save_question(
-    account: &Account,
-    path: &std::path::Path,
-    off: bool,
-    privacy: Privacy,
-) -> (String, bool) {
+/// the question before saving `account`'s key to the file `path`, which enter answers yes, as for
+/// any key typed in: a no still serves the run a refusal asked for it. the file keys go in
+/// without a credential store says so first, which `off` says `FETCHLOOM_KEYRING` turned off and
+/// `privacy` says how it is kept. the tools are named once the key is saved, so the question fits
+/// a terminal.
+fn save_question(account: &Account, path: &std::path::Path, off: bool, privacy: Privacy) -> String {
     let save = format!("save it to {}?", units::path(path));
     if account.shared_with().is_some() || matches!(account, Account::Login(_)) {
-        (save, true)
+        save
     } else {
         let why = if off {
             "FETCHLOOM_KEYRING is off"
         } else {
             "no credential store here"
         };
-        (
-            format!("{why}, so it would go in {}\n{save}", privacy.file()),
-            false,
-        )
+        format!("{why}, so it would go in {}\n{save}", privacy.file())
     }
 }
 
@@ -1692,8 +1685,8 @@ mod tests {
         ] {
             let path = std::path::Path::new(path);
             for privacy in [Privacy::Owner, Privacy::Profile, Privacy::Open] {
-                questions.push(save_question(account, path, false, privacy).0);
-                questions.push(save_question(account, path, true, privacy).0);
+                questions.push(save_question(account, path, false, privacy));
+                questions.push(save_question(account, path, true, privacy));
             }
             if let Some(tools) = account.shared_with() {
                 questions.push(remove_question(tools, path));
