@@ -76,7 +76,7 @@ python3 bench/live.py --fetchloom "$benchmark_binary" --quick \
 
 ### Pilot
 
-One full-size round of every case and tool, with no warmup round, checks correctness and the budget and gives each run's time, from which the real run's hours are projected; if they come to more than 8, shrink the poor link's sizes in `fixtures.py`, the same for every tool. The pilot then freezes each headline case's rival:
+One full-size round of every case and tool, with no warmup round, and one live round, check correctness and the budget and give each run's cost, from which `project.py` projects the real run's hours and applies the pilot's rules, which the design's [running the comparison](../docs/dev/performance/benchmark-design.md#running-the-comparison) declares:
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --no-warmup --control \
@@ -85,12 +85,17 @@ python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --no-warmup --co
 python3 bench/run.py --fetchloom "$benchmark_binary" --rounds 1 --no-warmup --control \
   --profiles lan --scenarios s5,s6 --fs xfs --cpus 12-23 --server-cpus 6-11 \
   --out "$FL_BENCH_ROOT/results/pilot/lab-xfs"
-python3 bench/render.py --comparators "$FL_BENCH_ROOT/results/pilot" > comparators.json
+python3 bench/live.py --fetchloom "$benchmark_binary" --rounds 1 \
+  --services zenodo,huggingface,kaggle,dataverse --out "$FL_BENCH_ROOT/results/pilot/live"
+python3 bench/project.py "$FL_BENCH_ROOT/results/pilot" > plan.json
+python3 -c 'import json; print(json.dumps(json.load(open("plan.json"))["comparators"]))' > comparators.json
 ```
 
-`render.py --comparators` picks, for each headline case the pilot measured, the fastest other tool that passed every run within the budget, and the next fastest too when its time is within 5% of it; such a case lists both. The design's [running the comparison](../docs/dev/performance/benchmark-design.md#running-the-comparison) declares the pilot's rules: the poor link's sizes shrink if the projection is over 8 hours, and the live part moves to a daytime run if it is still over 9.
+Each row's `run_seconds` is what its run cost the campaign, untimed work included, and each case in `meta.json` keeps its `prepared_seconds`. `plan.json` holds the projected `hours` of home, poor, lan and live, the `comparators` frozen for each headline case, the `scale` for the poor link's sizes with the `poor_sizes` it gives, the hours after it, and whether the `live` part runs with the lab or moves to a daytime run. `render.py --comparators "$FL_BENCH_ROOT/results/pilot"` gives the same comparators: for each headline case the pilot measured, the fastest other tool that passed every run within the budget, and the next fastest too when its time is within 5% of it.
 
 ### The real run
+
+Give every run the pilot's comparators, and the scale from `plan.json` as `--poor-scale` when it is below 1; leave the live campaign for a daytime run when `plan.json` says so:
 
 ```sh
 python3 bench/run.py --fetchloom "$benchmark_binary" --control --comparators comparators.json \

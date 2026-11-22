@@ -1,0 +1,62 @@
+import unittest
+
+import fixtures
+import project
+
+
+def lab(scenario, profile, tool, seconds, filesystem="ext4"):
+    return dict(kind="lab", filesystem=filesystem, profile=profile, scenario=scenario, tool=tool, round=1, warmup=False,
+                status="passed", wall_seconds=seconds / 2, run_seconds=seconds)
+
+
+class ProjectionTests(unittest.TestCase):
+    def test_each_pilot_run_counts_as_many_times_as_the_campaign_runs_its_arm(self):
+        rows = [lab("s1", "home", "fetchloom", 36), lab("s1", "home", "fetchloom+control", 36), lab("s1", "home", "curl", 72),
+                lab("s1", "home", "pooch", 144), lab("s3", "lan", "fetchloom", 36), lab("s13", "local", "pooch", 360),
+                dict(kind="live", service="zenodo", tool="fetchloom", round=1, status="passed", run_seconds=36),
+                dict(kind="live", service="zenodo", tool="zenodo_get", round=1, status="passed", run_seconds=72)]
+        metas = [dict(kind="live", datasets=[dict(service="zenodo", reference_seconds=360)])]
+        hours = project.hours(rows, metas, {"ext4/home/s1": ["curl"]})
+        # fetchloom, its control and the frozen curl run 10 rounds and a warmup; pooch 5 and a warmup
+        self.assertAlmostEqual(hours["home"], (36 * 11 + 36 * 11 + 72 * 11 + 144 * 6) / 3600)
+        # a case outside the headline set runs every arm 5 rounds and a warmup; this machine's disk counts as lan
+        self.assertAlmostEqual(hours["lan"], (36 * 6 + 360 * 6) / 3600)
+        # a live service's reference once, then 10 rounds of both tools
+        self.assertAlmostEqual(hours["live"], (360 + 10 * 36 + 10 * 72) / 3600)
+        # a warmup or a row with no cost on record adds nothing
+        self.assertEqual(project.hours([dict(lab("s3", "lan", "curl", 36), warmup=True), dict(lab("s3", "lan", "dvc", 36), run_seconds=None)],
+                                       [], {}), {})
+
+    def test_a_poor_case_shrinks_with_the_size_that_shrinks_in_it(self):
+        rows = [lab("s1", "poor", "curl", 360), lab("s2r", "poor", "curl", 360)]
+        full = project.hours(rows, [], {})["poor"]
+        (large, many), (small, few) = fixtures.SIZES["poor"], fixtures.scaled("poor", .5)
+        self.assertEqual((small, few), (large // 2, many // 2))
+        self.assertAlmostEqual(project.hours(rows, [], {}, .5)["poor"], full / 2)
+        # never past the floor, however small the scale
+        self.assertEqual(fixtures.scaled("poor", .01), fixtures.POOR_FLOOR)
+        self.assertEqual(fixtures.scaled("home", .5), fixtures.SIZES["home"])
+
+    def test_the_pilot_rules_shrink_the_poor_link_first_and_then_move_the_live_part(self):
+        def rows(poor_seconds, live_seconds):
+            return [lab("s2r", "home", tool, 36) for tool in ("fetchloom", "fetchloom+control", "curl", "aria2c")] + [
+                lab("s1", "poor", "curl", poor_seconds),
+                dict(kind="live", service="kaggle", tool="kagglehub", round=1, status="passed", run_seconds=live_seconds)]
+
+        # within 8 hours nothing changes, and two tools within 5% are both frozen
+        within = project.decide(rows(600, 36), [])
+        self.assertEqual((within["scale"], within["live"], within["comparators"]),
+                         (1, "with the run", {"ext4/home/s2r": ["aria2c", "curl"], "ext4/poor/s1": ["curl"]}))
+        # over it, the poor link shrinks by the largest scale, in hundredths, that brings the projection to 8 hours
+        over = project.decide(rows(6000, 36), [])
+        self.assertLess(over["scale"], 1)
+        self.assertLessEqual(sum(over["hours_after"].values()), project.SHRINK_ABOVE)
+        self.assertGreater(sum(project.hours(rows(6000, 36), [], over["comparators"], over["scale"] + .01).values()), project.SHRINK_ABOVE)
+        self.assertEqual(over["live"], "with the run")
+        # still over 9 hours at the poor link's floor, the live part moves to a daytime run
+        late = project.decide(rows(6000, 3600), [])
+        self.assertEqual((late["poor_sizes"], late["live"]), (dict(large_bytes=fixtures.POOR_FLOOR[0], files=fixtures.POOR_FLOOR[1]), "daytime"))
+        self.assertAlmostEqual(late["total_hours"], sum(late["hours_after"].values()) - late["hours_after"]["live"])
+
+if __name__ == "__main__":
+    unittest.main()

@@ -138,8 +138,8 @@ This plan is fixed before any data is seen.
 ## Running the comparison
 
 1. A smoke run, `--quick` with one round, of every case on every link: every tool passes every case and the checker agrees, the server log shows the budget held, and s2r's runs show both host names. It gives no timings.
-2. A pilot at full size, one round of every case and tool with no warmup, at the freeze, on the frozen build and a quiet machine. It checks correctness and the budget and projects the hours of the real run. Its rules are declared before any data, and it applies them unattended:
-    - If the projection is over 8 hours, the poor link's sizes shrink, equally for every tool.
+2. A pilot at full size, one round of every case and tool with no warmup and one live round, at the freeze, on the frozen build and a quiet machine. It checks correctness and the budget and projects the hours of the real run: each run's cost, its untimed work included, times the runs the real campaign gives its arm, and each live service's reference download and 10 rounds. Its rules are declared before any data, and `bench/project.py` applies them unattended:
+    - If the projection is over 8 hours, the poor link's sizes shrink, equally for every tool: its large file and its file count shrink by the largest factor, in hundredths, that brings the projection to 8 hours, taking each poor case's cost as proportional to the size that shrinks in it, rounded down to whole MiB and files, and never below 1 MiB and 10 files.
     - Each headline case's rival is the fastest other tool that passed every run within the budget.
     - If the next fastest tool's time is within 5% of that rival's, both are frozen: both join the 10-round tier, and the bonferroni family grows to the real number of headline comparisons.
     - If the projection is still over 9 hours after the poor sizes shrink, the live part moves to a separate daytime run.
