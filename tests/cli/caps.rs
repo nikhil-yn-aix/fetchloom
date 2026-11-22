@@ -463,7 +463,11 @@ fn a_data_toml_too_big_for_its_container_is_refused_before_it_is_read() -> Resul
     for at in 0..6_000 {
         std::fs::write(folder.join(format!("p{at:04}.csv")), at.to_string())?;
     }
-    let added = sandbox.run(&["add", "../parts"])?;
+    // importing 6,000 files has taken a windows runner past the two minutes a command gets
+    let added = sandbox
+        .command(&["add", "../parts"])
+        .deadline(std::time::Duration::from_secs(360))
+        .output()?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
     let toml = sandbox.work().join("data.toml");
     let imported = std::fs::read_to_string(&toml)?;
