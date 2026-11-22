@@ -37,6 +37,7 @@ use crate::project::lock::{self, Drift, Lock, Locked, LockedFile, Waiting};
 use crate::project::manifest::{Entry, Manifest, Source};
 use crate::project::state::Synced;
 use crate::project::{Project, native};
+use crate::source::list::Checksum;
 use crate::source::{self, Listing, Parsed, Reference, Remote, local};
 use crate::units;
 
@@ -2434,9 +2435,9 @@ pub(super) struct DryRelock {
     pub(super) unpack: Vec<String>,
     /// files, as `<dataset>/<path>`, whose hash in `lock` is a stand-in.
     pub(super) guessed: HashSet<String>,
-    /// the SHA-256 the source of each of `guessed` states for it, where it states one with no
+    /// the hash the source of each of `guessed` states for it, where it states one with no
     /// size, which tells whether its bytes changed before any download.
-    pub(super) stated: HashMap<String, Sha256>,
+    pub(super) stated: HashMap<String, Checksum>,
 }
 
 /// data.lock's entries as relocking sorts them, before it resolves anything.
@@ -3244,14 +3245,14 @@ fn tell_facts(output: &Output, listing: &Listing, kept: &[Remote]) {
 /// prints each dataset that moved to another version since `before`, and returns their names:
 /// `Upgraded` where its ref is the one it was pinned for, so its source moved on, and `Moved`
 /// where data.toml names another version, which may be older; `Would` ones for a `dry_run`. files
-/// `guessed` by a dry run count as changed only by the SHA-256 their source `stated`, as only
-/// their download tells otherwise.
+/// `guessed` by a dry run count as changed only by the hash their source `stated`, its SHA-256, or
+/// its MD5 where data.lock pinned one, as only their download tells otherwise.
 pub(super) fn tell_upgrades(
     output: &Output,
     before: &Before,
     new: &Lock,
     dry_run: bool,
-    (guessed, stated): (&HashSet<String>, &HashMap<String, Sha256>),
+    (guessed, stated): (&HashSet<String>, &HashMap<String, Checksum>),
 ) -> Vec<String> {
     let mut moved = Vec::new();
     for dataset in &new.datasets {
@@ -3265,22 +3266,32 @@ pub(super) fn tell_upgrades(
             locked
                 .files
                 .iter()
-                .map(|file| (file.path.clone(), file.sha256))
+                .map(|file| (file.path.clone(), (file.sha256, file.md5)))
                 .collect::<std::collections::BTreeMap<_, _>>()
         };
         let (was, now) = (paths(before), paths(dataset));
         let label = |path: &str| format!("{}/{path}", dataset.name);
-        let unsure = |path: &str| {
-            let label = label(path);
-            guessed.contains(&label) && !stated.contains_key(&label)
+        // an MD5 tells a change only beside the one data.lock pinned
+        let told = |path: &str| {
+            stated.get(&label(path)).copied().filter(|checksum| {
+                !matches!(checksum, Checksum::Md5(_))
+                    || was.get(path).is_none_or(|(_, md5)| md5.is_some())
+            })
         };
+        let unsure = |path: &str| guessed.contains(&label(path)) && told(path).is_none();
         let added = now.keys().filter(|path| !was.contains_key(*path)).count();
         let removed = was.keys().filter(|path| !now.contains_key(*path)).count();
         let changed = now
             .iter()
-            .filter(|(path, sha256)| {
-                let sha256 = stated.get(&label(path)).unwrap_or(sha256);
-                !unsure(path) && was.get(*path).is_some_and(|before| before != sha256)
+            .filter(|(path, (sha256, _))| {
+                !unsure(path)
+                    && was
+                        .get(*path)
+                        .is_some_and(|(before, md5)| match told(path) {
+                            Some(Checksum::Sha256(stated)) => *before != stated,
+                            Some(Checksum::Md5(stated)) => *md5 != Some(stated),
+                            None => before != sha256,
+                        })
             })
             .count();
         if before.resolved == dataset.resolved

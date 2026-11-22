@@ -18,6 +18,7 @@ use crate::net::{Expect, Fetch, Fetched, Listed};
 use crate::plan::Patterns;
 use crate::project::lock::{self, Locked, LockedFile};
 use crate::project::manifest::{Entry, Source};
+use crate::source::list::Checksum;
 use crate::source::{self, Access, Blob, Listing, Remote};
 use crate::stop::Stop;
 use crate::threads::Threads;
@@ -84,9 +85,9 @@ fn by_link(previous: Option<&Locked>, versions: bool) -> HashMap<String, Vec<&Lo
     by_url
 }
 
-/// a file a dry run stands a hash in for, as `<dataset>/<path>`, with the SHA-256 its source
-/// states, as a list does with no size.
-pub(super) type Guess = (String, Option<Sha256>);
+/// a file a dry run stands a hash in for, as `<dataset>/<path>`, with the hash its source
+/// states, as a list does with no size: its SHA-256, else its MD5.
+pub(super) type Guess = (String, Option<Checksum>);
 
 impl Draft {
     /// [`Draft::proving`] on the default threads, as tests draft a dataset.
@@ -772,7 +773,9 @@ impl Draft {
                     let label = format!("{}/{}", self.name, file.path);
                     let size = file.remote.size.unwrap_or_default();
                     file.known = Some((stand_in(&label), size));
-                    guessed.push((label, file.remote.sha256));
+                    let stated = (file.remote.sha256.map(Checksum::Sha256))
+                        .or(file.remote.md5.map(Checksum::Md5));
+                    guessed.push((label, stated));
                 }
             }
         }
