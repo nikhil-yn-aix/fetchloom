@@ -100,6 +100,9 @@ pub(crate) struct Placer {
     checks_root: bool,
     /// folders under the root already seen to be real folders, not links.
     folders: HashSet<PathBuf>,
+    /// the folders whose entries [`Placer::remove`] changed, which [`Placer::flush_removals`]
+    /// flushes.
+    removed_from: std::collections::BTreeSet<PathBuf>,
     synced: Option<&'static str>,
     can_reflink: AtomicBool,
     can_hardlink: AtomicBool,
@@ -144,11 +147,21 @@ type Flushing = dyn Fn(&File) + Send + Sync;
 #[cfg(test)]
 type Swap = Box<dyn FnOnce(&Path)>;
 
+#[cfg(all(test, unix))]
+type Seen = Box<dyn FnMut(&Path)>;
+
 #[cfg(test)]
 thread_local! {
     /// what a test does to a file's place once its folders are walked and before the file opens,
     /// as a co-user swapping one of them for a link meanwhile would, once.
     pub(crate) static WALKED: std::cell::RefCell<Option<Swap>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(all(test, unix))]
+thread_local! {
+    /// what a test sees of each folder [`Placer::flush_removals`] flushed, once it did.
+    pub(crate) static FLUSHED_FOLDER: std::cell::RefCell<Option<Seen>> =
         const { std::cell::RefCell::new(None) };
 }
 
@@ -360,6 +373,7 @@ impl Placer {
             opened_at: None,
             checks_root: true,
             folders: HashSet::new(),
+            removed_from: std::collections::BTreeSet::new(),
             synced,
             can_reflink: AtomicBool::new(first == Method::Reflink),
             can_hardlink: AtomicBool::new(first != Method::Copy),
@@ -815,6 +829,7 @@ impl Placer {
             self.volume.remove(location.path())?;
         }
         drop(location);
+        self.removed_from.insert(parent.clone());
         let mut folder = Some(parent.as_path());
         while prune && let Some(current) = folder {
             if current == self.root {
@@ -829,7 +844,52 @@ impl Placer {
             }
             self.folders.remove(current);
             folder = current.parent();
+            if let Some(above) = folder {
+                self.removed_from.insert(above.to_path_buf());
+            }
         }
+        Ok(())
+    }
+
+    /// flushes each folder whose entries [`Placer::remove`] changed and that is still there, so a
+    /// record written next, which forgets what went, never outlives a removal a power cut undid:
+    /// files that came back would be no one's to remove. a folder pruned with them, or put out of
+    /// the way of a file since, goes with the flush of the folder that held it, which removed it;
+    /// any other failure to reach a folder fails the flush.
+    #[cfg(unix)]
+    pub(crate) fn flush_removals(&mut self) -> io::Result<()> {
+        for folder in std::mem::take(&mut self.removed_from).iter().rev() {
+            let location = match self.location(&folder.join(".flush"), false) {
+                Ok(location) => location,
+                Err(err)
+                    if matches!(
+                        err.kind(),
+                        io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                    ) =>
+                {
+                    tracing::debug!(%err, folder = %folder.display(), "a folder files were removed from is gone");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            };
+            location.flush_folder()?;
+            #[cfg(test)]
+            FLUSHED_FOLDER.with_borrow_mut(|seen| {
+                if let Some(seen) = seen {
+                    seen(folder);
+                }
+            });
+        }
+        Ok(())
+    }
+
+    #[cfg(not(unix))]
+    #[expect(
+        clippy::unnecessary_wraps,
+        reason = "windows flushes no folder, as the project's records do not"
+    )]
+    pub(crate) fn flush_removals(&mut self) -> io::Result<()> {
+        self.removed_from.clear();
         Ok(())
     }
 

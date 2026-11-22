@@ -1939,6 +1939,10 @@ impl<'a> Placing<'a> {
         );
         let folders = swept(&scope, &targets, &actions);
         sweep(project, &mut placer, &survey, &wanted, folders.as_ref());
+        // before a state forgets what went, as the one written ahead may
+        placer
+            .flush_removals()
+            .map_err(|err| removals_unflushed(&err))?;
         let adding = told.map(|names| added_here(names, &targets, &actions));
         let found = copies_to_link(&targets, &actions, &survey);
         placement.notice(
@@ -2112,6 +2116,9 @@ impl<'a> Placing<'a> {
                 (&survey.disk, git_keeps),
                 &scope,
             );
+        placer
+            .flush_removals()
+            .map_err(|err| ended(removals_unflushed(&err)))?;
         record(
             project,
             state,
@@ -2201,6 +2208,9 @@ impl<'a> Placing<'a> {
         let dropped = survey.state.forget_removed(manifest) || moved_away;
         let left = mark::forget_left(&mut survey.state.told, manifest);
         let marks = unmarked || rewritten || said || left;
+        placer
+            .flush_removals()
+            .map_err(|err| removals_unflushed(&err))?;
         if removed || forgot || dropped || marks || survey.needs_writing {
             project.write_state(&survey.state)?;
         }
@@ -2235,6 +2245,11 @@ fn kept_copies(error: Error, copies: &[ChangedCopy]) -> Error {
             copy.path, copy.kept_as
         ))
     })
+}
+
+/// the error of a run whose removals could not be flushed, so the state keeps their records.
+fn removals_unflushed(err: &std::io::Error) -> Error {
+    Error::io("could not flush the folders files were removed from", err)
 }
 
 /// writes `synced` and what a run did to the state. what it placed, removed or took as placed,
@@ -2825,7 +2840,7 @@ fn undo(
     checked: u64,
 ) -> bool {
     let mut placer = Placer::new(root).with_threads(threads);
-    let mut changed = false;
+    let mut gone = Vec::new();
     for (path, placed_here) in adding {
         let Some(record) = state.files.get(path) else {
             continue;
@@ -2843,10 +2858,18 @@ fn undo(
                 continue;
             }
         }
-        state.files.remove(path);
-        changed = true;
+        gone.push(path);
     }
-    changed
+    // a record goes only once its file's removal is on disk; one kept for a file gone is
+    // forgotten by the next run
+    if let Err(err) = placer.flush_removals() {
+        tracing::debug!(%err, "could not flush the folders a failed add's files left");
+        return false;
+    }
+    for path in &gone {
+        state.files.remove(*path);
+    }
+    !gone.is_empty()
 }
 
 /// deletes each file `--force` moved aside once `in_place` says every file in its stead is in
@@ -5034,6 +5057,94 @@ mod tests {
 
         let (recorded, _) = project.state();
         assert_eq!(recorded.files["data/weather.csv"].dataset, "weather");
+    }
+
+    /// files a removal or a sync deletes leave the state only once the folder that held them is
+    /// flushed: a power cut that undid the removal would otherwise bring back files no record
+    /// names, which no later run removes. a folder emptied goes with its parent's flush.
+    #[cfg(unix)]
+    #[test]
+    fn a_removal_is_on_disk_before_the_state_forgets_its_files() {
+        for syncing in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let cache = Cache::open(dir.path().join("cache")).unwrap();
+            let project = Project::at(dir.path().join("project"));
+            let mut state = State::default();
+            for path in ["data/gone/a.csv", "data/gone/sub/b.csv"] {
+                let file = project.root.join(path);
+                fs::create_dir_all(file.parent().unwrap()).unwrap();
+                fs::write(&file, path).unwrap();
+                state.files.insert(
+                    path.to_owned(),
+                    Placed {
+                        dataset: "gone".to_owned(),
+                        sha256: crate::digest::sha256(path.as_bytes()),
+                        method: Method::Copy,
+                        look: now(&file).unwrap(),
+                        writable: true,
+                        checked: 0,
+                        adopted: false,
+                        output: false,
+                        unlinkable: false,
+                        racy_intact: std::sync::OnceLock::new(),
+                    },
+                );
+            }
+            project.write_state(&state).unwrap();
+            let manifest =
+                Manifest::parse("[datasets.weather]\nref = \"https://example.org/weather.csv\"\n")
+                    .unwrap();
+            let flushed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let seen = std::rc::Rc::clone(&flushed);
+            let root = project.root.clone();
+            crate::place::FLUSHED_FOLDER.set(Some(Box::new(move |folder: &Path| {
+                let (recorded, _) = Project::at(root.clone()).state();
+                seen.borrow_mut()
+                    .push((folder.to_path_buf(), recorded.files.len()));
+            })));
+            let placing = Placing {
+                project: &project,
+                manifest: &manifest,
+                targets: Vec::new(),
+                unknown: Vec::new(),
+                waiting: Vec::new(),
+                actions: Vec::new(),
+                survey: surveyed(&project),
+                scope: Scope::All,
+                unlisted: plan::Unlisted::new(),
+                vouched: true,
+                outputs: Outputs::default(),
+                changed: Vec::new(),
+                extras: Vec::new(),
+                unmarking: Vec::new(),
+                still_marked: Vec::new(),
+                elsewhere: Vec::new(),
+                forced: Vec::new(),
+                told_at_once: None,
+            };
+            let placement = if syncing {
+                placing.apply(
+                    &quiet(),
+                    &Work::default(),
+                    &cache,
+                    None,
+                    None,
+                    &std::sync::Arc::default(),
+                )
+            } else {
+                placing.remove_only(&quiet())
+            }
+            .unwrap();
+            crate::place::FLUSHED_FOLDER.set(None);
+            assert_eq!(placement.removed, 2, "{syncing}");
+            assert!(!project.root.join("data/gone").exists());
+            assert_eq!(
+                *flushed.borrow(),
+                [(project.root.join("data"), 2)],
+                "{syncing}"
+            );
+            assert!(project.state().0.files.is_empty());
+        }
     }
 
     /// the other dataset's file stays even with `--force`, and the warning for the file it blocks

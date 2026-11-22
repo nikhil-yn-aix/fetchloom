@@ -2727,3 +2727,36 @@ fn a_few_copies_flushed_alone_go_on_threads() {
         assert_eq!(used > 1, spread, "{files}: {used}");
     }
 }
+
+/// a folder a removal changed that cannot be reached for its flush, as one in a folder that lost
+/// its search permission, fails the flush, so no record that forgets the file is written; one
+/// pruned with the files goes with its parent's flush.
+#[cfg(unix)]
+#[test]
+fn a_folder_a_removal_changed_must_be_flushed_or_gone() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("data");
+    for file in ["kept/a.csv", "kept/note.txt", "gone/b.csv"] {
+        let path = root.join(file);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, file).unwrap();
+    }
+    let mut placer = Placer::new(&root);
+    placer.remove(&root.join("kept/a.csv"), true, None).unwrap();
+    placer.remove(&root.join("gone/b.csv"), true, None).unwrap();
+    assert!(root.join("kept/note.txt").exists() && !root.join("gone").exists());
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o600)).unwrap();
+    // a user who may enter any folder, such as root, cannot show this
+    let entered = fs::metadata(root.join("kept")).is_ok();
+    let refused = placer.flush_removals();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o755)).unwrap();
+    if entered {
+        return crate::test_skips::skip("unprivileged", "root ignores folder permissions");
+    }
+    assert_eq!(refused.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    placer
+        .remove(&root.join("kept/note.txt"), true, None)
+        .unwrap();
+    placer.flush_removals().unwrap();
+}

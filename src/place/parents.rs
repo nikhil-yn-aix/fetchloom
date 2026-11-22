@@ -406,6 +406,17 @@ impl Location {
         self.unlink(AtFlags::REMOVEDIR)
     }
 
+    /// flushes the folder this location's name is in, so what was removed there stays removed.
+    pub(super) fn flush_folder(&self) -> io::Result<()> {
+        let folder = native::openat(
+            &self.parent.file,
+            ".",
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?;
+        File::from(folder).sync_all()
+    }
+
     /// removes the name, a folder's with `REMOVEDIR`. exfat on macos lists a name made composed
     /// as decomposed and finds it by either spelling, yet removes it only by the one that made it,
     /// so a name still found is removed by its other composition when that names the same entry.

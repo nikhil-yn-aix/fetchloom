@@ -52,7 +52,7 @@ files a system writes into a folder by itself, such as finder's `.DS_Store` or w
 
 removing a table also removes its comments; other entries stay. commit `data.toml` and `data.lock` afterwards.
 
-if deleting files fails after `data.toml` and `data.lock` were written, as for permissions or a file another program holds open, fix the reported error and run `fetchloom sync` to finish. the bytes stay in the shared cache, which other projects may use, until [cache gc](cache.md#gc) frees them.
+if deleting files fails after `data.toml` and `data.lock` were written, as for permissions or a file another program holds open, fix the reported error and run `fetchloom sync` to finish. a crash or a power cut there leaves the same to `fetchloom sync`. the bytes stay in the shared cache, which other projects may use, until [cache gc](cache.md#gc) frees them.
 
 ## dry run
 
