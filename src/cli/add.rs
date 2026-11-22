@@ -703,6 +703,9 @@ fn start_here(context: &Context, root: &Path, home: Option<&Path>) -> Result<(),
     };
     let first = below.iter().flatten().next();
     let elsewhere = match (below.len(), first) {
+        (0, _) if root.parent().is_none() => format!(
+            "go into your project's folder, or make one for it in your home folder and go into that, then {again}"
+        ),
         (0, _) => format!(
             "make a folder for the project and go into it, such as with `mkdir my-project` and `cd my-project`, then {again}"
         ),

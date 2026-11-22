@@ -1987,6 +1987,7 @@ pub(super) fn find(context: &Context) -> Result<Project, Error> {
         let Some(first) = below.iter().flatten().next() else {
             return error.help(match repository {
                 Some(_) => format!("run `{}` to start a project here, or give -C the folder of a project outside this repository, as in `fetchloom -C <folder> <command>`", command("add <link>")),
+                None if here.parent().is_none() => format!("{} is the root of a disk: go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`", here.display()),
                 None => format!("go into your project's folder first, or give -C its folder, as in `fetchloom -C <folder> <command>`; to start a project here, run `{}`", command("add <link>")),
             });
         };
@@ -2026,10 +2027,14 @@ pub(super) fn find(context: &Context) -> Result<Project, Error> {
 /// between folders: those at the nearest depth that has any, up to three folders down, named ones
 /// first. hidden folders and links are passed by, and a large tree is read only in part. a path
 /// holding a backtick, a control character or a name that is no text is none: it counts, but no
-/// help names it, so no folder's name steers a help, or the `fix` taken from it.
+/// help names it, so no folder's name steers a help, or the `fix` taken from it. none below the
+/// root of a disk, where a project found is as likely another user's as the person's own.
 pub(super) fn projects_below(here: &Path) -> Vec<Option<String>> {
     const DEPTH: usize = 3;
     const MOST_FOLDERS: usize = 2_000;
+    if here.parent().is_none() {
+        return Vec::new();
+    }
     let mut level = vec![(here.to_path_buf(), Some(String::new()))];
     let mut read = 0;
     for _ in 0..DEPTH {

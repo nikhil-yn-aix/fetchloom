@@ -1693,6 +1693,38 @@ fn a_project_right_below_is_named_and_never_wrapped_unasked() -> Result {
     Ok(())
 }
 
+/// at the root of a disk, where a project below is as likely another user's as the person's own,
+/// no help names one: status says to go into the project's folder, and so does the add that asks
+/// before starting a project there.
+#[cfg(unix)]
+#[test]
+fn at_the_root_of_a_disk_no_help_names_a_project_below() -> Result {
+    let sandbox = Sandbox::new()?;
+    let root = std::path::Path::new("/");
+    let status = sandbox.command_in(root, &["--json", "status"]).output()?;
+    let document = json(&status)?;
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.starts_with("/ is the root of a disk: go into your project's folder first"),
+        "{document}"
+    );
+    let add = sandbox
+        .command_in(root, &["--json", "add", "https://example.org/x.csv"])
+        .output()?;
+    let document = json(&add)?;
+    assert_eq!(add.status.code(), Some(1), "{document}");
+    let help = document["errors"][0]["help"].as_str().unwrap_or_default();
+    assert!(
+        help.starts_with("go into your project's folder"),
+        "{document}"
+    );
+    for said in [&status.stderr, &add.stderr] {
+        let said = text(said)?;
+        assert!(!said.contains("there is one in"), "{said}");
+    }
+    Ok(())
+}
+
 /// a dry run of an add that would start a project says so, around the project below when there
 /// is one, with the question the add would ask before it; nothing is written.
 #[test]
