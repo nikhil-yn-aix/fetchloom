@@ -1278,6 +1278,10 @@ fn sort_unplaced(
             !status.kept_copies.contains_key(*path) && !status.set_aside.contains_key(*path)
         })
         .collect();
+    // a large data folder with nothing extra in it is walked no more
+    if plain.is_empty() {
+        return;
+    }
     let disk = survey
         .disk
         .keys()
