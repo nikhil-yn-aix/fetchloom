@@ -679,3 +679,28 @@ fn an_offline_status_says_its_sync_needs_the_network() -> Result {
     }
     Ok(())
 }
+
+/// at a terminal, files of a person's own that fill a folder alone, as a derivatives folder in a
+/// dataset's, take one row with their count, so the files beside them still show.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_folder_of_extra_files_takes_one_row_at_a_terminal() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?)?;
+    let derived = sandbox.folder("work/data/iris/derivatives/sub-01")?;
+    for n in 0..30 {
+        fs::write(derived.join(format!("f{n}.txt")), b"x")?;
+    }
+    fs::write(sandbox.work().join("data/iris/notes.txt"), b"mine")?;
+    let Some(screen) = sandbox.on_a_terminal(&["status"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("Extra data/iris/derivatives/ · 30 files"),
+        "{screen}"
+    );
+    assert!(screen.contains("Extra data/iris/notes.txt"), "{screen}");
+    Ok(())
+}

@@ -190,6 +190,10 @@ pub(super) struct Status {
     /// folder, so a person at a terminal reads the folder once.
     #[serde(skip)]
     gone: HashMap<String, String>,
+    /// of `extra`, those in a folder that holds no other file, with the highest such folder, as
+    /// a derivatives folder kept in a dataset's, so a person at a terminal reads it once.
+    #[serde(skip)]
+    extra_in: HashMap<String, String>,
 }
 
 /// `status`, hashing every placed file for `verify`, as `--verify` asks, and failing with
@@ -1266,6 +1270,49 @@ fn sort_unplaced(
     };
     let owned = plan::Owned::of(manifest).with_left(&survey.state.left);
     sort_extra(status, &owned, &marked);
+    let plain: Vec<&str> = status
+        .extra
+        .iter()
+        .map(String::as_str)
+        .filter(|path| {
+            !status.kept_copies.contains_key(*path) && !status.set_aside.contains_key(*path)
+        })
+        .collect();
+    let disk = survey
+        .disk
+        .keys()
+        .map(String::as_str)
+        .filter(|path| !survey.made_by_system(path));
+    status.extra_in = extra_folders(&plain, disk);
+}
+
+/// of `extra`, the paths in a folder every one of the `disk` files below which is in `extra`,
+/// each with the highest such folder, ending in `/`.
+fn extra_folders<'a>(
+    extra: &[&'a str],
+    disk: impl Iterator<Item = &'a str>,
+) -> HashMap<String, String> {
+    // the folders of `path`, from the highest down, without the file
+    let folders = |path: &'a str| path.match_indices('/').map(move |(at, _)| &path[..at]);
+    let mut held: HashMap<&str, usize> = HashMap::new();
+    for path in disk {
+        for folder in folders(path) {
+            *held.entry(folder).or_default() += 1;
+        }
+    }
+    let mut extras: HashMap<&str, usize> = HashMap::new();
+    for path in extra {
+        for folder in folders(path) {
+            *extras.entry(folder).or_default() += 1;
+        }
+    }
+    extra
+        .iter()
+        .filter_map(|path| {
+            let folder = folders(path).find(|folder| held.get(folder) == extras.get(folder))?;
+            Some(((*path).to_owned(), format!("{folder}/")))
+        })
+        .collect()
 }
 
 /// sorts into `status` the files a settled project's data folder holds that no record claims, as
@@ -1759,7 +1806,8 @@ fn list(output: &Output, status: &Status) {
         let mut rows: Vec<(String, u64)> = Vec::new();
         let mut folders: HashMap<&str, usize> = HashMap::new();
         for path in paths.into_iter().filter(|path| !retiring.contains(path)) {
-            if let Some(folder) = status.gone.get(path).filter(|_| shown.is_some()) {
+            let whole = status.gone.get(path).or_else(|| status.extra_in.get(path));
+            if let Some(folder) = whole.filter(|_| shown.is_some()) {
                 // a folder that held one file is named by that file
                 let at = *folders.entry(folder).or_insert_with(|| {
                     rows.push(((*path).clone(), 0));
@@ -1925,6 +1973,37 @@ fn sum_up(output: &Output, status: &Status) -> bool {
 mod tests {
     use super::*;
     use crate::output::{Level, Style};
+
+    /// files of a person's own roll up to the highest folder only they fill, as a derivatives
+    /// folder in a dataset's, while one beside pinned files, or in a folder that also holds one,
+    /// keeps a row of its own.
+    #[test]
+    fn extra_files_roll_up_to_the_highest_folder_they_fill_alone() {
+        let derived = [
+            "data/iris/derivatives/sub-01/a.txt",
+            "data/iris/derivatives/sub-02/b.txt",
+        ];
+        let extra = [
+            derived[0],
+            derived[1],
+            "data/iris/notes.txt",
+            "data/iris/raw/x.txt",
+        ];
+        let disk = extra.into_iter().chain([
+            "data/iris/.gitignore",
+            "data/iris/iris.csv",
+            "data/iris/raw/pinned.csv",
+        ]);
+        let rolled = extra_folders(&extra, disk);
+        for path in derived {
+            assert_eq!(
+                rolled.get(path).map(String::as_str),
+                Some("data/iris/derivatives/"),
+                "{rolled:?}"
+            );
+        }
+        assert_eq!(rolled.len(), 2, "{rolled:?}");
+    }
 
     /// a link is the cache's copy, a fifo put in its place is not and is never opened, and a file
     /// of its own is not either.

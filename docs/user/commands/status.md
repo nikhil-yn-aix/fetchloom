@@ -103,7 +103,7 @@ a pipe or a file gets every file on a row of its own, so `fetchloom status | gre
     Missing data/many/part04/ · 30 files
 ```
 
-and each kind shows at most 20 rows, then one that says how to see the rest, as ``and 5 more · `fetchloom status | less` shows all``.
+so is a folder only your own files fill, as a `derivatives` folder kept in a dataset's folder, as `Extra data/iris/derivatives/ · 30 files`, named by the highest folder they fill alone. each kind shows at most 20 rows, then one that says how to see the rest, as ``and 5 more · `fetchloom status | less` shows all``.
 
 datasets and archives are never cut short, and JSON includes every difference.
 
