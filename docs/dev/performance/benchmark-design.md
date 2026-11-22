@@ -28,6 +28,8 @@ Each tool runs its normal documented workflow and checks what it downloads.
 
 fetchloom runs `fetchloom -q --yes sync` in a project with `data.toml` and `data.lock`, with `FETCHLOOM_HOST_JOBS=4`; s11 and s13 use its push, mirror and check commands, below.
 
+aria2c checks each file's SHA-256 after it downloads, one file at a time, and a downloaded file keeps its download slot until its check is done. With many small files its own status lines show three of its four slots finished and waiting on that check, so it keeps to about 12 files a second whatever the link, its CPU nearly idle: 1,000 files of 100 KiB take it 70 to 85 s, at home and on the lan alike. That pace is aria2c's own, not the lab's: it runs as one process on an input file with a `checksum=` line for each file, its documented way to download and check a list.
+
 Left out, with the reason on the results page:
 
 - wget fetches one file at a time and shows nothing curl does not.
