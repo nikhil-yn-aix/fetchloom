@@ -3257,14 +3257,12 @@ fn a_cancel_at_a_question_stops_the_other_downloads() -> Result {
     )?;
     let mut sync = sandbox.command(&["sync"]);
     sync.env("FETCHLOOM_ASK_ABOVE", "1G");
+    // the large file's own question, or the batch's when the other server answers first, which
+    // counts the large file's stated size with its own
+    let asked = "GiB)? [y/N]";
     // -isig lets ctrl-c reach the question as the key it reads
-    let Some((exit, screen)) = crate::support::typed(
-        &sandbox.work(),
-        &sync,
-        "-isig",
-        "download huge/huge.bin (2.0 GiB)?",
-        "\u{3}",
-    )?
+    let Some((exit, screen)) =
+        crate::support::typed(&sandbox.work(), &sync, "-isig", asked, "\u{3}")?
     else {
         return Ok(());
     };
