@@ -943,12 +943,12 @@ fn add_settles_the_project_and_a_syncing_path_does_not() -> Result {
 }
 
 #[test]
-fn a_trace_shows_each_phase_of_a_sync() -> Result {
+fn a_trace_shows_each_step_of_a_sync() -> Result {
     let sandbox = Sandbox::new()?;
     let server = Server::start("/files/iris.csv", vec![file(V1, "\"v1\"")])?;
     let added = sandbox.run(&["add", &server.url])?;
     assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
-    // a missing file sends the sync through every phase
+    // a missing file sends the sync through every step
     delete(&sandbox.work().join("data").join("iris").join("iris.csv"))?;
     let trace = sandbox.folder("traces")?.join("sync.json");
     let output = sandbox
@@ -957,7 +957,7 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
         .output()?;
     assert_eq!(output.status.code(), Some(0), "{}", text(&output.stderr)?);
     let events = fs::read_to_string(&trace)?;
-    for phase in [
+    for span in [
         "command",
         "read_manifest",
         "read_lock",
@@ -971,8 +971,8 @@ fn a_trace_shows_each_phase_of_a_sync() -> Result {
         "place",
     ] {
         assert!(
-            events.contains(&format!("\"name\":\"{phase}\"")),
-            "{phase}: {events}"
+            events.contains(&format!("\"name\":\"{span}\"")),
+            "{span}: {events}"
         );
     }
     Ok(())

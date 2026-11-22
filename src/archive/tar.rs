@@ -60,7 +60,9 @@ pub(super) fn decompressed<'r>(
                         .memlimit_stop(limit)
                         .decoder()?;
                     Box::new(HandOver {
-                        phase: Phase::Threaded(Box::new(XzDecoder::new_stream(compressed, stream))),
+                        decoder: Decoder::Threaded(Box::new(XzDecoder::new_stream(
+                            compressed, stream,
+                        ))),
                         threads,
                         given: 0,
                         limit,
@@ -120,7 +122,7 @@ impl<'r> Threads<'r> {
 /// so the reader takes each byte once. the hand-over retries what is interrupted, and a read that
 /// fails leaves it where it was.
 struct HandOver<'r> {
-    phase: Phase<'r>,
+    decoder: Decoder<'r>,
     /// how one decoder reads the stream again, and the run's stop while it does.
     threads: Threads<'r>,
     /// the bytes given so far.
@@ -129,8 +131,8 @@ struct HandOver<'r> {
     limit: u64,
 }
 
-/// how far a [`HandOver`] has gone.
-enum Phase<'r> {
+/// which decoder a [`HandOver`] reads with: liblzma's threads, or one decoder after them.
+enum Decoder<'r> {
     /// liblzma's threads decode.
     Threaded(Box<dyn Read + 'r>),
     /// they failed and went, and one decoder is still to read the stream again.
@@ -142,29 +144,29 @@ enum Phase<'r> {
 impl Read for HandOver<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
         loop {
-            let decoder = match &mut self.phase {
-                Phase::Failed => {
+            let decoder = match &mut self.decoder {
+                Decoder::Failed => {
                     let compressed =
                         uninterrupted(&*self.threads.stopped, &mut *self.threads.again)?;
                     let stream = Stream::new_auto_decoder(self.limit, CONCATENATED)?;
                     let one = Box::new(XzDecoder::new_stream(compressed, stream));
-                    self.phase = Phase::One(one, self.given);
+                    self.decoder = Decoder::One(one, self.given);
                     continue;
                 }
-                Phase::One(decoder, left) if *left > 0 => {
+                Decoder::One(decoder, left) if *left > 0 => {
                     pass_over(decoder, left, &*self.threads.stopped)?;
                     continue;
                 }
-                Phase::Threaded(decoder) | Phase::One(decoder, _) => decoder,
+                Decoder::Threaded(decoder) | Decoder::One(decoder, _) => decoder,
             };
             match decoder.read(buffer) {
                 Ok(read) => {
                     self.given += read as u64;
                     return Ok(read);
                 }
-                Err(err) if matches!(self.phase, Phase::Threaded(_)) && lacks_memory(&err) => {
+                Err(err) if matches!(self.decoder, Decoder::Threaded(_)) && lacks_memory(&err) => {
                     tracing::debug!(%err, given = self.given, "liblzma's threads failed, so one decoder goes on from where they were");
-                    self.phase = Phase::Failed;
+                    self.decoder = Decoder::Failed;
                 }
                 Err(err) => return Err(err),
             }
@@ -705,7 +707,7 @@ mod tests {
         Scratch, compress, pax, raw_entry, tar_of, xz_asking_for, xz_in_blocks, zstd_asking_for,
     };
     use super::super::{Format, Input, Limits, Unpacking};
-    use super::{HandOver, Phase, Read, Threads, XZ_MEMORY, decompressed, xz_blocks, xz_threads};
+    use super::{Decoder, HandOver, Read, Threads, XZ_MEMORY, decompressed, xz_blocks, xz_threads};
     use crate::digest;
     use crate::error::Kind;
 
@@ -1203,7 +1205,7 @@ mod tests {
     /// a hand-over from `refused` to one decoder that reads the stream again through `threads`.
     fn handing<'r>(refused: Refused<'r>, threads: Threads<'r>) -> HandOver<'r> {
         HandOver {
-            phase: Phase::Threaded(Box::new(refused)),
+            decoder: Decoder::Threaded(Box::new(refused)),
             threads,
             given: 0,
             limit: XZ_MEMORY,

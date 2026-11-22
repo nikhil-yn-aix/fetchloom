@@ -1150,7 +1150,7 @@ mod tests {
     }
 
     /// a mirror skipped once it answered, as when its objects fail, is asked nothing more that
-    /// run: no later phase tries it again first, with its retries, before the next mirror.
+    /// run: no later step tries it again first, with its retries, before the next mirror.
     #[test]
     fn a_mirror_skipped_after_it_answered_is_asked_nothing_more() {
         let context = Context::new(Output::new(
