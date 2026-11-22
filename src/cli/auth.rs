@@ -1268,10 +1268,7 @@ pub(super) async fn offer(
 ) -> Result<bool, Error> {
     let output = &context.output;
     if let Some(refusal) = refusal {
-        output.mark("Refused", &refusal.message);
-        for detail in &refusal.details {
-            output.item(detail);
-        }
+        tell_refusal(output, need, refusal);
     }
     let declined = |what: &str| match refusal {
         Some(_) => Err(answered_no().cancelling(what)),
@@ -1365,6 +1362,20 @@ pub(super) async fn offer(
         .await
         .map_err(|error| error.cancelling(signing))?;
     Ok(true)
+}
+
+/// the line an offer starts with, naming what `refusal` refused, and its details: `Not found` for
+/// a name a source answers alike whether it does not exist or is private, as `need` says.
+fn tell_refusal(output: &crate::output::Output, need: &Need, refusal: &Error) {
+    let verb = if need.maybe_missing.is_some() {
+        "Not found"
+    } else {
+        "Refused"
+    };
+    output.mark(verb, &refusal.message);
+    for detail in &refusal.details {
+        output.item(detail);
+    }
 }
 
 /// says that this project's data.toml chose `host`, or the DOI `via` that led there, before a

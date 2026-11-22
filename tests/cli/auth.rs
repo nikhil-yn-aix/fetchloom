@@ -964,7 +964,13 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
         assert!(!screen.contains("error:"), "{screen}");
         // a line told at a terminal starts with a return, which the lines below leave out
         let screen = screen.replace('\r', "");
-        let lead = format!("    Refused {refused}\n");
+        // a name that may not exist is not found, as a private one looks the same
+        let verb = if exit == 10 {
+            "  Not found"
+        } else {
+            "    Refused"
+        };
+        let lead = format!("{verb} {refused}\n");
         let told = [lead.as_str(), first, "sign in to hugging face now? [y/N]"]
             .map(|text| screen.find(text));
         assert!(
