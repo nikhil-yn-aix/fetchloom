@@ -442,9 +442,16 @@ fn facts(summary: &Summary) -> String {
     if !summary.same.is_empty() {
         facts.push(format!("{} the same", summary.same.len()));
     }
-    let taken =
-        |name: &String| summary.from_ours.contains(name) || summary.from_theirs.contains(name);
-    let unpinned = summary.unpinned.iter().filter(|name| !taken(name)).count();
+    let taken: std::collections::HashSet<&String> = summary
+        .from_ours
+        .iter()
+        .chain(&summary.from_theirs)
+        .collect();
+    let unpinned = summary
+        .unpinned
+        .iter()
+        .filter(|name| !taken.contains(name))
+        .count();
     if unpinned > 0 {
         facts.push(format!("{unpinned} not pinned"));
     }
