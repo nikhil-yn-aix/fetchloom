@@ -1542,9 +1542,12 @@ impl Standing {
 /// what fetchloom says of a project file that is a link, after its name.
 const LINKED: &str = "is a link, and fetchloom does not follow it";
 
-/// what to do about the project file `name`, a link.
+/// what to do about the project file `name`, a link. a clone may have linked it to a secret of
+/// this machine, which a copy in its place would put in the working tree for git to take.
 fn replace_link(name: &str) -> String {
-    format!("replace {name} with the file it names before running this command")
+    format!(
+        "check where {name} points: delete the link if it came with a clone, and put a real {name} in its place only if the link was yours"
+    )
 }
 
 /// what stands at `path` in place of a plain file: a link, which fetchloom never follows to a
@@ -3166,7 +3169,7 @@ mod tests {
             assert_eq!(
                 linked.help.as_deref(),
                 Some(
-                    format!("replace {name} with the file it names before running this command")
+                    format!("check where {name} points: delete the link if it came with a clone, and put a real {name} in its place only if the link was yours")
                         .as_str()
                 )
             );

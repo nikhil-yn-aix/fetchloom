@@ -1465,7 +1465,7 @@ fn a_linked_data_toml_or_data_lock_is_refused_unread() -> Result {
                     assert!(said.contains(&refused), "{name}, {args:?}: {said}");
                     assert!(
                         said.contains(&format!(
-                            "help: replace {name} with the file it names before running this command"
+                            "help: check where {name} points: delete the link if it came with a clone, and put a real {name} in its place only if the link was yours"
                         )),
                         "{said}"
                     );

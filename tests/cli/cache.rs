@@ -2047,7 +2047,7 @@ fn gc_frees_nothing_while_a_registered_data_toml_is_a_link() -> Result {
     );
     assert_eq!(
         document["errors"][0]["help"],
-        "replace data.toml with the file it names before running this command"
+        "check where data.toml points: delete the link if it came with a clone, and put a real data.toml in its place only if the link was yours"
     );
     for (bytes, which) in [
         (IRIS, "the linked project's"),

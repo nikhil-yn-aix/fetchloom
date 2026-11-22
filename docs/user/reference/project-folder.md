@@ -4,7 +4,7 @@ the project folder holds `data.toml` and `data.lock`, and its `.fetchloom/` hold
 
 `.fetchloom` must be a real folder; a link or junction there is refused. a first `add` that adds nothing removes the `.fetchloom` it made.
 
-`data.toml` and `data.lock` must be plain files in the project folder. fetchloom never follows a link there, since a cloned repository could point one at any file of yours, and an error could then show a line of it: a link is refused with `project.invalid`, exit 50, and a folder or a special file, such as a pipe, with `local.io`, before a byte is read. fetchloom reads at most 256 MiB of `data.toml` and 1 GiB of `data.lock`.
+`data.toml` and `data.lock` must be plain files in the project folder. fetchloom never follows a link there, since a cloned repository could point one at any file of yours, and an error could then show a line of it: a link is refused with `project.invalid`, exit 50, and a folder or a special file, such as a pipe, with `local.io`, before a byte is read. the refusal of a link says to delete it if it came with a clone, and to put a real file in its place only if the link was yours, since a copy of what a clone's link names, such as your cloud keys, would sit where git takes it. fetchloom reads at most 256 MiB of `data.toml` and 1 GiB of `data.lock`.
 
 | path | contents |
 |---|---|
