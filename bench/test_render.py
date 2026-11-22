@@ -557,6 +557,18 @@ class PageTests(Quiet):
                       "| rsync | 1.50 s | 1.00 s to 2.00 s | 0.71 [0.50, 1.00] | 0 ms | n/a | 4 MiB | n/a |", page)
         self.assertIn("the lab's server answers neither", page)
 
+    def test_a_full_check_runs_on_this_machines_disk_and_says_what_each_tool_runs(self):
+        shaping = dict(lan=shape(0, 0, None), local=shape(0, 0, None))
+        page = self.render([lab_row(scenario="s13", profile="local", count=1000, file_size=2 << 20),
+                            lab_row(scenario="s13", profile="local", count=1000, file_size=2 << 20, tool="sha256sum", wall_seconds=2)],
+                           dict(kind="lab", quick=True, network_profiles=shaping))
+        self.assertIn("## s13: a full integrity check, this machine's disk (ext4)", page)
+        self.assertIn("this machine's disk, no network: 1,000 files of 2 MiB each already in place, every byte checked against its "
+                      "SHA-256 from a cold disk cache", page)
+        self.assertIn("DVC has no command that hashes every file again", page)
+        self.assertIn("| lan | local network |", page)
+        self.assertNotIn("| local |", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)

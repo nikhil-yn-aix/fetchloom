@@ -483,7 +483,10 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
                               if key.startswith("FETCHLOOM_") or key in (
                                   "HOME", "XDG_CACHE_HOME", "POOCH_CACHE", "TMPDIR", "REQUESTS_CA_BUNDLE",
                                   "SSL_CERT_FILE", "DVC_NO_ANALYTICS", "DVC_SITE_CACHE_DIR", "GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL")}
-        if cold:
+        if cold and case["id"] in fixtures.CHECKED:
+            # a check reads this machine's disk alone, so no server file is read back in
+            lab.drop_caches(())
+        elif cold:
             server_files = list(Path(case["server_dir"]).rglob("*"))
             server_files += list((lab.ROOT / "www" / "dvc" / case["key"]).rglob("*"))
             lab.drop_caches(path for path in server_files if path.is_file())
@@ -550,6 +553,8 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
                 row["checks"].append(f"the push failed with exit {row['push']['exit_code']}")
             if row["requests"]:
                 row["checks"].append(f"the push and the get asked the lab server {row['requests']} times, not the shared folder")
+        if case["id"] in fixtures.CHECKED and row["requests"]:
+            row["checks"].append(f"the check asked the lab server {row['requests']} times, not this machine's disk")
         if drop is not None:
             row["checks"] += dropped(drop.record, row.get("process", row)["wall_seconds"])
         if row["exit_code"] == 0 and not row["timeout"] and not row["checks"]:

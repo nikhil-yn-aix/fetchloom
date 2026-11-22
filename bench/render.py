@@ -13,11 +13,12 @@ import fixtures
 
 # what each network profile stands for, in words a reader knows from their own connection, in the
 # order the results lead with: the links most people have before the lab's own
-LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network"}
+LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local network", "local": "this machine's disk"}
 TITLES = {"s1": "one large file", "s2r": "many files through a redirect", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files",
-          "s10": "the link drops for 10 s", "s11": "the team's shared folder", "s12": "the next version"}
+          "s10": "the link drops for 10 s", "s11": "the team's shared folder", "s12": "the next version",
+          "s13": "a full integrity check"}
 
 
 def summarize(rows):
@@ -52,6 +53,8 @@ def link(profile, shaping=None):
     name = LINKS.get(profile, profile)
     if not shaping:
         return name
+    if profile == "local":
+        return f"{name}, no network"
     delay, loss, rate = shaping["delay_ms"], shaping["loss_percent"], shaping["rate_mbit"]
     if not (delay or loss or rate):
         return f"{name}, no added delay or limit"
@@ -131,7 +134,8 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s9": "{files} already in place, each tool confirms nothing changed",
            "s10": "a {size} download whose link drops at 10 s for 10 s, with nothing stopped",
            "s11": "{files} of {size} each, pushed by one teammate to a shared folder and got from it by another with an empty cache; the table times the get",
-           "s12": "{files} of {size} each already in place, brought to the dataset's next version, in which one file in ten changed"}
+           "s12": "{files} of {size} each already in place, brought to the dataset's next version, in which one file in ten changed",
+           "s13": "{files} of {size} each already in place, every byte checked against its SHA-256 from a cold disk cache"}
 
 # the site's stylesheet, whose colors the cli's themes share and the cards take
 STYLESHEET = Path(__file__).resolve().parents[1] / "docs-site/theme/assets/stylesheets/fetchloom.css"
@@ -687,7 +691,8 @@ def networks(metas):
         return []
     lines = ["| profile | stands for | round-trip delay | loss per direction | server egress | queue at the server |",
              "|---|---|---:|---:|---:|---:|"]
-    for name in sorted(shaping, key=lead):
+    # this machine's own disk is no network
+    for name in sorted((name for name in shaping if name != "local"), key=lead):
         shape = shaping[name]
         rate = f"{shape['rate_mbit']} Mbit/s" if shape["rate_mbit"] else "unlimited"
         queue = f"{shape['queue_ms'] / 1000:g} s, {shape['limit_packets']:,} packets" if shape.get("limit_packets") else "none"
@@ -775,6 +780,12 @@ def case_section(case):
                      "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
     if case["scenario"] == "s11":
         lines += pushes(case)
+    if case["scenario"] == "s13":
+        lines.append("\neach tool runs its documented check of every file: fetchloom `fetchloom status --verify`, sha256sum "
+                     "`sha256sum -c` over the files curl downloaded, pooch its `retrieve` of each file, which hashes the copy it "
+                     "has against its known hash, and datalad `git annex fsck`. DVC has no command that hashes every file again, "
+                     "and aria2c's `--check-integrity` runs only inside a download, asking the server for each file first, so "
+                     "neither is here.\n")
     if case["scenario"] in ("s7", "s12"):
         lines += ["", f"| tool | {REFETCH} |", "|---|---:|"]
         for tool, entry in summaries.items():

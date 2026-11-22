@@ -37,9 +37,10 @@ ACCESS_FORMAT = ('{"request":"$request","status":$status,"bytes":$body_bytes_sen
 INHERITED = re.compile(r"(FETCHLOOM|HF|HUGGING_FACE|KAGGLE|KAGGLEHUB|ZENODO|FIGSHARE|OSF|DATAVERSE|AWS|GOOGLE|AZURE|GIT|CURL|DVC|DATALAD|POOCH)_"
                        r"|(NETRC|XDG_CONFIG_HOME|XDG_DATA_HOME|DBUS_SESSION_BUS_ADDRESS|PYTHONPATH|PYTHONHOME|PYTHONSTARTUP|PYTHONUSERBASE|PYTHONPYCACHEPREFIX)$")
 # each link's round trip, loss each way, the server's rate and how long a full queue at that rate
-# holds; lan has no rate, so netem never queues there
+# holds; lan has no rate, so netem never queues there. local is this machine's own work, as lan
 PROFILES = {
     "lan": dict(delay_ms=0, loss_percent=0, rate_mbit=None, queue_ms=None),
+    "local": dict(delay_ms=0, loss_percent=0, rate_mbit=None, queue_ms=None),
     "home": dict(delay_ms=20, loss_percent=0, rate_mbit=100, queue_ms=500),
     "poor": dict(delay_ms=300, loss_percent=3, rate_mbit=10, queue_ms=1000),
 }

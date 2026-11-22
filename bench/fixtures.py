@@ -21,7 +21,7 @@ WARM = {"s5": "s2r", "s6": "s2r", "s9": "s3"}
 # machine's own work on lan, where the link adds nothing
 LINKS = {"s1": ("home", "poor"), "s2r": ("home", "poor"), "s3": ("lan",), "s4": ("home",), "s5": ("lan",),
          "s6": ("lan",), "s7": ("home",), "s8": ("home",), "s9": ("lan",), "s10": ("home",), "s11": ("lan",),
-         "s12": ("home",)}
+         "s12": ("home",), "s13": ("local",)}
 # the scenarios that break into s1's download, by ctrl-c or by the link dropping
 BROKEN = ("s7", "s10")
 # the scenario that brings a dataset already in place up to its next version, in which every CHANGED-th
@@ -31,6 +31,9 @@ CHANGED = 10
 # the scenario where one teammate pushes to the team's shared folder and another gets from it, and the
 # scenario whose download gives the first teammate the data
 SHARED = {"s11": "s2r"}
+# the scenario that checks every file already in place from a cold disk cache, and the scenario whose
+# plain download puts them there
+CHECKED = {"s13": "s1"}
 # the scenarios whose server body bytes are set over the dataset's size: what a tool asked for again
 REFETCHED = (*BROKEN, *NEXT)
 ALL_SCENARIOS = tuple(LINKS)
@@ -39,7 +42,7 @@ ALL_SCENARIOS = tuple(LINKS)
 REDIRECTED = ("s2r",)
 # the large file and the number of 100 KiB files on each link. the poor link's 3% loss slows every
 # tool far below its rate, so its sizes come from the runs measured on it, not from the rate
-SIZES = {"lan": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (4 * 1024 * 1024, 50)}
+SIZES = {"lan": (None, 1000), "local": (None, 1000), "home": (256 * 1024 * 1024, 1000), "poor": (4 * 1024 * 1024, 50)}
 # the only cases a claim comes from, as filesystem, link and scenario: each sets fetchloom against one
 # tool frozen from the pilot, and the eight share a 5% error
 HEADLINE = (("ext4", "home", "s1"), ("ext4", "poor", "s1"), ("ext4", "home", "s2r"), ("ext4", "poor", "s2r"),
@@ -87,8 +90,8 @@ def case_specs(profiles, scenarios, quick):
             base = "s1" if scenario in BROKEN else WARM.get(scenario, scenario)
             large, many = SIZES[profile]
             size = (large if base == "s1" else 102400 if base in ("s2r", "s11", "s12")
-                    else 1024 * 1024 if base == "s8" else 4096)
-            count = 1 if base == "s1" else many if base in ("s2r", "s11", "s12") else 100 if base == "s8" else 10000
+                    else 2 * 1024 * 1024 if base == "s13" else 1024 * 1024 if base == "s8" else 4096)
+            count = 1 if base == "s1" else many if base in ("s2r", "s11", "s12", "s13") else 100 if base == "s8" else 10000
             if quick:
                 # a broken download keeps its whole file, so it is still downloading when it breaks
                 if scenario not in BROKEN:

@@ -816,6 +816,33 @@ class OneRunTests(unittest.TestCase):
             self.assertEqual((row["push"]["wall_seconds"], row["push"]["written_bytes"], row["wall_seconds"]), (2, 8192, 3))
             self.assertEqual(row["checks"], said)
 
+    def test_a_check_starts_from_a_cold_disk_cache_and_may_not_ask_the_server(self):
+        class Checker(tools.Tool):
+            name = "checker"
+
+            def prepare(self, scenario, workdir):
+                workdir.mkdir(parents=True, exist_ok=True)
+
+            def command(self, scenario, workdir):
+                return ["true"]
+
+            def outputs(self, scenario, workdir):
+                return []
+
+        (self.root / "www" / "a.bin").write_bytes(b"abcd")
+        for asked, said in ((0, ["no expected outputs"]), (1, ["no expected outputs", "the check asked the lab server 1 times, not this machine's disk"])):
+            dropped = []
+
+            def measured(*args, **kwargs):
+                (self.root / "access.jsonl").write_text('{"request": "GET /key/a.bin HTTP/1.1", "status": 200, "bytes": 4}\n' * asked)
+                return dict(wall_seconds=1, user_seconds=0, sys_seconds=0, maxrss_bytes=1, exit_code=0, timeout=False)
+
+            row = self.one_run(Checker("unused"), measured, dict(self.case, id="s13", base="s13", profile="local"),
+                               drop=lambda files: dropped.append(list(files)))
+            # the page cache goes, and no server file is read back, since a check reads this machine's disk alone
+            self.assertEqual(dropped, [[]])
+            self.assertEqual(row["checks"], said)
+
     def test_a_run_with_more_requests_in_flight_than_the_budget_is_flagged(self):
         class Fast(tools.Tool):
             name = "fast"

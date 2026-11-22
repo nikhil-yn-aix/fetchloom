@@ -95,6 +95,9 @@ class Tool:
             self.populate(previous, workdir)
             self.untimed(previous, workdir)
             self.next_version(scenario, workdir)
+        elif scenario["id"] in fixtures.CHECKED:
+            self.populate(scenario, workdir)
+            self.untimed(dict(scenario, id=fixtures.CHECKED[scenario["id"]]), workdir)
         elif scenario["id"] in fixtures.SHARED:
             first = dict(scenario, id=fixtures.SHARED[scenario["id"]])
             self.populate(first, workdir)
@@ -193,6 +196,9 @@ class Fetchloom(Tool):
         if scenario.get("id") in fixtures.SHARED:
             # a teammate's documented cold sync from the lab's folder mirror
             return [self.fetchloom, "-q", "--yes", "sync", "--locked", "--mirror", str(workdir / "shared")]
+        if scenario.get("id") in fixtures.CHECKED:
+            # its documented full check: the hash of every placed file
+            return [self.fetchloom, "status", "--verify"]
         return [self.fetchloom, "-q", "--yes", "sync"]
 
     def env(self, workdir):
@@ -238,7 +244,7 @@ def variant(value):
 
 class Curl(Tool):
     name = "curl"
-    scenarios = Tool.scenarios - {"s5", *fixtures.SHARED}
+    scenarios = Tool.scenarios - {"s5", *fixtures.SHARED, *fixtures.CHECKED}
 
     def command(self, scenario, workdir):
         return script(workdir / "command.sh", self.steps(scenario, workdir))
@@ -373,8 +379,8 @@ class Pooch(Tool):
 
 class Dvc(Tool):
     name = "dvc"
-    # dvc and datalad track files, not archives
-    scenarios = Tool.scenarios - {"s4", "s8"}
+    # dvc and datalad track files, not archives, and dvc has no command that hashes every file again
+    scenarios = Tool.scenarios - {"s4", "s8", *fixtures.CHECKED}
 
     def populate(self, scenario, workdir):
         shutil.copytree(Path(scenario["prepared"]) / self.name, workdir / "project", dirs_exist_ok=True)
@@ -411,7 +417,7 @@ class Dvc(Tool):
 
 class Datalad(Tool):
     name = "datalad"
-    scenarios = Dvc.scenarios
+    scenarios = Tool.scenarios - {"s4", "s8"}
 
     def populate(self, scenario, workdir):
         # like DVC's project copy, cloning the prepared dataset is setup, not retrieval
@@ -445,9 +451,23 @@ class Datalad(Tool):
         self.setup(["datalad", "clone", workdir / "first-project", workdir / "project"], workdir, workdir)
 
     def command(self, scenario, workdir):
+        if scenario["id"] in fixtures.CHECKED:
+            # git-annex's documented check of every annexed file's content against its key
+            return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), "git annex fsck data"])
         lines = [shell(["cd", workdir / "project"]),
                  f"git config annex.security.allowed-ip-addresses {lab.SERVER_ADDRESS}", f"datalad get -J {BUDGET} data"]
         return script(workdir / "command.sh", lines)
+
+
+class Sha256sum(Curl):
+    """`sha256sum -c` over the files curl downloaded, the plain check of a folder against its sums."""
+    name = "sha256sum"
+    scenarios = set(fixtures.CHECKED)
+
+    def command(self, scenario, workdir):
+        if scenario["id"] in fixtures.CHECKED:
+            return script(workdir / "command.sh", [shell(["cd", workdir / "project"]), self.checks(scenario, workdir)])
+        return super().command(scenario, workdir)
 
 
 class Rsync(Tool):
@@ -475,7 +495,7 @@ class Rsync(Tool):
         return ["rsync", "-a", f"{workdir / 'shared'}/", "data/"]
 
 
-CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Pooch, Dvc, Datalad, Rsync)
+CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Pooch, Dvc, Datalad, Rsync, Sha256sum)
 
 
 def available(fetchloom, variants=(), only=None):
