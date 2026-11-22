@@ -91,6 +91,10 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     context.wrote_lists(&project.root, project.write_lists(&lock)?);
     project.write(lock::FILE, lock.render().as_bytes())?;
     project.sweep_lists(&lock);
+    // said before the files go, as they went from data.toml and data.lock first
+    context
+        .output
+        .done("Removed", &format!("{listed} from data.toml and data.lock"));
     let placement = placing.remove_only(&context.output).map_err(|error| {
         error
             .finished_by(&super::project::command("sync"), "the removal")
@@ -99,7 +103,6 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
             ))
     })?;
     tell_unrecorded(&context.output, &unrecorded, false);
-    context.output.done("Removed", &listed);
     context.output.next(&next(&project, &gone, &names));
     Ok(Report {
         project: project.root,

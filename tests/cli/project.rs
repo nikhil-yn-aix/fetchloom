@@ -1739,6 +1739,27 @@ fn status_in_the_home_folder_starts_a_project_in_a_folder_of_its_own() -> Result
     Ok(())
 }
 
+/// a removal says what it took out of data.toml and data.lock before the files it removed from
+/// the data folder, the order it does them in.
+#[test]
+fn a_removal_tells_the_dataset_before_its_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    added(&sandbox, &server)?;
+    let removed = sandbox.run(&["remove", "iris"])?;
+    let stderr = text(&removed.stderr)?;
+    assert_eq!(removed.status.code(), Some(0), "{stderr}");
+    let dataset = stderr.find("Removed iris from data.toml and data.lock\n");
+    let files = stderr.find("Removed 1 file from data/ that no dataset needs\n");
+    assert!(
+        dataset
+            .zip(files)
+            .is_some_and(|(dataset, files)| dataset < files),
+        "{stderr}"
+    );
+    Ok(())
+}
+
 /// a dry run of an add that would start a project says so, around the project below when there
 /// is one, with the question the add would ask before it; nothing is written.
 #[test]
