@@ -3920,6 +3920,9 @@ fn get_never_writes_over_a_projects_own_files() -> Result {
         (&below, "../data.lock"),
         (&work, "new/../data.lock"),
         (&work, "new/deeper/../../data.toml"),
+        // a kelvin sign, which a disk folding unicode case takes for k
+        (&work, "data.loc\u{212a}"),
+        (&work, "data.loc\u{212a}.d/hello.txt"),
     ] {
         let output = sandbox
             .command_in(folder, &["--json", "get", &link, "-o", target, "--force"])
@@ -3935,6 +3938,8 @@ fn get_never_writes_over_a_projects_own_files() -> Result {
     assert_eq!(std::fs::read(work.join("data.toml"))?, manifest);
     assert_eq!(std::fs::read(work.join("data.lock"))?, lock);
     assert!(!work.join("data.lock.d").exists());
+    assert!(!work.join("data.loc\u{212a}").exists());
+    assert!(!work.join("data.loc\u{212a}.d").exists());
     assert!(!work.join("new").exists());
     Ok(())
 }

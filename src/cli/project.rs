@@ -1982,7 +1982,7 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
     let folder = resolved(lexical);
     let is = |name: &std::ffi::OsStr, own: &str| {
         name.to_str()
-            .is_some_and(|name| name.eq_ignore_ascii_case(own))
+            .is_some_and(|name| name::fold(name) == name::fold(own))
     };
     refuse_pins(path, &folder, name, &is)?;
     let inside = folder

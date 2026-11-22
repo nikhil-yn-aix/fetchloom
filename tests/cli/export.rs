@@ -684,6 +684,7 @@ fn export_never_writes_over_the_projects_own_files() -> Result {
         "data.toml",
         "./sub/../data.lock",
         "data.lock.d/sums.txt",
+        "data.loc\u{212a}",
     ] {
         for force in [false, true] {
             let mut args = vec!["--json", "export", "-o", target];
