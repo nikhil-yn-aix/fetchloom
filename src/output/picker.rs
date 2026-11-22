@@ -348,8 +348,21 @@ fn row(
     let more = if style.unicode { "\u{2026}" } else { "..." };
     let wide = console::measure_text_width(rest);
     let under = width.saturating_sub(lead + 1);
+    // a reference too long for its row goes on under itself, from its own column, never from the
+    // first, where the terminal would wrap it
+    let long = reference.chars().count() > under && under >= 8;
+    let reference = if long {
+        let chars: Vec<char> = reference.chars().collect();
+        chars
+            .chunks(under)
+            .map(|chunk| chunk.iter().collect::<String>())
+            .collect::<Vec<_>>()
+            .join(&format!("\n{:1$}", "", lead + 1))
+    } else {
+        reference.to_owned()
+    };
     // what has no room beside the reference goes on the line under it, cut there if it must be
-    let below = !rest.is_empty() && wide > room && (wide <= under || room < 8);
+    let below = !rest.is_empty() && (long || (wide > room && (wide <= under || room < 8)));
     let beside = if below || room < 8 {
         String::new()
     } else {
@@ -565,8 +578,16 @@ mod tests {
             style(false, false),
             30,
         );
+        // too long for its row, it goes on under itself, whole
+        let joined: String = tight.lines().map(str::trim).collect();
         assert!(
-            tight.contains("kaggle:owner/a-very-long-dataset-name"),
+            joined.contains("kaggle:owner/a-very-long-dataset-name"),
+            "{tight}"
+        );
+        assert!(
+            tight
+                .lines()
+                .all(|line| console::measure_text_width(line) <= 30),
             "{tight}"
         );
     }
@@ -724,6 +745,30 @@ mod tests {
             assert!(
                 console::strip_ansi_codes(first).ends_with("hf:datasets/scikit-learn/iris"),
                 "{cursor}: {first:?}"
+            );
+        }
+    }
+
+    /// an id too long for its row at 40 columns broke at the terminal's edge and went on at the
+    /// first column: it goes on under itself instead, and its facts below it.
+    #[test]
+    fn a_reference_too_long_for_its_row_goes_on_under_itself() {
+        let reference = "hf:datasets/Hebrish/Irish-English-Sentences";
+        let option = format!("{reference}  76.5 MiB  needs access");
+        for cursor in [0, 2] {
+            let shown = row(&option, (2, 12), cursor, style(false, true), 40);
+            let lines: Vec<&str> = shown.lines().collect();
+            assert!(
+                lines
+                    .iter()
+                    .all(|line| line.starts_with("  ") && console::measure_text_width(line) <= 40),
+                "{cursor}: {shown}"
+            );
+            let joined: String = lines.iter().map(|line| line.trim()).collect();
+            assert!(joined.contains(reference), "{cursor}: {shown}");
+            assert!(
+                shown.ends_with("76.5 MiB  needs access"),
+                "{cursor}: {shown}"
             );
         }
     }
