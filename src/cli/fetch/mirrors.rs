@@ -769,7 +769,9 @@ async fn from_web(
         })
         .collect();
     let started = Instant::now();
-    let results = super::apart(context, net, cache, jobs, None).await?;
+    // a mirror is asked only for objects the cache lacks
+    let cached = vec![false; ask.len()];
+    let results = super::apart(context, net, cache, (jobs, cached), None).await?;
     let elapsed = context
         .output
         .took(Fetched::transfer(results.iter().flatten(), started));

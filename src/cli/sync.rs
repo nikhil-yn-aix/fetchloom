@@ -1693,11 +1693,18 @@ impl<'a> Loop<'a> {
         .map_err(|error| self.as_left(error))?;
         ahead.retain(|job| !in_cache(&self.cache, &job.fetch));
         self.refuse_offline(&jobs)?;
-        self.refuse_unmirrored(jobs.iter().filter(|job| !in_cache(&self.cache, &job.fetch)))?;
+        // one look at the cache serves the refusals, the plan and the batch's count
+        let cached: Vec<bool> = jobs
+            .iter()
+            .map(|job| in_cache(&self.cache, &job.fetch))
+            .collect();
         let lacking: Vec<&Job> = jobs
             .iter()
-            .filter(|job| !in_cache(&self.cache, &job.fetch))
+            .zip(&cached)
+            .filter(|(_, cached)| !**cached)
+            .map(|(job, _)| job)
             .collect();
+        self.refuse_unmirrored(lacking.iter().copied())?;
         self.refuse_unasked(
             lacking
                 .iter()
@@ -1735,9 +1742,16 @@ impl<'a> Loop<'a> {
         self.roomy.fetch_or(roomy, Ordering::Relaxed);
         let plan = fetch::planned_line(&self.context.output, &called, &planned);
         let started = Instant::now();
-        let fetched = fetch::all_telling(self.context, &self.net, &self.cache, jobs, plan, came)
-            .await
-            .map_err(|error| self.as_left(error))?;
+        let fetched = fetch::all_telling(
+            self.context,
+            &self.net,
+            &self.cache,
+            (jobs, cached),
+            plan,
+            came,
+        )
+        .await
+        .map_err(|error| self.as_left(error))?;
         if ahead.is_empty() {
             self.tell_downloaded(&fetched, started);
             fetch::tell_found(&self.context.output, &called, &planned, &fetched);

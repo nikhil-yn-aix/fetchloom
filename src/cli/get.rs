@@ -489,12 +489,13 @@ async fn one_link(
         asked.expected,
     )?;
     hint_shards(context, &wanted);
-    let plan = approve(context, &cache, &wanted.jobs)?;
+    let cached = in_cache(&cache, &wanted.jobs);
+    let plan = approve(context, &cache, &wanted.jobs, &cached)?;
     let started = Instant::now();
     let jobs = std::mem::take(&mut wanted.jobs);
     // nothing is placed before every file is in, so a download cancelled at its question
     // changed nothing
-    let fetched = fetch::all(context, net, &cache, jobs, plan)
+    let fetched = fetch::all(context, net, &cache, (jobs, cached), plan)
         .await
         .map_err(Error::unchanged)?;
     let done = finish(
@@ -579,10 +580,11 @@ async fn many(
             jobs.append(&mut item.jobs);
         }
     }
-    let plan = approve(context, &cache, &jobs)?;
+    let cached = in_cache(&cache, &jobs);
+    let plan = approve(context, &cache, &jobs, &cached)?;
     let mut fetched: Vec<Vec<Result<Fetched, Error>>> = links.iter().map(|_| Vec::new()).collect();
     if !jobs.is_empty() {
-        let fetched_all = fetch::apart(context, net, &cache, jobs, plan)
+        let fetched_all = fetch::apart(context, net, &cache, (jobs, cached), plan)
             .await
             .map_err(Error::unchanged)?;
         for (owner, result) in owners.into_iter().zip(fetched_all) {
@@ -1188,13 +1190,20 @@ fn some_failed(links: &[String], failed: &[(usize, Error)]) -> Error {
 /// asks before the run's downloads when they are large, so a cancel changes nothing. one that may
 /// find its bytes unchanged asks only once its server sends them, so a rerun asks nothing. gives
 /// the line the downloads tell once one goes ahead.
-fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<Option<String>, Error> {
+fn approve(
+    context: &Context,
+    cache: &Cache,
+    jobs: &[Job],
+    cached: &[bool],
+) -> Result<Option<String>, Error> {
     if context.offline.enabled() {
         return Ok(None);
     }
     let missing: Vec<&Job> = jobs
         .iter()
-        .filter(|job| job.fetch.held.is_none() && job.fetch.cached(cache).is_none())
+        .zip(cached)
+        .filter(|(job, cached)| job.fetch.held.is_none() && !**cached)
+        .map(|(job, _)| job)
         .collect();
     crate::space::cache_holds(
         cache.root(),
@@ -1229,6 +1238,14 @@ fn approve(context: &Context, cache: &Cache, jobs: &[Job]) -> Result<Option<Stri
     )
     .map_err(Error::unchanged)?;
     Ok(fetch::planned_line(&context.output, &called, &planned))
+}
+
+/// which of `jobs` the cache holds the bytes of already, which neither the question before the
+/// downloads nor their batch counts.
+fn in_cache(cache: &Cache, jobs: &[Job]) -> Vec<bool> {
+    jobs.iter()
+        .map(|job| job.fetch.cached(cache).is_some())
+        .collect()
 }
 
 /// asks once, as a sync does, when the `adding` bytes `doing` brings would take the cache past the
@@ -2011,14 +2028,16 @@ mod tests {
         };
         let mut context = approval_context();
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, true)];
-        approve(&context, &cache, &jobs).unwrap();
+        approve(&context, &cache, &jobs, &in_cache(&cache, &jobs)).unwrap();
         jobs[0].fetch.unpack = false;
         assert_eq!(
-            approve(&context, &cache, &jobs).unwrap_err().kind,
+            approve(&context, &cache, &jobs, &in_cache(&cache, &jobs))
+                .unwrap_err()
+                .kind,
             Kind::Unconfirmed
         );
         context.offline = net::Offline::Flag;
-        approve(&context, &cache, &jobs).unwrap();
+        approve(&context, &cache, &jobs, &in_cache(&cache, &jobs)).unwrap();
     }
 
     #[test]
@@ -2042,9 +2061,9 @@ mod tests {
         remote.sha256 = Some(crate::digest::sha256(b"missing"));
         jobs.push(fetch::listed_job(&remote, &remote.path, false));
         let context = approval_context();
-        approve(&context, &cache, &jobs).unwrap();
+        approve(&context, &cache, &jobs, &in_cache(&cache, &jobs)).unwrap();
         jobs[1].fetch.expect.size = Some(LIMIT + 1);
-        let asked = approve(&context, &cache, &jobs).unwrap_err();
+        let asked = approve(&context, &cache, &jobs, &in_cache(&cache, &jobs)).unwrap_err();
         assert_eq!(
             (asked.kind, asked.message.as_str()),
             (
@@ -2072,11 +2091,13 @@ mod tests {
         let mut jobs = vec![fetch::listed_job(&remote, &remote.path, false)];
         let context = approval_context();
         assert_eq!(
-            approve(&context, &cache, &jobs).unwrap_err().kind,
+            approve(&context, &cache, &jobs, &in_cache(&cache, &jobs))
+                .unwrap_err()
+                .kind,
             Kind::Unconfirmed
         );
         jobs[0].fetch.held = Some(crate::digest::sha256(b"the bytes fetched before"));
-        approve(&context, &cache, &jobs).unwrap();
+        approve(&context, &cache, &jobs, &in_cache(&cache, &jobs)).unwrap();
     }
 
     /// a typed `iris.csv` gets hugging face's `Iris.csv`, rather than a pattern nobody typed.

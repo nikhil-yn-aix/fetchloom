@@ -2147,9 +2147,15 @@ async fn learn_names(
             job
         })
         .collect();
+    let cached: Vec<bool> = jobs
+        .iter()
+        .map(|job| job.fetch.cached(cache).is_some())
+        .collect();
     let lacking: Vec<&fetch::Job> = jobs
         .iter()
-        .filter(|job| job.fetch.cached(cache).is_none())
+        .zip(&cached)
+        .filter(|(_, cached)| !**cached)
+        .map(|(job, _)| job)
         .collect();
     let planned = fetch::planned(
         context,
@@ -2161,7 +2167,7 @@ async fn learn_names(
     let plan = fetch::planned_line(&context.output, &called, &planned);
     let started = std::time::Instant::now();
     // the add changes nothing before its downloads are done
-    let fetched = fetch::all(context, net, cache, jobs, plan)
+    let fetched = fetch::all(context, net, cache, (jobs, cached), plan)
         .await
         .map_err(Error::unchanged)?;
     let mut downloaded = Vec::new();

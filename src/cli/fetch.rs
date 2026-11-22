@@ -357,13 +357,10 @@ impl Overall {
         Self::counting(context, jobs.iter().map(|job| (job, false)))
     }
 
-    /// the batch of `jobs`, which counts as downloads those whose bytes `cache` lacks as it begins.
-    fn of(context: &Context, jobs: &[Job], cache: &Cache) -> Overall {
-        Self::counting(
-            context,
-            jobs.iter()
-                .map(|job| (job, job.fetch.cached(cache).is_some())),
-        )
+    /// the batch of `jobs`, which counts as downloads all but those `cached` marks, whose bytes
+    /// the caller found in the cache.
+    fn of(context: &Context, jobs: &[Job], cached: &[bool]) -> Overall {
+        Self::counting(context, jobs.iter().zip(cached.iter().copied()))
     }
 
     fn counting<'j>(context: &Context, jobs: impl Iterator<Item = (&'j Job, bool)>) -> Overall {
@@ -1867,13 +1864,15 @@ pub(super) fn called<'a>(mut labels: impl Iterator<Item = &'a str>, files: u64) 
 
 /// downloads every job within the network's limits, returning what each fetched in order. on linux
 /// finished downloads are flushed and named a group at a time, the last once every job ended.
-/// `plan`, the line [`planned_line`] gives, is told once the first download goes ahead, so a run
-/// that only waited while another fetchloom brought its files never says it downloads them.
+/// `cached` marks the jobs whose bytes the caller found in the cache, which the batch does not
+/// count as downloads. `plan`, the line [`planned_line`] gives, is told once the first download goes
+/// ahead, so a run that only waited while another fetchloom brought its files never says it
+/// downloads them.
 pub(super) async fn all(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    jobs: Vec<Job>,
+    jobs: (Vec<Job>, Vec<bool>),
     plan: Option<String>,
 ) -> Result<Vec<Fetched>, Error> {
     // the batch waits on the heap, so the futures of the commands that download stay small
@@ -1887,14 +1886,14 @@ pub(super) async fn all_telling(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    jobs: Vec<Job>,
+    (jobs, cached): (Vec<Job>, Vec<bool>),
     plan: Option<String>,
     came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Fetched>, Error> {
     let labels: Vec<String> = jobs.iter().map(|job| job.label.clone()).collect();
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
     let came: &(dyn Fn(usize) + Sync) = if batched { &|_| {} } else { came };
-    let work = each(context, net, cache, (jobs, plan), false, came);
+    let work = each(context, net, cache, (jobs, &cached, plan), false, came);
     let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     collected(results, published, &labels)
@@ -1957,11 +1956,11 @@ pub(super) async fn apart(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    jobs: Vec<Job>,
+    (jobs, cached): (Vec<Job>, Vec<bool>),
     plan: Option<String>,
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let batched = defer(cache, jobs.len(), context.settings.machine.open_files);
-    let work = each(context, net, cache, (jobs, plan), true, &|_| {});
+    let work = each(context, net, cache, (jobs, &cached, plan), true, &|_| {});
     let results = naming_meanwhile(cache, batched, work).await;
     let published = publish(cache, batched);
     let results = results?;
@@ -2063,18 +2062,19 @@ impl<T> Iterator for Queue<T> {
     }
 }
 
-/// what each job fetched, or why it failed on its own, in the jobs' order. `apart` keeps every
-/// failure but an interruption with its job; `came` is told each job that ended well.
+/// what each job fetched, or why it failed on its own, in the jobs' order, `cached` marking those
+/// whose bytes the caller found in the cache. `apart` keeps every failure but an interruption
+/// with its job; `came` is told each job that ended well.
 async fn each(
     context: &Context,
     net: &Arc<Net>,
     cache: &Cache,
-    (jobs, plan): (Vec<Job>, Option<String>),
+    (jobs, cached, plan): (Vec<Job>, &[bool], Option<String>),
     apart: bool,
     came: &(dyn Fn(usize) + Sync),
 ) -> Result<Vec<Result<Fetched, Error>>, Error> {
     let count = jobs.len();
-    let overall = Arc::new(Overall::of(context, &jobs, cache).planned(plan));
+    let overall = Arc::new(Overall::of(context, &jobs, cached).planned(plan));
     let queue = Queue::new(jobs);
     run_each(context, net, cache, count, overall, queue, apart, came).await
 }
@@ -3950,8 +3950,11 @@ mod tests {
             .filter(|(name, _)| *name != "held.csv")
             .map(|(name, bytes)| Description::take(job(name, bytes)))
             .unzip();
+        let cached = jobs
+            .each_ref()
+            .map(|job| job.fetch.cached(&cache).is_some());
         for overall in [
-            Overall::of(&context, &jobs, &cache),
+            Overall::of(&context, &jobs, &cached),
             Overall::described(&context, &descriptions, &urls),
         ] {
             let bar = overall.bar.as_ref().unwrap();
