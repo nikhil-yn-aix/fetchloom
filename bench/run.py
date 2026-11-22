@@ -426,7 +426,7 @@ def metadata(args, adapters):
 
 
 def write_metadata(path, value):
-    """replaces the file whole, syncing it and its folder, so a crash leaves the old or the new."""
+    """replaces the file whole, syncing it and its folder, so a crash leaves one whole file or the other."""
     pending = path.with_suffix(path.suffix + ".new")
     try:
         with pending.open("w") as output:

@@ -1086,7 +1086,7 @@ class LabLifecycleTests(unittest.TestCase):
              mock.patch.object(lab, "call", side_effect=subprocess.CalledProcessError(1, "openssl")) as call, \
              self.assertRaises(subprocess.CalledProcessError):
             lab.setup(image_gib=3)
-        # the old lab first, then the new one, whose marker lets teardown know it is the lab's
+        # the lab already there first, then the one set up again, whose marker lets teardown know it is the lab's
         self.assertEqual(seen, [{}, {"image_gib": 3}])
         self.assertEqual(call.call_args.args[0][:2], ["openssl", "req"])
         self.assertEqual(self.hosts.read_text(), "127.0.0.1 localhost\n")

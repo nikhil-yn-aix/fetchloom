@@ -605,8 +605,8 @@ def draw(charts, cases, services):
     charts.mkdir(parents=True, exist_ok=True)
     # every card here is generated, so a card the new results do not produce, such as a hero
     # without a verdict, must not survive from an earlier render
-    for old in charts.glob("*.svg"):
-        old.unlink()
+    for card in charts.glob("*.svg"):
+        card.unlink()
     for case in cases:
         claimed = hero(case)
         for suffix, dark in (("", False), ("-dark", True)):
@@ -908,7 +908,7 @@ def live_section(service, measured):
 
 def render(results, repo):
     """the svg cards in docs/assets/bench and docs/dev/performance/benchmarks.md from every campaign
-    under results; ValueError, before any old card goes, for results that do not read as one."""
+    under results; ValueError, before any card already there goes, for results that do not read as one."""
     rows, metas = load_results(results)
     cases, services = group(rows, metas)
     markdown = page(rows, metas, cases, services)

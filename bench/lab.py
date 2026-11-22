@@ -80,7 +80,7 @@ def cpu_choice(value):
 
 @contextmanager
 def affinity(cpus):
-    """runs the block on these cpus, then restores the old set; None leaves affinity alone."""
+    """runs the block on these cpus, then restores the set it had; None leaves affinity alone."""
     if cpus is None:
         yield
         return

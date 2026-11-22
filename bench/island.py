@@ -155,10 +155,10 @@ def compare_noise(quiet, loaded, noise, *, effect=.03, noise_multiple=2, rounds=
     return results
 
 
-def judge(key, old, arms, *, effect, noise_multiple, rounds):
+def judge(key, noise, arms, *, effect, noise_multiple, rounds):
     """one case's verdict: its quiet and loaded a/a results against the wall noise the noise file
     recorded, with every reason it fails and the figures behind them."""
-    sigma = old["log_ratio_robust_sd"]
+    sigma = noise["log_ratio_robust_sd"]
     if sigma is None or sigma < 0 or not math.isfinite(sigma):
         raise ValueError(f"quiet noise has no usable paired wall spread for {key}")
     limit = max(sigma * noise_multiple, math.log1p(.01))
@@ -169,19 +169,19 @@ def judge(key, old, arms, *, effect, noise_multiple, rounds):
     if ratio is None or abs(ratio - 1) > effect:
         reasons.append("loaded versus quiet-island central wall time changed beyond the chosen band")
     widths = [width(before), width(after)]
-    old_width = width(old)
-    width_limit = max(noise_multiple * max(widths[0] or 0, old_width or 0), effect / 3)
+    noise_width = width(noise)
+    width_limit = max(noise_multiple * max(widths[0] or 0, noise_width or 0), effect / 3)
     if widths[1] is None or widths[1] > width_limit:
         reasons.append("loaded A/A interval width exceeds the quiet/historical limit")
     biases = [bias(before), bias(after)]
     if None in biases or abs(biases[1] - biases[0]) > effect / 3:
         reasons.append("loaded A/A bias shifted by more than one third of the effect margin")
-    historical = old["plain_median"]
+    historical = noise["plain_median"]
     return dict(case=key, passed=not reasons, reasons=reasons,
                 quiet_interval_width=widths[0], loaded_interval_width=widths[1],
-                noise_interval_width=old_width, allowed_interval_width=width_limit,
+                noise_interval_width=noise_width, allowed_interval_width=width_limit,
                 quiet_aa_bias=biases[0], loaded_aa_bias=biases[1],
-                noise_aa_bias=bias(old),
+                noise_aa_bias=bias(noise),
                 noise_log_ratio_robust_sd=sigma, allowed_log_ratio_robust_sd=limit,
                 noise_plain_median=historical, quiet_island=before, loaded_island=after,
                 loaded_over_quiet_island=ratio,
