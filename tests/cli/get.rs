@@ -45,6 +45,27 @@ fn a_get_at_a_terminal_says_its_file_is_read_only() -> Result {
     Ok(())
 }
 
+/// a file a get copied or cloned is read-only as well, but writing to it could not harm the cache,
+/// so its hint gives no such reason: only a hard link is the cache's copy itself.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_copied_get_says_its_file_is_read_only_without_the_cache_s_reason() -> Result {
+    let sandbox = Sandbox::new()?;
+    let server = Server::start(PATH, vec![file(IRIS, "\"v1\"")])?;
+    // a folder a sync service watches gets a copy or a clone, never a link
+    let mut get = sandbox.command(&["get", &server.url]);
+    get.env("OneDrive", sandbox.work());
+    let Some(screen) = sandbox.on_a_terminal_running(&get)? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("\n  hint: the file is read-only: to edit it, write a file of your own with -o <file>, or copy it and make the copy writable\n"),
+        "{screen}"
+    );
+    assert!(!screen.contains("protects the cache's copy"), "{screen}");
+    Ok(())
+}
+
 /// a hugging face dataset, `lab/flowers`, holding a card, `Iris.csv` and `data/train.csv`: its
 /// hub, which lists the whole tree or the `data` folder alone, and the server of `Iris.csv`.
 #[cfg(debug_assertions)]
