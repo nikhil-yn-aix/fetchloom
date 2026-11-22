@@ -33,7 +33,7 @@ error: precious was imported from files, and no source can give them back, so re
   help: answer yes at a terminal, or run `fetchloom remove precious --yes` once you keep its files elsewhere
 ```
 
-the removal records the import's files in the cache, so [cache gc](cache.md#gc) asks again before `--now` frees them. a dry run asks nothing.
+the removal records the import's files in the cache, so [cache gc](cache.md#gc) asks again before `--now` frees them. a dry run asks nothing, and says the question in a hint instead, `without --dry-run, the removal asks first: … remove it anyway? [y/N]`, unless `--yes` answers it.
 
 nothing is downloaded. a file sync [adopted](sync.md#already-in-place) counts as placed, so `remove` deletes it if unchanged, and warns, since you put it there: `warning: removed data/iris/iris.csv, a file that was already there when fetchloom adopted it`. removal compares the saved size and modification time, so touching a file keeps it even when its bytes still match the pin.
 

@@ -353,6 +353,30 @@ fn removing_an_import_needs_a_yes() -> Result {
     Ok(())
 }
 
+/// a dry run of an import's removal says the question the removal asks first, as `add --dry-run`
+/// says its own, and with --yes, which answers it, says nothing of it.
+#[test]
+fn a_dry_run_says_the_removal_of_an_import_asks_first() -> Result {
+    let sandbox = Sandbox::new()?;
+    imported(&sandbox)?;
+    let work = sandbox.work();
+    let before = fs::read(work.join("data.toml"))?;
+    let dry = sandbox.run(&["remove", "precious", "--dry-run"])?;
+    let told = text(&dry.stderr)?;
+    assert_eq!(dry.status.code(), Some(0), "{told}");
+    assert!(
+        told.contains("without --dry-run, the removal asks first: precious was imported from files, and no source can give them back once data/precious and the cache's copy are gone. remove it anyway? [y/N]"),
+        "{told}"
+    );
+    let answered = sandbox.run(&["remove", "precious", "--dry-run", "--yes"])?;
+    let told = text(&answered.stderr)?;
+    assert_eq!(answered.status.code(), Some(0), "{told}");
+    assert!(!told.contains("asks first"), "{told}");
+    assert_eq!(fs::read(work.join("data.toml"))?, before);
+    assert!(work.join("data/precious/notes.csv").exists());
+    Ok(())
+}
+
 /// an import named with a name data.toml lacks: the name is refused before any yes is asked for,
 /// with help that leaves it out, and the command that help gives asks for the yes the import needs.
 #[test]

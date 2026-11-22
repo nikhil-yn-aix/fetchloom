@@ -77,6 +77,8 @@ pub(super) async fn remove(context: &Context, args: Remove) -> Result<Report, Er
     placing.unmark_removed(unlisted_outputs(&gone, &folders));
     if dry_run {
         let outcome = previewed(context, &placing, &kept, &listed, &unrecorded);
+        tell_would_ask(context, &gone, &names);
+        dry_run_done(&context.output, None);
         return Ok(Report::dry(project.root, names, outcome));
     }
     // a stop asked while the data folder was read leaves the project as it was; once the files
@@ -185,7 +187,6 @@ fn previewed(
     );
     place::tell_preview(&context.output, manifest, &Scope::All, &preview);
     tell_unrecorded(&context.output, unrecorded, true);
-    dry_run_done(&context.output, None);
     Outcome {
         lock_changed: true,
         pins: Vec::new(),
@@ -350,13 +351,21 @@ fn stop_for_tests(stop: &Stop, at: usize) {
 #[cfg(not(debug_assertions))]
 fn stop_for_tests(_: &Stop, _: usize) {}
 
-/// asks before removing the imports among `names`, whose files no source can give back once gc
-/// frees them from the cache; with nobody to ask it refuses, unless `--yes`. an output's files
-/// stay in its folder, so removing one asks nothing.
-fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Result<(), Error> {
-    if context.yes {
-        return Ok(());
-    }
+/// what a removal of `names` asks first: the imports among them, whose files no source can give
+/// back once gc frees them from the cache. an output's files stay in its folder, so removing one
+/// asks nothing.
+struct Asked {
+    /// the imports, listed.
+    name: String,
+    /// why the removal asks, the question's first part.
+    why: String,
+    question: String,
+    it: &'static str,
+    its: &'static str,
+}
+
+/// the question a removal of `names` from `manifest` asks first, or none when it asks nothing.
+fn import_question(manifest: &Manifest, names: &[String]) -> Option<Asked> {
     let imports: Vec<&str> = names
         .iter()
         .filter(|name| {
@@ -368,7 +377,7 @@ fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Resul
         .map(String::as_str)
         .collect();
     if imports.is_empty() {
-        return Ok(());
+        return None;
     }
     let name = crate::units::listed(&imports, "and");
     let (was, it, its) = if imports.len() == 1 {
@@ -381,11 +390,46 @@ fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Resul
         .map(|import| crate::plan::folder(manifest, import))
         .collect();
     let why = format!("{name} {was} imported from files, and no source can give them back");
-    let cancel = format!("the removal of {name}");
     let question = format!(
         "{why} once {} and the cache's copy are gone. remove {it} anyway?",
         crate::units::listed(&folders, "and")
     );
+    Some(Asked {
+        name,
+        why,
+        question,
+        it,
+        its,
+    })
+}
+
+/// `remove --dry-run`'s word that the removal asks first, as `add --dry-run` gives its own,
+/// unless `--yes` answers it. `gone` holds the entries of `names`.
+fn tell_would_ask(context: &Context, gone: &Manifest, names: &[String]) {
+    if let Some(asked) = import_question(gone, names).filter(|_| !context.yes) {
+        context.output.hint(&format!(
+            "without --dry-run, the removal asks first: {} [y/N]",
+            asked.question
+        ));
+    }
+}
+
+/// asks before removing the imports among `names`; with nobody to ask it refuses, unless `--yes`.
+fn ask_import(context: &Context, manifest: &Manifest, names: &[String]) -> Result<(), Error> {
+    if context.yes {
+        return Ok(());
+    }
+    let Some(Asked {
+        name,
+        why,
+        question,
+        it,
+        its,
+    }) = import_question(manifest, names)
+    else {
+        return Ok(());
+    };
+    let cancel = format!("the removal of {name}");
     match context
         .output
         .confirm(&question)

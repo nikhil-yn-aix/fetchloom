@@ -25,7 +25,7 @@ on disk: writes data.toml and data.lock, and places the dataset's files in data/
   fetchloom remove iris wine --dry-run
   fetchloom remove flowers --json
 
-on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloom placed for the dataset in data/. an output's folder keeps its files, which fetchloom stops tracking, and loses only the .gitignore fetchloom made there. --dry-run writes nothing";
+on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloom placed for the dataset in data/. an output's folder keeps its files, which fetchloom stops tracking, and loses only the .gitignore fetchloom made there. a dataset imported from files on this machine is removed only after a yes, since no source can give its files back once they leave data/ and the cache: the run asks, and --yes answers for scripts. --dry-run writes nothing";
 
     pub(super) const EXCLUDE: &str = "examples:
   fetchloom exclude data/pets/images/dog_010_corrupt.png
