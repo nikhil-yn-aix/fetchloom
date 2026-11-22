@@ -562,7 +562,7 @@ fn a_website_that_refuses_is_offered_each_way_in() -> Result {
         let host = gated.url.trim_start_matches("http://");
         let host = host.split_once('/').map_or(host, |(host, _)| host);
         let get = sandbox.command(&["get", &gated.url, "-o", "data.csv"]);
-        let asked = format!("sign in to {host} with");
+        let asked = format!("how do you sign in to {host}?");
         if let Some((code, screen)) =
             crate::support::typed(&sandbox.work(), &get, "", &asked, "3t-new\ry\r")?
         {
@@ -610,7 +610,7 @@ fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> R
     let get = sandbox.command(&["get", &gated.url, "-o", "data.csv"]);
     let missing = home.join("nope.txt");
     let keys = format!("2\"{}\"\r'~/my files/cookies.txt' \ry\r", missing.display());
-    let asked = format!("sign in to {host} with");
+    let asked = format!("how do you sign in to {host}?");
     let Some((code, screen)) = crate::support::typed(&sandbox.work(), &get, "", &asked, &keys)?
     else {
         return Ok(());
@@ -644,7 +644,7 @@ fn the_cookies_file_asked_for_after_a_refusal_is_asked_again_when_missing() -> R
     let host = host.split_once('/').map_or(host, |(host, _)| host);
     let get = sandbox.command(&["get", &refused.url, "-o", "refused.csv"]);
     let keys = "2~/nope.txt\r~/gone.txt\r~/my files\r";
-    let asked = format!("sign in to {host} with");
+    let asked = format!("how do you sign in to {host}?");
     let Some((code, screen)) = crate::support::typed(&sandbox.work(), &get, "", &asked, keys)?
     else {
         return Ok(());
@@ -735,7 +735,7 @@ fn a_site_sign_in_at_a_terminal_reads_each_key_hidden() -> Result {
     let browser = gated()?;
     firefox_profile(&sandbox, &[("session", "127.0.0.1", 4_000_000_000_000, "")])?;
     let get = sandbox.command(&["get", &browser.url, "-o", "browser.csv"]);
-    let asked = format!("sign in to {} with", host_of(&browser));
+    let asked = format!("how do you sign in to {}?", host_of(&browser));
     let Some((code, screen)) = typed(&get, &asked, "1firefox\ry\r")? else {
         return Ok(());
     };
@@ -797,7 +797,7 @@ fn a_site_key_not_saved_still_serves_the_run_it_was_asked_for() -> Result {
     };
     let signed = |server: &Server, keys: &str| {
         let get = sandbox.command(&["get", &server.url, "-o", "data.csv", "--force"]);
-        let asked = format!("sign in to {} with", host_of(server));
+        let asked = format!("how do you sign in to {}?", host_of(server));
         crate::support::typed(&sandbox.work(), &get, "", &asked, keys)
     };
     let unsaved = gated()?;

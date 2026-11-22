@@ -88,7 +88,7 @@ a website fetchloom has no account for, with nothing saved for it, gets the offe
 
 ```text
     Refused 127.0.0.1 refused access to http://127.0.0.1:19371/open.csv (403)
-  sign in to 127.0.0.1:19371 with  ↑↓ move · 1-9 or enter choose · q cancel
+  how do you sign in to 127.0.0.1:19371?  ↑↓ move · 1-9 or enter choose · q cancel
   › 1 browser  the cookies of a browser signed in there
     2 cookies  a cookies.txt file a browser extension saved
     3 token    a token the site gave you

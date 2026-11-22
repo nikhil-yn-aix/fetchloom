@@ -1135,7 +1135,7 @@ fn an_invenio_sign_in_for_a_host_data_toml_chose_says_so() -> Result {
         std::fs::write(sandbox.work().join("data.toml"), toml)?;
         let mut command = sandbox.command(&["sync"]);
         command.env("FETCHLOOM_TEST_HOSTS", &routes.url);
-        let asked = "sign in to rdm.example.org with";
+        let asked = "how do you sign in to rdm.example.org?";
         let Some((_, screen)) = crate::support::typed(&sandbox.work(), &command, "", asked, "q")?
         else {
             return Ok(());

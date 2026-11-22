@@ -255,7 +255,7 @@ pub(super) async fn offered(context: &Arc<Context>, account: &Account) -> Result
     };
     let output = &context.output;
     let ways = WAYS.map(|(word, meaning)| format!("{word:<7}  {meaning}"));
-    let chosen = match output.choose(&format!("sign in to {host} with"), &ways, "") {
+    let chosen = match output.choose(&format!("how do you sign in to {host}?"), &ways, "") {
         Err(error) if error.kind == Kind::Interrupted => return Err(error),
         Err(_) => None,
         Ok(chosen) => chosen,
