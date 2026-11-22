@@ -597,6 +597,31 @@ fn a_read_only_copy_nothing_recorded_is_outdated() -> Result {
     Ok(())
 }
 
+/// a file placed as the cache's copy is outdated once `copy = true` asks for a writable copy,
+/// and its row says that is all it needs.
+#[test]
+fn a_file_copy_true_asks_to_copy_says_so() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    ok(&sandbox.run(&["add", &format!("{}/iris.csv", routes.url)])?)?;
+    if !sandbox.links()?.hardlink && !sandbox.links()?.reflink {
+        return crate::support::skipped("links", "this disk places copies already");
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let text_of = fs::read_to_string(&manifest)?;
+    fs::write(&manifest, format!("{text_of}copy = true\n"))?;
+    let output = sandbox.run(&["status"])?;
+    let stdout = text(&output.stdout)?;
+    assert_eq!(
+        stdout,
+        "   Outdated data/iris/iris.csv · needs a writable copy, as copy = true asks\n",
+        "{}",
+        text(&output.stderr)?
+    );
+    Ok(())
+}
+
 /// `status --check` says once how to make an edited file ready, in the error's line for it, and
 /// not again in a hint above it.
 #[test]

@@ -154,6 +154,10 @@ pub(super) struct Status {
     /// outdated files that are links to the cache's copy someone made writable.
     #[serde(skip)]
     unsealed: HashSet<String>,
+    /// outdated files whose bytes are the pinned ones, placed as the cache's copy where `copy =
+    /// true` now asks for a writable copy of their own.
+    #[serde(skip)]
+    to_copy: HashSet<String>,
     /// the datasets among `unlocked` that data.lock pins under another name data.toml does not
     /// have, which a sync carries over, each with that name.
     #[serde(skip)]
@@ -1133,6 +1137,25 @@ fn gone(
         .collect()
 }
 
+/// notes why `target`, an outdated file placed as `record` says, needs a sync when its bytes are
+/// the pinned ones: a link to the cache's copy someone made writable, or the cache's copy where
+/// `copy = true` now asks for a writable copy of its own.
+fn why_outdated(
+    status: &mut Status,
+    target: &plan::Target<'_>,
+    record: Option<&crate::project::state::Placed>,
+) {
+    let Some(record) = record.filter(|record| record.sha256 == target.sha256) else {
+        return;
+    };
+    if !target.copy && record.method == crate::place::Method::Hardlink {
+        status.unsealed.insert(target.path.clone());
+    }
+    if target.copy && record.method != crate::place::Method::Copy {
+        status.to_copy.insert(target.path.clone());
+    }
+}
+
 /// files each target of `planned` into the list of what differs, by how `survey` saw it, and
 /// lists as extra every other file in the data folder. it hands back what a sync would do with
 /// each target.
@@ -1194,14 +1217,7 @@ fn compare(
                 Some(&mut status.damaged)
             }
             Action::Replace(Stale::Outdated) => {
-                // a link to the cache's copy, unless someone made it writable
-                if record().is_some_and(|record| {
-                    !target.copy
-                        && record.method == crate::place::Method::Hardlink
-                        && record.sha256 == target.sha256
-                }) {
-                    status.unsealed.insert(target.path.clone());
-                }
+                why_outdated(status, target, record());
                 Some(&mut status.outdated)
             }
             Action::Leave(Reason::Foreign) | Action::Overwrite(Reason::Foreign) => {
@@ -1845,6 +1861,11 @@ fn list(output: &Output, status: &Status) {
                     format!(
                         "{path} · a link to the cache's copy made writable, so an edit would change it for every project"
                     ),
+                    1,
+                ));
+            } else if status.to_copy.contains(path) {
+                rows.push((
+                    format!("{path} · needs a writable copy, as copy = true asks"),
                     1,
                 ));
             } else {
