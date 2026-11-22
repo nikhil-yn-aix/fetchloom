@@ -68,7 +68,7 @@ in a script or CI there is nobody to ask: set the source's variable from the CI 
 at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`, its first line naming what was refused, and defaults to no: enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face, kaggle, github and gitlab answer a name that does not exist as they answer a private one, so for those the offer first says to check the name, and where. one of them asked without a key is `reference.unresolved`, exit 10, since its answer says nothing of a sign-in:
 
 ```text
-  Not found huggingface.co has no dataset acme-lab/field-notes, or it is private
+  Not found dataset acme-lab/field-notes at huggingface.co, or it is private
       Check the name first at https://huggingface.co/datasets/acme-lab/field-notes
             hugging face answers alike for a name that does not exist and for a private one
 sign in to hugging face now? [y/N] n
@@ -87,7 +87,7 @@ error: huggingface.co has no dataset scikit-learn/irsi, or it is private
 a website fetchloom has no account for, with nothing saved for it, gets the offer when it answers 401 or 403 to the link itself: a picker asks how the site lets you in, then signs you in that way, as `auth login <host>` with `--browser`, `--cookies`, `--token`, `--header` or a username and password would, and runs the command once more. q or esc ends the run as a no. a site whose answer asks for a username and password, as a basic challenge does, gets the question above and the login's prompts instead. a host a redirect led to is offered nothing, since a website's key never follows a redirect, unless it asks for a `.netrc` login, which does. from a real run against a server on this machine, choosing 3:
 
 ```text
-    Refused 127.0.0.1 refused access to http://127.0.0.1:19371/open.csv (403)
+    Refused access to http://127.0.0.1:19371/open.csv (403) by 127.0.0.1
   how do you sign in to 127.0.0.1:19371?  ↑↓ move · 1-9 or enter choose · q cancel
   › 1 browser  the cookies of a browser signed in there
     2 cookies  a cookies.txt file a browser extension saved

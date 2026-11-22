@@ -937,7 +937,7 @@ fn the_offer_to_sign_in_comes_before_any_error_and_defaults_to_no() -> Result {
     for (reference, refused, first, exit) in [
         (
             "hf:datasets/scikit-learn/irs",
-            "huggingface.co has no dataset scikit-learn/irs, or it is private",
+            "dataset scikit-learn/irs at huggingface.co, or it is private",
             "Check the name first at https://huggingface.co/datasets/scikit-learn/irs\n            hugging face answers alike for a name that does not exist and for a private one\n",
             10,
         ),

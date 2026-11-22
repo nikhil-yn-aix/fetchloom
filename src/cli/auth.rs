@@ -1379,14 +1379,32 @@ pub(super) async fn offer(
 /// the line an offer starts with, naming what `refusal` refused, and its details: `Not found` for
 /// a name a source answers alike whether it does not exist or is private, as `need` says.
 fn tell_refusal(output: &crate::output::Output, need: &Need, refusal: &Error) {
-    let verb = if need.maybe_missing.is_some() {
-        "Not found"
-    } else {
-        "Refused"
-    };
-    output.mark(verb, &refusal.message);
+    let (verb, text) = refusal_line(&refusal.message, need.maybe_missing.is_some());
+    output.mark(verb, &text);
     for detail in &refusal.details {
         output.item(detail);
+    }
+}
+
+/// the verb and text of the line naming a refusal said as `message`, its sentence turned so the
+/// verb does not say again what the sentence says: `Not found dataset x at host, or it is
+/// private` for `host has no dataset x, or it is private`, and `Refused access to link by host`
+/// for `host refused access to link`. a sentence of another shape follows its verb as it is.
+fn refusal_line(message: &str, missing: bool) -> (&'static str, String) {
+    if missing && let Some((host, rest)) = message.split_once(" has no ") {
+        let (what, or) = rest
+            .split_once(", or ")
+            .map_or((rest, String::new()), |(what, or)| {
+                (what, format!(", or {or}"))
+            });
+        return ("Not found", format!("{what} at {host}{or}"));
+    }
+    if missing {
+        return ("Not found", message.to_owned());
+    }
+    match message.split_once(" refused access to ") {
+        Some((host, what)) => ("Refused", format!("access to {what} by {host}")),
+        None => ("Refused", message.to_owned()),
     }
 }
 
@@ -1688,6 +1706,35 @@ mod tests {
         assert_eq!(
             cancel.cancelled.as_deref(),
             Some("signing in to hugging face, so nothing changed")
+        );
+    }
+
+    /// a refusal's line never says its verb twice, as `Refused 127.0.0.1 refused access` did.
+    #[test]
+    fn a_refusal_line_says_its_verb_once() {
+        assert_eq!(
+            refusal_line(
+                "huggingface.co has no dataset scikit-learn/irsi, or it is private",
+                true
+            ),
+            (
+                "Not found",
+                "dataset scikit-learn/irsi at huggingface.co, or it is private".to_owned()
+            )
+        );
+        assert_eq!(
+            refusal_line(
+                "127.0.0.1 refused access to http://127.0.0.1:18871/forbid/x.csv (403)",
+                false
+            ),
+            (
+                "Refused",
+                "access to http://127.0.0.1:18871/forbid/x.csv (403) by 127.0.0.1".to_owned()
+            )
+        );
+        assert_eq!(
+            refusal_line("the server wants a sign-in", false),
+            ("Refused", "the server wants a sign-in".to_owned())
         );
     }
 
