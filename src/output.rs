@@ -141,7 +141,11 @@ impl Alone<'_> {
             Interrupt::CtrlC
         };
         let _ = output.stopped_by.set(by);
-        self.heard("Stopping", &format!("({})", output.again(true)));
+        // a question waiting for its answer ends at once and says what it cancelled, so no
+        // `Stopping` line comes before that
+        if self.held.is_none() {
+            self.heard("Stopping", &format!("({})", output.again(true)));
+        }
         // each bar says so now, not at its next tick, which a busy machine can put off
         let drawn = output
             .drawn

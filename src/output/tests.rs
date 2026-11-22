@@ -1825,3 +1825,35 @@ fn rows_written_together_go_out_in_few_writes_of_whole_rows() {
         counted.ends
     );
 }
+
+/// a stop heard while a question waits ends the question, which says what it cancelled, so no
+/// `Stopping` line comes first; a stop during other work still says `Stopping`.
+#[test]
+fn a_stop_at_a_question_tells_no_stopping_line() {
+    let output = Output::new(
+        Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        },
+        Level::Normal,
+        false,
+        false,
+    );
+    *output.held.lock().unwrap() = Some(Vec::new());
+    output.alone().stopping();
+    let held = output.held.lock().unwrap().take().unwrap_or_default();
+    assert!(
+        held.iter().all(|line| !line.contains("Stopping")),
+        "{held:?}"
+    );
+    output.alone().stopping();
+    assert!(
+        output.said().iter().any(|line| line.contains("Stopping")),
+        "{:?}",
+        output.said()
+    );
+}
