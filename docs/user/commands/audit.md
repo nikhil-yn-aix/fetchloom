@@ -55,6 +55,6 @@ a dataset whose files are all served gets a line on stderr, as `Served iris · 1
 | a file no mirror or source serves, as its source lost or changed it, or a file imported from a folder that no mirror holds; or a dataset its source no longer lists | `data.not_ready`, exit 1 |
 | a newer version, or a title, license or access that changed | `lock.outdated`, exit 1 |
 | a dataset that [waits for its file list](../reference/data-lock.md#big-datasets), so none of its files could be asked about | `project.invalid`, exit 50, in the words of the list's warning |
-| a file or dataset its source refused or gave no answer about | the error its download would meet, `auth.required` before `network.*` |
+| a file or dataset its source refused or gave no answer about, as a dataset hugging face, kaggle, github or gitlab no longer shows to a request without a key, since they answer so for a private one | the error its download would meet, `auth.required` before `network.*` |
 
 the error names each dataset and file in `details`, as `iris/iris.csv · gone: …` or `iris · newer version zenodo:102, where data.lock pins zenodo:101`, and its help the next step: `fetchloom push` from a machine whose cache holds the files, or `fetchloom lock --upgrade <name>`. a project with no data.lock fails `--check` with `data.not_ready`. other failures use the [shared exit codes](../reference/exit-codes.md).

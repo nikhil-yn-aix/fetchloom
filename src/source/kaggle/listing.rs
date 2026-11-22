@@ -91,7 +91,7 @@ impl Dataset {
     }
 
     /// kaggle's refusal to show a dataset, which may not exist at all. signing in can only help
-    /// when no key was sent.
+    /// when no key was sent, and then a typo is as likely, so the name is what is unresolved.
     fn hidden(&self, mut err: Error, signed_in: bool) -> Error {
         let name = format!("{}/{}", self.owner, self.slug);
         if signed_in {
@@ -100,6 +100,7 @@ impl Dataset {
             err.help(format!("check the name at {}", self.page()))
                 .unseen()
         } else {
+            err.kind = Kind::ReferenceUnresolved;
             err.message = format!("kaggle has no dataset {name}, or it is private");
             let page = self.page();
             err.help(format!(
@@ -470,8 +471,9 @@ mod tests {
             fixture_bytes("kaggle/missing.json"),
         );
         let err = block_on(dataset("uciml/no-such-dataset").resolve(&recorded)).unwrap_err();
-        assert_eq!(err.kind, Kind::AuthRequired);
-        // unit tests see no kaggle key, whatever the machine running them keeps
+        // unit tests see no kaggle key, whatever the machine running them keeps, so a typo is as
+        // likely as a private dataset
+        assert_eq!(err.kind, Kind::ReferenceUnresolved);
         assert_eq!(
             err.message,
             "kaggle has no dataset uciml/no-such-dataset, or it is private"
@@ -488,6 +490,7 @@ mod tests {
     fn a_hidden_dataset_suggests_signing_in_only_without_a_key() {
         let refused = || crate::source::refused("www.kaggle.com", "kaggle:uciml/nope");
         let without = dataset("uciml/nope").hidden(refused(), false);
+        assert_eq!(without.kind, Kind::ReferenceUnresolved);
         assert_eq!(
             without.message,
             "kaggle has no dataset uciml/nope, or it is private"
@@ -507,6 +510,7 @@ mod tests {
             "the offer to sign in says first that the name may be wrong, and where to check it"
         );
         let with = dataset("uciml/nope").hidden(refused(), true);
+        assert_eq!(with.kind, Kind::AuthRequired, "the key may lack access");
         assert_eq!(
             with.message,
             "kaggle has no dataset uciml/nope, or this account cannot see it"

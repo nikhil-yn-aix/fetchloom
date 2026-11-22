@@ -204,7 +204,7 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     let recorded = Recorded::default().on(RELEASE, 404, fixture_bytes("gitlab/no-project.json"));
     let error =
         block_on(release("gitlab-org/gitlab-runner@v19.3.6").resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
     assert_eq!(
         error.message,
         "gitlab.com has no project gitlab-org/gitlab-runner, or it is private"
@@ -218,6 +218,7 @@ fn a_missing_release_and_a_hidden_project_say_which_they_are() {
     let keyed = release("gitlab-org/gitlab-runner")
         .project
         .hidden(true, "releases");
+    assert_eq!(keyed.kind, Kind::AuthRequired, "the key may lack access");
     assert!(keyed.message.ends_with("or this key cannot see it"));
     assert!(keyed.need.is_none(), "a key went already");
 }
@@ -537,21 +538,24 @@ fn another_servers_refusal_names_its_own_sign_in() {
     let reference = Reference::parse("gitlab://code.videolan.org/videolan/dav1d@1.5.3")
         .unwrap()
         .reference;
-    for (status, body, message) in [
+    // a project no key went for may be a typo; a refusal says nothing of the name
+    for (status, body, message, kind) in [
         (
             404,
             fixture_bytes("gitlab/no-project.json"),
             "code.videolan.org has no project videolan/dav1d, or it is private",
+            Kind::ReferenceUnresolved,
         ),
         (
             401,
             br#"{"message":"401 Unauthorized"}"#.to_vec(),
             "code.videolan.org refused access to gitlab://code.videolan.org/videolan/dav1d@1.5.3",
+            Kind::AuthRequired,
         ),
     ] {
         let recorded = Recorded::default().on(DAV1D, status, body);
         let error = block_on(reference.resolve(&recorded)).unwrap_err();
-        assert_eq!(error.kind, Kind::AuthRequired, "{status}");
+        assert_eq!(error.kind, kind, "{status}");
         assert_eq!(error.message, message);
         let help = error.help.unwrap_or_default();
         assert!(

@@ -37,7 +37,7 @@ competition downloads have no `raw=true` option, and [kaggle's CLI](https://gith
 
 ## credentials
 
-public datasets need no key. competitions take a key from `fetchloom auth login kaggle`, or the kaggle command's own credentials, `KAGGLE_API_TOKEN`, `~/.kaggle/access_token` or `kaggle.json`, in the [order environment gives](../reference/credentials.md).
+public datasets need no key. competitions take a key from `fetchloom auth login kaggle`, or the kaggle command's own credentials, `KAGGLE_API_TOKEN`, `~/.kaggle/access_token` or `kaggle.json`, in the [order environment gives](../reference/credentials.md). kaggle answers a dataset name it does not have as it answers a private dataset, so a typo asked without a key stops with `reference.unresolved`, exit 10, as `kaggle has no dataset uciml/irsi, or it is private`, its help saying to check the name and how to sign in; asked with a key, it is `auth.required`, exit 40, since the account may be what lacks access.
 
 ## limits
 

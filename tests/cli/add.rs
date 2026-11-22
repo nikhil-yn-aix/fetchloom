@@ -1981,7 +1981,8 @@ fn the_search_line_shows_only_where_a_search_asks() -> Result {
             .env("FETCHLOOM_TEST_TICKER", "on")
             .output()?;
         let stderr = text(&output.stderr)?;
-        assert_eq!(output.status.code(), Some(40), "{link}: {stderr}");
+        // asked without a key, a repository github or gitlab does not show may be a typo
+        assert_eq!(output.status.code(), Some(10), "{link}: {stderr}");
         assert!(!stderr.contains("Searching"), "{link}: {stderr}");
     }
     Ok(())

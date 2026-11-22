@@ -65,7 +65,7 @@ a website with nothing saved for it that answers 401 or 403 gets the same offer 
 
 in a script or CI there is nobody to ask: set the source's variable from the CI system's secrets, as [CI](ci.md#keys) says, or pipe the key to `fetchloom auth login <account> --with-token`, as [auth](../commands/auth.md#scripts-and-ci) shows.
 
-at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`, its first line naming what was refused, and defaults to no: enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face and kaggle answer a name that does not exist as they answer a private one, so for those the offer first says to check the name, and where. hugging face asked without a key is `reference.unresolved`, exit 10, since its answer says nothing of a sign-in:
+at a terminal, a command refused for want of an account offers to sign in, then runs once more. the offer comes before any `error:`, its first line naming what was refused, and defaults to no: enter alone starts no sign-in, and a no ends the run with one `Cancelled` line and the refusal's exit code, 40. hugging face, kaggle, github and gitlab answer a name that does not exist as they answer a private one, so for those the offer first says to check the name, and where. one of them asked without a key is `reference.unresolved`, exit 10, since its answer says nothing of a sign-in:
 
 ```text
     Refused huggingface.co has no dataset acme-lab/field-notes, or it is private

@@ -376,7 +376,8 @@ impl Project {
 
     /// gitlab's answer that it shows no project of this path, which may be private: a key that
     /// can read it lifts that, to read its `what`. a key that went is named by where it comes
-    /// from, as hugging face's refusal names its own.
+    /// from, as hugging face's refusal names its own; asked without one, a typo is as likely, so
+    /// the path is what is unresolved.
     fn hidden(&self, signed_in: bool, what: &str) -> Error {
         let page = self.page();
         let host = self.host();
@@ -416,7 +417,7 @@ impl Project {
             };
         }
         let error = Error::new(
-            Kind::AuthRequired,
+            Kind::ReferenceUnresolved,
             format!("{host} has no project {}, or it is private", self.path),
         );
         match &self.server {

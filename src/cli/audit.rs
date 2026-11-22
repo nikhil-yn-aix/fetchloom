@@ -211,7 +211,14 @@ struct Unlisted {
 
 impl Unlisted {
     fn of(error: Error) -> Unlisted {
-        let outcome = match error.kind {
+        // a source asked without a key answers a name it does not show as it answers a private
+        // one, which a dataset pinned before more likely went: a key may lift it, so it is no loss
+        let kind = if error.unseen && error.need.is_some() {
+            Kind::AuthRequired
+        } else {
+            error.kind
+        };
+        let outcome = match kind {
             Kind::ReferenceUnresolved => "gone",
             Kind::AuthRequired => "refused",
             _ => "unknown",
@@ -220,7 +227,7 @@ impl Unlisted {
             outcome,
             message: error.message,
             help: error.help.map(String::from),
-            kind: error.kind,
+            kind,
         }
     }
 }
@@ -1199,6 +1206,30 @@ mod tests {
             datasets: vec![pets],
             ..Report::default()
         }
+    }
+
+    /// a dataset a source no longer shows to a request without a key, as github, gitlab, kaggle
+    /// and hugging face answer for a private one, is refused, which a key may lift, not gone; a
+    /// name the source says it lacks is gone.
+    #[test]
+    fn a_dataset_hidden_from_a_keyless_request_is_refused_not_gone() {
+        let page = "https://github.com/lab/survey".to_owned();
+        let hidden = Error::new(
+            Kind::ReferenceUnresolved,
+            "github has no repository lab/survey, or it is private",
+        )
+        .needs_or_missing(crate::account::Account::GitHub, page);
+        let unlisted = Unlisted::of(hidden);
+        assert_eq!(
+            (unlisted.outcome, unlisted.kind),
+            ("refused", Kind::AuthRequired)
+        );
+        let gone = Error::new(Kind::ReferenceUnresolved, "zenodo has no record 1");
+        let unlisted = Unlisted::of(gone);
+        assert_eq!(
+            (unlisted.outcome, unlisted.kind),
+            ("gone", Kind::ReferenceUnresolved)
+        );
     }
 
     /// the check fails as not ready only for files served nowhere, naming each; else, for files it

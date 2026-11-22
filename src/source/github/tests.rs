@@ -171,7 +171,11 @@ fn a_repository_github_does_not_show_may_be_private() {
         .on(RELEASE, 404, fixture_bytes("github/missing.json"))
         .on(REPOSITORY, 404, fixture_bytes("github/missing.json"));
     let error = block_on(release("jqlang/jq@jq-1.8.2").resolve(&recorded)).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(
+        error.kind,
+        Kind::ReferenceUnresolved,
+        "asked without a key, a typo is as likely as a private repository"
+    );
     assert_eq!(
         error.message,
         "github has no repository jqlang/jq, or it is private"
@@ -183,6 +187,7 @@ fn a_repository_github_does_not_show_may_be_private() {
         Some("https://github.com/jqlang/jq")
     );
     let error = release("jqlang/jq").hidden(true);
+    assert_eq!(error.kind, Kind::AuthRequired, "the key may lack access");
     assert_eq!(
         error.message,
         "github has no repository jqlang/jq, or this key cannot see it"

@@ -682,7 +682,7 @@ fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
         r#"{"message":"Not Found"}"#,
     );
     let error = block_on(folder(link).listing(&recorded, false)).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
     assert_eq!(
         error.message,
         "github has no repository lab/survey, or it is private"
@@ -696,6 +696,7 @@ fn private_repository_files_pin_at_githubs_api_by_their_blobs() {
     assert_eq!(error.need.unwrap().account, crate::account::Account::GitHub);
     let recorded = Recorded::default().on(API, 404, r#"{"message":"Not Found"}"#);
     let error = block_on(folder(link).listing(&recorded, true)).unwrap_err();
+    assert_eq!(error.kind, Kind::AuthRequired);
     assert_eq!(
         error.message,
         "github has no repository lab/survey, or this key cannot see it"
@@ -865,7 +866,7 @@ fn gitlab_answers_outside_the_folder_are_refused() {
         r#"{"message":"404 Project Not Found"}"#,
     );
     let error = block_on(folder(link).listing(&hidden, false)).unwrap_err();
-    assert_eq!(error.kind, Kind::AuthRequired);
+    assert_eq!(error.kind, Kind::ReferenceUnresolved);
     assert!(
         error
             .help

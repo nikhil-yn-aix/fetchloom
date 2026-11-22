@@ -184,7 +184,8 @@ impl Release {
         }
     }
 
-    /// github's answer that it shows no repository of this name, which may be private.
+    /// github's answer that it shows no repository of this name, which may be private. asked
+    /// without a key, a typo is as likely, so the name is what is unresolved.
     fn hidden(&self, signed_in: bool) -> Error {
         let name = self.repo.to_string();
         let page = self.page();
@@ -192,7 +193,7 @@ impl Release {
             return unseen(&name, page, "releases");
         }
         Error::new(
-            Kind::AuthRequired,
+            Kind::ReferenceUnresolved,
             format!("github has no repository {name}, or it is private"),
         )
         .help(format!(
@@ -268,14 +269,15 @@ impl Repo {
     }
 
     /// github's answer that it shows no repository of this name, which may be private: a key
-    /// that can read it would show it.
+    /// that can read it would show it. asked without a key, a typo is as likely, so the name is
+    /// what is unresolved.
     fn hidden(&self, signed_in: bool) -> Error {
         let page = self.page();
         if signed_in {
             return unseen(&self.to_string(), page, "files");
         }
         Error::new(
-            Kind::AuthRequired,
+            Kind::ReferenceUnresolved,
             format!("github has no repository {self}, or it is private"),
         )
         .help(format!(
