@@ -1079,3 +1079,30 @@ fn a_file_a_key_went_with_on_its_way_still_asks() -> Result {
     assert_eq!(again["kind"], "unconfirmed", "{again}");
     Ok(())
 }
+
+/// files imported from this machine have no source to say who may read them, so a push asks of
+/// them as fetchloom's own doubt, never as a source that kept quiet.
+#[test]
+fn a_push_of_an_import_asks_of_this_machine_s_files() -> Result {
+    let sandbox = Sandbox::new()?;
+    let folder = sandbox.folder("measurements")?;
+    fs::write(folder.join("heights.csv"), b"cm\n170\n")?;
+    ok(&sandbox.run(&["add", "../measurements"])?)?;
+    let mirror = sandbox.folder("mirror")?;
+    let output = sandbox
+        .command(&["--json", "push", "--to"])
+        .arg(&mirror)
+        .output()?;
+    let document = json(&output)?;
+    assert_eq!(output.status.code(), Some(1), "{document}");
+    let message = document["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        message.starts_with(
+            "fetchloom cannot tell who may read measurements, files imported from this machine"
+        ),
+        "{document}"
+    );
+    Ok(())
+}

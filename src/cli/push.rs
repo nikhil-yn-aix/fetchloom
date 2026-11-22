@@ -141,6 +141,8 @@ struct Asking {
     keyed: bool,
     /// it is an output of the project, which no source says anything of.
     output: bool,
+    /// it was imported from files on a machine, which no source says anything of either.
+    imported: bool,
 }
 
 /// where this machine keeps a key: hosts with a saved login or token, a `.netrc` line or a site
@@ -1141,6 +1143,7 @@ fn asking(lock: &Lock, datasets: &[String], keys: &Keys, marked: &BTreeSet<&str>
                 access,
                 keyed,
                 output: locked.at.is_some(),
+                imported: crate::source::local::is_imported(&locked.resolved),
             })
         })
         .collect()
@@ -1245,14 +1248,30 @@ fn reasons(asks: &[Asking]) -> String {
             named(many)
         )),
     }
+    let of = |name: &str, which: fn(&Asking) -> bool| {
+        asks.iter().any(|ask| ask.dataset == name && which(ask))
+    };
     let (outputs, sourced): (Vec<&str>, Vec<&str>) = alike(Access::Unknown)
         .into_iter()
-        .partition(|name| asks.iter().any(|ask| ask.dataset == *name && ask.output));
+        .partition(|name| of(name, |ask| ask.output));
+    let (imports, sourced): (Vec<&str>, Vec<&str>) = sourced
+        .into_iter()
+        .partition(|name| of(name, |ask| ask.imported));
     match sourced.as_slice() {
         [] => {}
         [one] => reasons.push(format!("the source of {one} did not say who may read it")),
         many => reasons.push(format!(
             "the sources of {} did not say who may read them",
+            named(many)
+        )),
+    }
+    match imports.as_slice() {
+        [] => {}
+        [one] => reasons.push(format!(
+            "fetchloom cannot tell who may read {one}, files imported from this machine"
+        )),
+        many => reasons.push(format!(
+            "fetchloom cannot tell who may read {}, files imported from this machine",
             named(many)
         )),
     }
@@ -2135,6 +2154,7 @@ mod tests {
             access,
             keyed: false,
             output: false,
+            imported: false,
         }
     }
 
@@ -2154,6 +2174,14 @@ mod tests {
         assert_eq!(
             reasons(&[asks("iris", Access::Unknown)]),
             "the source of iris did not say who may read it"
+        );
+        let imported = Asking {
+            imported: true,
+            ..asks("measurements", Access::Unknown)
+        };
+        assert_eq!(
+            reasons(&[imported]),
+            "fetchloom cannot tell who may read measurements, files imported from this machine"
         );
         let six = ["a", "b", "c", "d", "e", "f"];
         assert_eq!(named(&six), "a, b, c, d, e and f");
