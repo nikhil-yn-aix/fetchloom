@@ -502,18 +502,21 @@ class PageTests(Quiet):
         self.assertNotIn("fetchloom's times are", page)
 
     def test_a_dropped_link_is_set_against_the_same_tools_unbroken_run(self):
+        drop = dict(dropped_at=10.0, restored_at=20.0)
         rows = [lab_row(profile="home", wall_seconds=22), lab_row(profile="home", tool="curl", wall_seconds=24),
-                lab_row(scenario="s10", profile="home", wall_seconds=33, body_bytes_ratio=1.0),
-                lab_row(scenario="s10", profile="home", tool="curl", wall_seconds=41, body_bytes_ratio=1.02)]
+                lab_row(scenario="s10", profile="home", wall_seconds=33, body_bytes_ratio=1.0, link_drop=dict(drop, resumed_at=20.25)),
+                lab_row(scenario="s10", profile="home", tool="curl", wall_seconds=41, body_bytes_ratio=1.02,
+                        link_drop=dict(drop, resumed_at=None))]
         page = self.render(rows, dict(kind="lab", quick=True))
-        self.assertIn("| tool | with the drop | unbroken, s1 on this link | added | server body bytes / dataset size |", page)
-        self.assertIn("| fetchloom | 33.00 s | 22.00 s | +11.00 s | 1.000x |", page)
-        self.assertIn("| curl | 41.00 s | 24.00 s | +17.00 s | 1.020x |", page)
+        self.assertIn("| tool | with the drop | unbroken, s1 on this link | added | idle once the link was back | "
+                      "server body bytes / dataset size |", page)
+        self.assertIn("| fetchloom | 33.00 s | 22.00 s | +11.00 s | 250 ms | 1.000x |", page)
+        self.assertIn("| curl | 41.00 s | 24.00 s | +17.00 s | n/a | 1.020x |", page)
 
     def test_a_dropped_link_without_the_same_file_unbroken_has_nothing_to_set_against(self):
         rows = [lab_row(profile="home", file_size=2), lab_row(scenario="s10", profile="home", wall_seconds=33, body_bytes_ratio=1.0)]
         page = self.render(rows, dict(kind="lab", quick=True))
-        self.assertIn("| fetchloom | 33.00 s | n/a | n/a | 1.000x |", page)
+        self.assertIn("| fetchloom | 33.00 s | n/a | n/a | n/a | 1.000x |", page)
 
     def test_a_verdict_gives_the_seconds_before_the_ratio(self):
         rows = headline_rows(curl=2, aria2c=1.5)

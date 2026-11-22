@@ -769,15 +769,17 @@ def case_section(case):
                          f"{seconds(entry['process'])}.")
     if case["scenario"] == "s10":
         unbroken = case.get("unbroken", {})
-        lines += ["", f"| tool | with the drop | unbroken, s1 on this link | added | {REFETCH} |", "|---|---:|---:|---:|---:|"]
+        lines += ["", f"| tool | with the drop | unbroken, s1 on this link | added | idle once the link was back | {REFETCH} |",
+                  "|---|---:|---:|---:|---:|---:|"]
         for tool, entry in summaries.items():
             plain = unbroken.get(tool, {}).get("median")
             added = f"{entry['median'] - plain:+.2f} s" if entry["median"] is not None and plain is not None else "n/a"
             value = entry["body_bytes_ratio"]
-            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(plain)} | {added} | "
+            lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(plain)} | {added} | {seconds(idle(case['runs'].get(tool, [])))} | "
                          f"{f'{value:.3f}x' if value is not None else 'n/a'} |")
         lines.append("\nthe link drops at 10 s for 10 s, both ways, and nothing is stopped: new packets are lost while those "
-                     "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
+                     "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link. "
+                     "idle is how long after the link came back the client went on to receive another 64 KiB, the median of passed runs.\n")
     if case["scenario"] == "s11":
         lines += pushes(case)
     if case["scenario"] == "s13":
@@ -803,6 +805,14 @@ def case_section(case):
         lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]
+
+
+def idle(rows):
+    """the median time a tool's passed runs sat idle after the link came back, or None."""
+    gaps = [row["link_drop"]["resumed_at"] - row["link_drop"]["restored_at"] for row in rows
+            if row.get("status") == "passed" and (row.get("link_drop") or {}).get("resumed_at") is not None
+            and row["link_drop"].get("restored_at") is not None]
+    return median(gaps) if gaps else None
 
 
 def pushes(case):

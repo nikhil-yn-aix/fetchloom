@@ -261,14 +261,17 @@ def blackhole(name, on):
 
 class LinkDrop:
     """a link that drops for `length` seconds from `after` seconds into a run, with nothing stopped;
-    `record` says when it dropped and came back, in seconds from the run's start, and when the
-    command's own work began when the drop counts from that."""
+    `record` says when it dropped and came back, and when the client was receiving again, in seconds
+    from the run's start, and when the command's own work began when the drop counts from that."""
     POLL = .01
+    # what the client must receive once the link is back for its download to count as moving again
+    MOVING = 64 * 1024
+    COUNTER = Path(f"/sys/class/net/{CLIENT}/statistics/rx_bytes")
 
     def __init__(self, profile, after=10, length=10):
         self.profile, self.after, self.length = profile, after, length
         self.record = dict(after_seconds=after, length_seconds=length, anchor_at=None, dropped_at=None, restored_at=None,
-                           error=None)
+                           resumed_at=None, error=None)
         self.stopped = threading.Event()
         self.thread = None
 
@@ -294,8 +297,28 @@ class LinkDrop:
             self.stopped.wait(max(0, base + self.after + self.length - time.monotonic()))
             blackhole(self.profile, False)
             self.record["restored_at"] = time.monotonic() - start
+            self.watch(start)
         except Exception as error:
             self.record["error"] = f"{type(error).__name__}: {error}"
+
+    def received(self):
+        """bytes the client's end of the link has received so far, or None where it cannot be read."""
+        try:
+            return int(self.COUNTER.read_text())
+        except (OSError, ValueError):
+            return None
+
+    def watch(self, start):
+        """notes when the client has received MOVING bytes more than when the link came back, unless
+        the run ends first: until then the tool sat idle."""
+        base = self.received()
+        if base is None:
+            return
+        while not self.stopped.wait(self.POLL):
+            now = self.received()
+            if now is not None and now - base >= self.MOVING:
+                self.record["resumed_at"] = time.monotonic() - start
+                return
 
     def end(self):
         """waits until the link is back, cutting a drop short when the run ended first."""

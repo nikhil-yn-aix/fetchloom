@@ -187,13 +187,37 @@ class FixtureTests(unittest.TestCase):
             events.append((profile, on))
 
         drop = lab.LinkDrop("home", after=0, length=0)
-        with mock.patch.object(lab, "blackhole", side_effect=hole):
+        with mock.patch.object(lab, "blackhole", side_effect=hole), mock.patch.object(lab.LinkDrop, "received", return_value=None):
             drop.begin(start, anchor)
             drop.thread.join(30)
             drop.end()
         # it looked until the command's own work began, and only then dropped the link
         self.assertEqual(events, [("looked", False), ("looked", False), ("looked", True), ("home", True), ("home", False)])
         self.assertEqual(drop.record["anchor_at"], 0)
+
+    def test_a_tool_is_idle_from_the_links_return_until_it_receives_again(self):
+        # the client's counter when the link came back, then a packet or two, then the download moving
+        for counts, resumed in (([500, 500, 2000, 500 + 64 * 1024], True), ([500, 600], False), ([None], False)):
+            readings = iter(counts)
+            drop = lab.LinkDrop("home", after=0, length=0)
+
+            def reading():
+                value = next(readings, "ended")
+                if value == "ended":
+                    # the run ends before the download moves again
+                    drop.stopped.set()
+                    return None
+                return value
+
+            with mock.patch.object(lab, "blackhole"), mock.patch.object(lab.LinkDrop, "POLL", 0), \
+                 mock.patch.object(lab.LinkDrop, "received", side_effect=reading):
+                drop.begin(time.monotonic())
+                drop.thread.join(30)
+                drop.end()
+            self.assertEqual(drop.record["resumed_at"] is not None, resumed, counts)
+            if resumed:
+                self.assertGreaterEqual(drop.record["resumed_at"], drop.record["restored_at"])
+            self.assertIsNone(drop.record["error"])
 
     def test_forgetting_connections_resets_only_the_lab(self):
         from unittest import mock
