@@ -557,7 +557,7 @@ fn warn_untracked(output: &Output, project: &Project, parts: &[String]) {
 
 /// the datasets data.lock no longer pins as data.toml asks: those data.toml fetches that the lock
 /// lacks or pins for another spec or extract, and those the lock pins that data.toml dropped.
-fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
+pub(super) fn out_of_date(manifest: &Manifest, lock: &Lock) -> (Vec<String>, Vec<String>) {
     let unlocked = manifest
         .datasets
         .iter()

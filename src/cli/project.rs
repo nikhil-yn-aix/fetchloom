@@ -712,10 +712,18 @@ fn closing(
                 .is_some_and(|entry| entry.place)
     });
     let next = if lock_changed {
-        Some(format!(
+        let commit = format!(
             "commit {}, so other clones use these pins",
             committed(project)
-        ))
+        );
+        Some(match left_behind(project, manifest, scope).as_slice() {
+            [] => commit,
+            names => format!(
+                "run `{}`, which pins {} as data.toml asks, then {commit}",
+                command("lock"),
+                units::listed(names, "and")
+            ),
+        })
     } else {
         first.map(|name| {
             format!(
@@ -725,6 +733,29 @@ fn closing(
         })
     };
     Closing { verb, text, next }
+}
+
+/// the datasets outside a named `scope` whose entries data.lock, as the run left it, no longer
+/// answers, which a commit now would take behind data.toml; none for a sync of every dataset. one
+/// waiting for its file list is left out, as no lock brings that list.
+fn left_behind(project: &Project, manifest: &Manifest, scope: &Scope) -> Vec<String> {
+    if *scope == Scope::All {
+        return Vec::new();
+    }
+    let Ok(Some(lock)) = project.lock() else {
+        return Vec::new();
+    };
+    let waiting: BTreeSet<&str> = lock
+        .still_waiting()
+        .map(|waiting| waiting.name.as_str())
+        .collect();
+    let (unlocked, removed) = super::status::out_of_date(manifest, &lock);
+    let left: BTreeSet<String> = unlocked
+        .into_iter()
+        .chain(removed)
+        .filter(|name| !scope.includes(name) && !waiting.contains(name.as_str()))
+        .collect();
+    left.into_iter().collect()
 }
 
 /// the datasets a sync of every dataset places that wait for their file lists, whose files, any

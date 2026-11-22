@@ -5812,3 +5812,40 @@ fn a_newer_fetchloom_s_settled_project_is_refused() -> Result {
     }
     Ok(())
 }
+
+/// a sync of named datasets that pinned anew says to commit only once data.lock answers every
+/// entry: one it left whose entry changed since its pin is named, with the command that pins it,
+/// since a clone of that commit would find data.lock behind data.toml.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_named_sync_names_the_entries_it_left_behind_before_a_commit() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = crate::merge::three_files()?;
+    for name in ["alpha", "beta"] {
+        add_ok(&sandbox, &format!("{}/{name}.csv", routes.url))?;
+    }
+    let manifest = sandbox.work().join("data.toml");
+    let mut text = fs::read_to_string(&manifest)?;
+    for name in ["alpha", "beta"] {
+        let entry = format!("ref = \"{}/{name}.csv\"\n", routes.url);
+        text = text.replace(&entry, &format!("{entry}extract = false\n"));
+    }
+    fs::write(&manifest, text)?;
+    let Some(screen) = sandbox.on_a_terminal(&["sync", "alpha"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains(
+            "next: run `fetchloom lock`, which pins beta as data.toml asks, then commit data.toml and data.lock, so other clones use these pins"
+        ),
+        "{screen}"
+    );
+    let Some(screen) = sandbox.on_a_terminal(&["sync", "beta"])? else {
+        return Ok(());
+    };
+    assert!(
+        screen.contains("next: commit data.toml and data.lock, so other clones use these pins"),
+        "{screen}"
+    );
+    Ok(())
+}
