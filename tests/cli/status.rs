@@ -597,6 +597,31 @@ fn a_read_only_copy_nothing_recorded_is_outdated() -> Result {
     Ok(())
 }
 
+/// `status --check` says once how to make an edited file ready, in the error's line for it, and
+/// not again in a hint above it.
+#[test]
+fn check_says_how_to_make_an_edit_ready_once() -> Result {
+    let sandbox = Sandbox::new()?;
+    let routes = Routes::start(vec![("/iris.csv".to_owned(), file(IRIS, "\"1\""))])?;
+    sandbox.allow(&routes.url);
+    fs::write(
+        sandbox.work().join("data.toml"),
+        format!(
+            "[datasets.iris]\nref = \"{}/iris.csv\"\ncopy = true\n",
+            routes.url
+        ),
+    )?;
+    ok(&sandbox.run(&["sync"])?)?;
+    fs::write(sandbox.work().join("data/iris/iris.csv"), b"edited\n")?;
+    let output = sandbox.run(&["status", "--check"])?;
+    let stderr = text(&output.stderr)?;
+    assert_eq!(output.status.code(), Some(1), "{stderr}");
+    assert_eq!(stderr.matches("sync --force").count(), 1, "{stderr}");
+    let plain = text(&sandbox.run(&["status"])?.stderr)?;
+    assert!(plain.contains("sync --force"), "{plain}");
+    Ok(())
+}
+
 /// a file at a pinned path that this account cannot read may hold any bytes, the pinned ones
 /// too: status says it cannot be read, never that it holds other bytes, and offers no
 /// `sync --force`, which cannot read it either. once it can be read, a sync takes it in.

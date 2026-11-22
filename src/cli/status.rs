@@ -258,7 +258,7 @@ pub(super) fn run(context: &Context, verify: bool, strict: bool) -> Result<Statu
             ));
         }
         tell_imported_elsewhere(output, &status, &manifest);
-        tell_repairs(output, &status);
+        tell_repairs(output, &status, strict);
         tell_hidden(output, &status);
     }
     if status.unfinished > 0 {
@@ -316,8 +316,9 @@ pub(super) fn shared_hint(projects: &[PathBuf]) -> String {
 }
 
 /// how a sync with more than its plain run sets right what `status` found: hashing every file,
-/// replacing a person's file, or reading one this account could not.
-fn tell_repairs(output: &Output, status: &Status) {
+/// replacing a person's file, or reading one this account could not. a `strict` status, as
+/// `--check` asks, fails with a line for each such file that says it, so no hint says it again.
+fn tell_repairs(output: &Output, status: &Status, strict: bool) {
     let first = if status.sync_refused { FIRST } else { "" };
     if !status.shared_with.is_empty() {
         output.hint(&shared_hint(&status.shared_with));
@@ -333,19 +334,20 @@ fn tell_repairs(output: &Output, status: &Status) {
         output.hint(&changed.said());
     }
     let blocked = status.blocked.iter().map(|blocker| &blocker.path);
-    if status
-        .edited
-        .iter()
-        .chain(&status.untracked)
-        .chain(blocked)
-        .any(|path| !status.left_whole(path))
+    if !strict
+        && status
+            .edited
+            .iter()
+            .chain(&status.untracked)
+            .chain(blocked)
+            .any(|path| !status.left_whole(path))
     {
         output.hint(&format!(
             "{first}save any changes you need, then use `{}` to replace edited or conflicting files at paths in data.lock",
             super::project::command("sync --force")
         ));
     }
-    if !status.unreadable.is_empty() {
+    if !strict && !status.unreadable.is_empty() {
         let (files, its) = match status.unreadable.len() {
             1 => ("1 file at a path data.lock places".to_owned(), "its"),
             count => (
