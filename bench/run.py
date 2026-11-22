@@ -495,6 +495,10 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
         access.write_text("")
         before = settled_free_bytes(workdir)
         row["free_before_bytes"] = before
+        if case["id"] in fixtures.SHARED:
+            row["push"] = push(tool, case, workdir, log, timeout, cpus, before)
+            before = settled_free_bytes(workdir)
+            row["free_before_get_bytes"] = before
         # one cgroup holds the run's every process, both attempts of a resume included
         tree = lab.Tree(uuid.uuid4().hex)
         if case["id"] == "s7":
@@ -541,6 +545,11 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
             row["body_bytes_ratio"] = row["file_bytes_served"] / row["dataset_bytes"]
         if case["id"] == "s7" and not first["interruption_sent"]:
             row["checks"].append("first attempt ended before the prescribed interruption")
+        if case["id"] in fixtures.SHARED:
+            if row["push"]["exit_code"] != 0 or row["push"]["timeout"]:
+                row["checks"].append(f"the push failed with exit {row['push']['exit_code']}")
+            if row["requests"]:
+                row["checks"].append(f"the push and the get asked the lab server {row['requests']} times, not the shared folder")
         if drop is not None:
             row["checks"] += dropped(drop.record, row.get("process", row)["wall_seconds"])
         if row["exit_code"] == 0 and not row["timeout"] and not row["checks"]:
@@ -554,6 +563,25 @@ def one_run(tool, case, workdir, out, number, warmup, timeout, *, cpus=None, run
             shutil.copyfile(workdir / "prepare.log", out / f"{run_id}-prepare.log")
     append(out / "runs.jsonl", row)
     return row
+
+
+def push(tool, case, workdir, log, timeout, cpus, before):
+    """the first teammate's timed push to the shared folder, in a cgroup of its own, with what it wrote
+    and the disk it took; then, outside the clock, the second teammate's project and empty caches,
+    and a cold page cache for their get."""
+    argv = tool.push(case, workdir)
+    command = dict(exact_command(argv, workdir), cwd=str(tool.cwd(workdir)))
+    tree = lab.Tree(uuid.uuid4().hex)
+    try:
+        result = tool.timed(measure(argv, tool.cwd(workdir), tool.env(workdir), log, timeout, cpus=cpus, tree=tree), workdir)
+        lab.flush(workdir)
+        result["written_bytes"] = tree.written(os.stat(workdir).st_dev)
+    finally:
+        tree.close()
+    result.update(disk_bytes=before - free_bytes(workdir), command=command)
+    tool.receive(case, workdir)
+    lab.drop_caches(())
+    return result
 
 
 def dropped(record, ended):

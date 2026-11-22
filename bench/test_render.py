@@ -543,6 +543,20 @@ class PageTests(Quiet):
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | 0.100x |\n| curl | 1.000x |", page)
         self.assertIn("curl, which has no way to tell what changed, downloads every file again", page)
 
+    def test_the_shared_folder_sets_each_push_against_fetchloom_beside_the_get(self):
+        rows = [lab_row(scenario="s11", round=n, push=dict(wall_seconds=2, user_seconds=1, sys_seconds=0, memory_bytes=1 << 20,
+                                                             written_bytes=4 << 20, disk_bytes=4 << 20)) for n in (1, 2)]
+        rows += [lab_row(scenario="s11", round=n, tool="rsync", wall_seconds=.5, push=dict(wall_seconds=n, user_seconds=0,
+                                                                                         sys_seconds=0, written_bytes=4 << 20))
+                 for n in (1, 2)]
+        page = self.render(rows, dict(kind="lab", quick=True))
+        self.assertIn("## s11: the team's shared folder, local network (ext4)", page)
+        self.assertIn("| tool | push, median | min to max | time over fetchloom's, 95% interval | CPU | peak memory | written | disk |\n"
+                      "|---|---:|---|---:|---:|---:|---:|---:|\n"
+                      "| fetchloom | 2.00 s | 2.00 s to 2.00 s |  | 1.00 s | 1 MiB | 4 MiB | 4 MiB |\n"
+                      "| rsync | 1.50 s | 1.00 s to 2.00 s | 0.71 [0.50, 1.00] | 0 ms | n/a | 4 MiB | n/a |", page)
+        self.assertIn("the lab's server answers neither", page)
+
     def test_a_resume_without_a_byte_count_says_so(self):
         page = self.render([lab_row(scenario="s7", profile="home")], dict(kind="lab", quick=True))
         self.assertIn("| tool | server body bytes / dataset size |\n|---|---:|\n| fetchloom | n/a |", page)

@@ -17,7 +17,7 @@ LINKS = {"home": "home broadband", "poor": "poor connection", "lan": "local netw
 TITLES = {"s1": "one large file", "s2r": "many files through a redirect", "s3": "tiny files",
           "s4": "download and unpack", "s5": "same data, new project", "s6": "sync again, nothing changed",
           "s7": "resume after an interruption", "s8": "a compressed archive", "s9": "nothing changed, 10,000 files",
-          "s10": "the link drops for 10 s", "s12": "the next version"}
+          "s10": "the link drops for 10 s", "s11": "the team's shared folder", "s12": "the next version"}
 
 
 def summarize(rows):
@@ -130,6 +130,7 @@ STORIES = {"s1": "{files} of {size}, downloaded and checked",
            "s8": "a tar.gz of {files} of csv, about {size} each, downloaded, checked and unpacked",
            "s9": "{files} already in place, each tool confirms nothing changed",
            "s10": "a {size} download whose link drops at 10 s for 10 s, with nothing stopped",
+           "s11": "{files} of {size} each, pushed by one teammate to a shared folder and got from it by another with an empty cache; the table times the get",
            "s12": "{files} of {size} each already in place, brought to the dataset's next version, in which one file in ten changed"}
 
 # the site's stylesheet, whose colors the cli's themes share and the cards take
@@ -535,7 +536,7 @@ def group(rows, metas):
         _, count, file_size = conditions[scenario, profile, fs]
         case = dict(scenario=scenario, profile=profile, filesystem=fs, count=count, file_size=file_size,
                     link=link(profile, shaping.get(profile)), summaries=summaries(lab[scenario, profile, fs]),
-                    planned=plans.get(f"{fs}/{profile}/{scenario}"))
+                    planned=plans.get(f"{fs}/{profile}/{scenario}"), runs=lab[scenario, profile, fs])
         cases.append(dict(case, judged=judge(case, lab[scenario, profile, fs], comparators.get(f"{fs}/{profile}/{scenario}"))))
     # a dropped link's cost is set against the same tool's s1, the same file on the same link
     for case in cases:
@@ -772,6 +773,8 @@ def case_section(case):
                          f"{f'{value:.3f}x' if value is not None else 'n/a'} |")
         lines.append("\nthe link drops at 10 s for 10 s, both ways, and nothing is stopped: new packets are lost while those "
                      "already queued still arrive. the unbroken time is the same tool's median in s1, the same file on the same link.\n")
+    if case["scenario"] == "s11":
+        lines += pushes(case)
     if case["scenario"] in ("s7", "s12"):
         lines += ["", f"| tool | {REFETCH} |", "|---|---:|"]
         for tool, entry in summaries.items():
@@ -789,6 +792,30 @@ def case_section(case):
         lines.append(f"{REFETCH} counts the body bytes of the server's whole and partial answers for the file, so it says what a "
                      "tool asked for again; the server cannot see packets the network sent twice.\n")
     return lines + ["", picture(card_name(case), title)]
+
+
+def pushes(case):
+    """the push table of the shared folder's case: each tool's push, its time over fetchloom's,
+    rounds paired, with a 95% interval, and what it cost."""
+    runs = case["runs"]
+    pushed = {tool: {row["round"]: dict(row.get("push") or {}, status=row.get("status") if row.get("push") else "failed")
+                     for row in rows if isinstance(row.get("round"), int)} for tool, rows in runs.items()}
+    lines = ["", "| tool | push, median | min to max | time over fetchloom's, 95% interval | CPU | peak memory | written | disk |",
+             "|---|---:|---|---:|---:|---:|---:|---:|"]
+    for tool, rounds in pushed.items():
+        entry = summarize(list(rounds.values()))
+        ratio = ""
+        if tool != ab.BASE:
+            comparison = ab.paired(pushed.get(ab.BASE, {}), rounds, seed=f"{SEED}/{case['filesystem']}/{case['profile']}/s11-push/{tool}")
+            ratio = over(tool, dict(comparisons={tool: dict(comparison, failed=entry["failures"], rounds=entry["rounds"])}))
+        lines.append(f"| {tool} | {seconds(entry['median'])} | {seconds(entry['low'])} to {seconds(entry['high'])} | {ratio} | "
+                     f"{seconds(entry['cpu'])} | {size(entry['memory'])} | {size(entry['written'])} | {size(entry['disk'])} |")
+    lines.append("\nthe push copies the first teammate's files into the shared folder, fetchloom into a folder mirror, DVC to a "
+                 "local remote, datalad to a sibling and rsync as plain files. the get then fills the second teammate's project "
+                 "from that folder: fetchloom syncs with it as a mirror, DVC pulls from the remote, datalad gets from the sibling "
+                 "it cloned and rsync copies the files back. the lab's server answers neither, and the page cache is dropped "
+                 "before each.\n")
+    return lines
 
 
 def over(tool, judged):

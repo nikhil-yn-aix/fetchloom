@@ -95,8 +95,35 @@ class Tool:
             self.populate(previous, workdir)
             self.untimed(previous, workdir)
             self.next_version(scenario, workdir)
+        elif scenario["id"] in fixtures.SHARED:
+            first = dict(scenario, id=fixtures.SHARED[scenario["id"]])
+            self.populate(first, workdir)
+            self.untimed(first, workdir)
+            (workdir / "shared").mkdir()
+            self.share(scenario, workdir)
         else:
             self.populate(scenario, workdir)
+
+    def share(self, scenario, workdir):
+        """sets the team's shared folder up for the first teammate's push, outside the clock."""
+
+    def push(self, scenario, workdir):
+        """the command the first teammate pushes the data to the shared folder with."""
+        raise NotImplementedError(f"{self.name} has no push")
+
+    def receive(self, scenario, workdir):
+        """sets the first teammate's project, home and caches aside and gives the second their own,
+        empty but for the project itself, outside the clock."""
+        for name in ("project", "home", "cache"):
+            (workdir / name).rename(workdir / f"teammate-{name}")
+        for name in ("home", "cache"):
+            (workdir / name).mkdir()
+        self.join(scenario, workdir)
+
+    def join(self, scenario, workdir):
+        """the second teammate's project, as a clone of the team's repository gives it."""
+        (workdir / "project").mkdir()
+        self.populate(scenario, workdir)
 
     def next_version(self, scenario, workdir):
         """tells the tool of the dataset's next version, outside the clock, as a git pull of the
@@ -159,7 +186,13 @@ class Fetchloom(Tool):
         # the next version's data.toml and data.lock, as a git pull brings them
         self.populate(scenario, workdir)
 
+    def push(self, scenario, workdir):
+        return [self.fetchloom, "-q", "--yes", "push", "--to", str(workdir / "shared")]
+
     def command(self, scenario, workdir):
+        if scenario.get("id") in fixtures.SHARED:
+            # a teammate's documented cold sync from the lab's folder mirror
+            return [self.fetchloom, "-q", "--yes", "sync", "--locked", "--mirror", str(workdir / "shared")]
         return [self.fetchloom, "-q", "--yes", "sync"]
 
     def env(self, workdir):
@@ -205,7 +238,7 @@ def variant(value):
 
 class Curl(Tool):
     name = "curl"
-    scenarios = Tool.scenarios - {"s5"}
+    scenarios = Tool.scenarios - {"s5", *fixtures.SHARED}
 
     def command(self, scenario, workdir):
         return script(workdir / "command.sh", self.steps(scenario, workdir))
@@ -265,6 +298,7 @@ class Pooch(Tool):
     """pooch as a notebook uses it: retrieve calls in an interpreter that has already imported it.
     the script times the calls itself, wall and cpu, and the import beside them."""
     name = "pooch"
+    scenarios = Tool.scenarios - set(fixtures.SHARED)
     clock = "call inside a warm interpreter"
     # what the timed calls report, from inside the process, and when they began
     CALLS = "calls.json"
@@ -353,11 +387,25 @@ class Dvc(Tool):
         # a git pull brings the next version's data.dvc, and dvc pull fetches what it lacks
         self.checkout("next", workdir)
 
+    def share(self, scenario, workdir):
+        # the shared folder as a local remote, in the project's config, which the team's repository keeps
+        subprocess.run(["dvc", "remote", "add", "shared", str(workdir / "shared")], cwd=workdir / "project",
+                       env=self.env(workdir), check=True, capture_output=True)
+
+    def push(self, scenario, workdir):
+        return ["dvc", "push", "-r", "shared"]
+
+    def join(self, scenario, workdir):
+        self.populate(scenario, workdir)
+        self.share(scenario, workdir)
+
     def checkout(self, version, workdir):
         subprocess.run(["git", "checkout", "-q", version], cwd=workdir / "project", env=self.env(workdir),
                        check=True, capture_output=True)
 
     def command(self, scenario, workdir):
+        if scenario["id"] in fixtures.SHARED:
+            return ["dvc", "pull", "-r", "shared"]
         return ["dvc", "pull", "-j", str(BUDGET)]
 
 
@@ -374,6 +422,16 @@ class Datalad(Tool):
     def next_version(self, scenario, workdir):
         # datalad's own update merges what the dataset's sibling has, and get fetches what it lacks
         self.setup(["datalad", "update", "--how", "merge"], workdir)
+
+    def share(self, scenario, workdir):
+        self.setup(["datalad", "create-sibling", "-s", "shared", workdir / "shared"], workdir)
+
+    def push(self, scenario, workdir):
+        return ["datalad", "push", "--to", "shared"]
+
+    def join(self, scenario, workdir):
+        # the second teammate clones the shared sibling, which datalad get then reads from
+        self.setup(["datalad", "clone", workdir / "shared", workdir / "project"], workdir, workdir)
 
     def setup(self, argv, workdir, cwd=None):
         """runs an untimed step in the project, or in cwd, logging it beside the preparation."""
@@ -392,7 +450,32 @@ class Datalad(Tool):
         return script(workdir / "command.sh", lines)
 
 
-CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Pooch, Dvc, Datalad)
+class Rsync(Tool):
+    """a plain copy into and out of the team's shared folder; rsync checks each file it sends by a
+    whole-file checksum."""
+    name = "rsync"
+    scenarios = set(fixtures.SHARED)
+
+    def populate(self, scenario, workdir):
+        data = workdir / "project" / "data"
+        data.mkdir(exist_ok=True)
+        for item in scenario["files"]:
+            shutil.copyfile(fixtures.served_file(scenario, item), data / item["name"])
+
+    def untimed(self, scenario, workdir):
+        """nothing: the first teammate's files are copied in place."""
+
+    def push(self, scenario, workdir):
+        return ["rsync", "-a", "data/", f"{workdir / 'shared'}/"]
+
+    def join(self, scenario, workdir):
+        (workdir / "project" / "data").mkdir(parents=True)
+
+    def command(self, scenario, workdir):
+        return ["rsync", "-a", f"{workdir / 'shared'}/", "data/"]
+
+
+CLASSES = (Fetchloom, Curl, DurableCurl, Aria2c, Pooch, Dvc, Datalad, Rsync)
 
 
 def available(fetchloom, variants=(), only=None):

@@ -659,10 +659,10 @@ class OneRunTests(unittest.TestCase):
         self.case = dict(id="s1", profile="lan", quick=True, count=1, size=4, key="key", server_dir=str(self.root / "www"),
                          members=[], files=[dict(name="a.bin", size=4, url="https://lab.flb/key/a.bin", sha256="0" * 64)])
 
-    def one_run(self, tool, measured, case=None):
+    def one_run(self, tool, measured, case=None, tree=Tree, drop=None):
         with mock.patch.object(lab, "ROOT", self.root), mock.patch.object(lab, "forget_connections"), \
-             mock.patch.object(lab, "Tree", Tree), \
-             mock.patch.object(lab, "drop_caches"), mock.patch.object(lab, "flush"), \
+             mock.patch.object(lab, "Tree", tree), \
+             mock.patch.object(lab, "drop_caches", side_effect=drop), mock.patch.object(lab, "flush"), \
              mock.patch.object(run, "measure", side_effect=measured), \
              mock.patch.object(run, "settled_free_bytes", return_value=10), \
              mock.patch.object(run, "free_bytes", return_value=4), mock.patch.object(run.time, "sleep"):
@@ -767,6 +767,54 @@ class OneRunTests(unittest.TestCase):
 
         row = self.one_run(Updater("unused"), measured, dict(self.case, id="s12", base="s12", profile="home", files=files, previous=previous))
         self.assertEqual((row["file_bytes_served"], row["dataset_bytes"], row["body_bytes_ratio"]), (8, 8, 1.0))
+
+    def test_a_push_and_a_get_are_timed_apart_each_in_its_own_cgroup_and_cold(self):
+        steps = []
+
+        class Teammate(tools.Tool):
+            name = "teammate"
+
+            def prepare(self, scenario, workdir):
+                workdir.mkdir(parents=True, exist_ok=True)
+
+            def push(self, scenario, workdir):
+                return ["push"]
+
+            def receive(self, scenario, workdir):
+                steps.append("receive")
+
+            def command(self, scenario, workdir):
+                return ["get"]
+
+            def outputs(self, scenario, workdir):
+                return []
+
+        made = []
+
+        class Counted(Tree):
+            def __init__(self, name, root=None):
+                super().__init__(name, root)
+                made.append(self)
+
+        for asked, push_exit, said in ((0, 0, ["no expected outputs"]),
+                                       (2, 0, ["no expected outputs", "the push and the get asked the lab server 2 times, not the shared folder"]),
+                                       (0, 1, ["no expected outputs", "the push failed with exit 1"])):
+            steps.clear()
+            made.clear()
+
+            def measured(argv, *args, tree=None, **kwargs):
+                steps.append((argv[0], made.index(tree)))
+                if argv == ["get"] and asked:
+                    (self.root / "access.jsonl").write_text('{"request": "GET /key/a.bin HTTP/1.1", "status": 200, "bytes": 4}\n' * asked)
+                return dict(wall_seconds=2 if argv == ["push"] else 3, user_seconds=0, sys_seconds=0, maxrss_bytes=1,
+                            exit_code=push_exit if argv == ["push"] else 0, timeout=False)
+
+            row = self.one_run(Teammate("unused"), measured, dict(self.case, id="s11", base="s11"), tree=Counted,
+                               drop=lambda files: steps.append("cold"))
+            self.assertEqual(steps, ["cold", ("push", 0), "receive", "cold", ("get", 1)])
+            self.assertTrue(all(tree.closed for tree in made))
+            self.assertEqual((row["push"]["wall_seconds"], row["push"]["written_bytes"], row["wall_seconds"]), (2, 8192, 3))
+            self.assertEqual(row["checks"], said)
 
     def test_a_run_with_more_requests_in_flight_than_the_budget_is_flagged(self):
         class Fast(tools.Tool):

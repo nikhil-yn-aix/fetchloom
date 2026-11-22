@@ -79,7 +79,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sorted((c["id"], c["profile"]) for c in cases),
                          sorted([("s1", "home"), ("s1", "poor"), ("s2r", "home"), ("s2r", "poor"), ("s3", "lan"),
                                  ("s4", "home"), ("s5", "lan"), ("s6", "lan"), ("s7", "home"), ("s8", "home"),
-                                 ("s9", "lan"), ("s10", "home"), ("s12", "home")]))
+                                 ("s9", "lan"), ("s10", "home"), ("s11", "lan"), ("s12", "home")]))
         sized = {(c["id"], c["profile"]): (c["count"], c["size"]) for c in cases}
         self.assertEqual(sized["s1", "home"], (1, 256 * 1024 * 1024))
         # the poor link's sizes come from the runs measured on its loss
@@ -90,6 +90,7 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(sized["s2r", "poor"], (50, 102400))
         self.assertEqual(sized["s3", "lan"], (10000, 4096))
         self.assertEqual(sized["s12", "home"], (1000, 102400))
+        self.assertEqual(sized["s11", "lan"], (1000, 102400))
         # the resume keeps its whole file in a smoke run
         quick = {(c["id"], c["profile"]): c["size"] for c in fixtures.case_specs(list(lab.PROFILES), ["s1", "s7", "s10"], True)}
         self.assertEqual(quick, {("s1", "home"): 2 * 1024 * 1024, ("s1", "poor"): 2 * 1024 * 1024,
@@ -574,7 +575,7 @@ class ScenarioTests(unittest.TestCase):
             tools.Pooch("unused").command(case, work)
             self.assertIn("processor=pooch.Untar(extract_dir='unpacked')", (work / "retrieve.py").read_text())
         self.assertEqual([adapter.name for adapter in tools.CLASSES if not adapter("unused").supports(case)],
-                         ["dvc", "datalad"])
+                         ["dvc", "datalad", "rsync"])
 
     def test_the_large_no_op_skips_work_as_the_small_one_does(self):
         from pathlib import Path
@@ -749,6 +750,46 @@ class ToolTests(unittest.TestCase):
                          [item["url"] for item in files])
         self.assertFalse(tools.DurableCurl("unused").supports(case))
 
+    def test_one_teammate_pushes_to_the_shared_folder_and_another_gets_from_it_with_empty_caches(self):
+        prepared = self.work / "prepared"
+        (prepared / "fetchloom").mkdir(parents=True)
+        for name in ("data.toml", "data.lock"):
+            (prepared / "fetchloom" / name).write_text(name)
+        case = dict(id="s11", base="s11", files=self.FILES, members=[], prepared=str(prepared))
+        work, shared = self.work / "work", str(self.work / "work/shared")
+        steps = []
+        with mock.patch.object(tools.Tool, "untimed", lambda tool, scenario, workdir: steps.append(("untimed", scenario["id"]))), \
+             mock.patch.object(tools.subprocess, "run", side_effect=lambda argv, **kwargs: steps.append([str(x) for x in argv])), \
+             mock.patch.object(tools.shutil, "copytree", side_effect=lambda source, target, **kwargs: Path(target).mkdir(exist_ok=True)), \
+             mock.patch.object(tools.shutil, "copyfile"), \
+             mock.patch.object(lab, "run_group", side_effect=lambda argv, **kwargs: steps.append([str(x) for x in argv])):
+            for adapter in (tools.Fetchloom, tools.Dvc, tools.Datalad, tools.Rsync):
+                tool = adapter("unused")
+                steps.append(adapter.name)
+                tools.reset(work)
+                tool.prepare(case, work)
+                (work / "cache/tool").mkdir(parents=True, exist_ok=True)
+                (work / "home/mark").write_text("the first teammate's")
+                steps.append(("push", tool.push(case, work)))
+                tool.receive(case, work)
+                # the second teammate starts with an empty home and cache, the first's set aside
+                self.assertEqual((list((work / "home").iterdir()), list((work / "cache").iterdir())), ([], []))
+                self.assertTrue((work / "teammate-home/mark").exists())
+                steps.append(("get", tool.command(case, work)))
+        self.assertEqual([step for step in steps if isinstance(step, str) or step[0] in ("push", "get")], [
+            "fetchloom", ("push", ["unused", "-q", "--yes", "push", "--to", shared]),
+            ("get", ["unused", "-q", "--yes", "sync", "--locked", "--mirror", shared]),
+            "dvc", ("push", ["dvc", "push", "-r", "shared"]), ("get", ["dvc", "pull", "-r", "shared"]),
+            "datalad", ("push", ["datalad", "push", "--to", "shared"]), ("get", ["bash", str(work / "command.sh")]),
+            "rsync", ("push", ["rsync", "-a", "data/", shared + "/"]), ("get", ["rsync", "-a", shared + "/", "data/"])])
+        # the first teammate fetched the data from the lab server, untimed, and each shared folder was set up its tool's way
+        self.assertEqual(steps.count(("untimed", "s2r")), 3)
+        self.assertEqual(steps.count(["dvc", "remote", "add", "shared", shared]), 2)
+        self.assertIn(["datalad", "create-sibling", "-s", "shared", shared], steps)
+        self.assertIn(["datalad", "clone", shared, str(work / "project")], steps)
+        self.assertEqual([tool.name for tool in tools.available("unused").values() if tool.supports(case)],
+                         ["fetchloom", "dvc", "datalad", "rsync"])
+
     def test_curl_follows_each_redirect_and_every_tool_fetches_the_redirected_links(self):
         redirected = [dict(item, url=fixtures.link("key", item["name"], True)) for item in self.FILES]
         curl = self.lines(tools.Curl, "s2r", redirected)[2].split()
@@ -817,7 +858,7 @@ class ToolTests(unittest.TestCase):
         self.assertEqual(tools.Curl("unused").timed(dict(wall_seconds=9.0), self.work), dict(wall_seconds=9.0, clock="process start to exit"))
 
     def test_the_compared_tools_have_no_wget_and_the_flush_only_where_data_is_written(self):
-        self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad"])
+        self.assertEqual([cls.name for cls in tools.CLASSES], ["fetchloom", "curl", "curl+sync", "aria2c", "pooch", "dvc", "datalad", "rsync"])
         flushed, plain = tools.DurableCurl("unused"), tools.Curl("unused")
         self.assertEqual([s for s in fixtures.ALL_SCENARIOS if flushed.supports(dict(id=s))], ["s1", "s2r", "s3", "s4", "s7", "s8", "s10"])
         # curl itself still asks the server in the no-op cases
