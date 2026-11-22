@@ -865,10 +865,11 @@ enum Mark {
 /// the least a name keeps that is the whole name.
 const WHOLE: usize = usize::MAX;
 
-/// a bar's line at `width` columns, its progress kept before its name: as the terminal narrows,
-/// the name is cut in the middle first, then the verb goes, then the bar gives way to its percent,
-/// then the counters go from the least useful, the rate first; the time left and the percent stay
-/// longest. a name alone is cut to fit.
+/// a bar's line at `width` columns, its verb kept, so a person always sees what is happening, and
+/// its progress kept before its name: as the terminal narrows, the name is cut in the middle
+/// first, then the bar gives way to its percent, then the counters go from the least useful, the
+/// rate first; the time left and the percent stay longest. a terminal too narrow for the verb and
+/// the shortest name loses the verb, then the rest in the same order; a name alone is cut to fit.
 fn render(
     name: &str,
     verb: &str,
@@ -881,11 +882,17 @@ fn render(
     use Mark::{Meter, Percent, Unmarked};
     // what a line keeps: the verb, its mark, the rate, its count, what comes then, and the least
     // its name keeps
-    const LINES: [(bool, Mark, bool, Count, bool, usize); 11] = [
+    const LINES: [(bool, Mark, bool, Count, bool, usize); 17] = [
         (true, Meter, true, Whole, true, WHOLE),
         (true, Meter, true, Whole, true, NAME_ROOMY),
-        (false, Meter, true, Whole, true, NAME_ROOMY),
-        (false, Percent, true, Whole, true, WHOLE),
+        (true, Percent, true, Whole, true, WHOLE),
+        (true, Percent, true, Whole, true, NAME_LEAST),
+        (true, Percent, false, Whole, true, NAME_LEAST),
+        (true, Percent, false, Whole, true, NAME_SHORTEST),
+        (true, Percent, false, Done, true, NAME_SHORTEST),
+        (true, Percent, false, Uncounted, true, NAME_SHORTEST),
+        (true, Percent, false, Uncounted, false, NAME_SHORTEST),
+        (true, Unmarked, false, Uncounted, false, NAME_SHORTEST),
         (false, Percent, true, Whole, true, NAME_LEAST),
         (false, Percent, false, Whole, true, NAME_LEAST),
         (false, Percent, false, Whole, true, NAME_SHORTEST),
@@ -1986,8 +1993,13 @@ mod tests {
             );
         }
         assert_eq!(
+            render("iris.csv", "Downloading", None, &amount, 39, false),
+            "Downloading iris.csv 1.0 MiB · 6 s left"
+        );
+        // the verb outlasts the counters, and goes only where it leaves no room for the name
+        assert_eq!(
             render("iris.csv", "Downloading", None, &amount, 28, false),
-            "iris.csv 1.0 MiB · 6 s left"
+            "Downloading iris.csv"
         );
         assert_eq!(
             render("iris.csv", "Downloading", None, &amount, 17, false),
@@ -1999,15 +2011,16 @@ mod tests {
                 "Downloading",
                 None,
                 &counters("512 KiB/4.0 MiB · 6 s left"),
-                28,
+                39,
                 false
             ),
-            "iris.csv 512 KiB · 6 s left"
+            "Downloading iris.csv 512 KiB · 6 s left"
         );
     }
 
     /// a hugging face shard's line at 80 and 40 columns once showed no bar, no percent and no time
-    /// left: the name is cut in the middle first, the verb goes, the bar gives way to its percent,
+    /// left, and then no verb once its counters took their room: the verb stays, so a person sees
+    /// what is happening, the name is cut in the middle first, the bar gives way to its percent,
     /// then the rate, then the count, and the time left stays.
     #[test]
     fn narrow_progress_cuts_the_name_before_the_progress() {
@@ -2020,14 +2033,11 @@ mod tests {
         let roomy = at(120);
         assert!(roomy.starts_with("Downloading tinystories1/"), "{roomy}");
         assert!(roomy.contains('~') && roomy.contains(bar.0), "{roomy}");
-        let eighty = at(80);
-        assert!(
-            eighty.starts_with("tinystories1/") && eighty.contains('~'),
-            "{eighty}"
+        assert_eq!(
+            at(80),
+            format!("Downloading tinystori~d9.parquet  89% {}", amount.0)
         );
-        assert!(eighty.ends_with(&format!(" 89% {}", amount.0)), "{eighty}");
-        let forty = at(40);
-        assert!(forty.ends_with(" 89% 211.3 MiB · 1 s left"), "{forty}");
+        assert_eq!(at(40), "Downloading tinyst~arquet  89% 1 s left");
         for width in [160, 120, 80, 40] {
             assert!(
                 console::measure_text_width(&at(width)) <= width,
@@ -2035,6 +2045,11 @@ mod tests {
                 at(width)
             );
         }
+        // the first frame's verb once went as soon as the counters took their room
+        let shard = "train-00002-of-00004-a26307300439e943-w80.parquet";
+        let amount = ("0.36/57.2 MiB · under 10 s left", 60_000_000);
+        let started = drawn(shard, ("-".repeat(20).as_str(), 0), amount, 80, false);
+        assert!(started.starts_with("Downloading train-0"), "{started}");
     }
 
     /// the cut in a name once moved as the numbers beside it changed width, so the name jumped
@@ -2045,7 +2060,7 @@ mod tests {
         let total = 20_447_232;
         let cut = |amount: &str| {
             let line = drawn(name, ("#---", 15), (amount, total), 80, false);
-            line.split(' ').next().unwrap_or_default().to_owned()
+            line.split(' ').nth(1).unwrap_or_default().to_owned()
         };
         let early = cut("2.9/19.5 MiB");
         assert_eq!(early, cut("3.3/19.5 MiB · 979.7 KiB/s · 17 s left"));
@@ -2076,7 +2091,7 @@ mod tests {
                 moved.hold(&mut counters);
                 let meter = Some(("#---", Some(15)));
                 let line = render(name, "Downloading", meter, &counters, width, false);
-                line.split(' ').next().unwrap_or_default().to_owned()
+                line.split(' ').nth(1).unwrap_or_default().to_owned()
             };
             // as a link once read at 40 columns, its time foreseen from its first frame
             let first = cut(0, Some("under 10 s left"), true);
