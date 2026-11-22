@@ -567,8 +567,18 @@ fn folded(datasets: &[Listed], width: usize, marks: Marks) -> String {
     lines.join("\n")
 }
 
-/// what a dataset holds, as its row says it: its files and bytes, or why it has none yet.
+/// what a dataset holds, as its row says it: its files and bytes, or why it has none yet, and
+/// that it is dropped here, which leaves the folder column to the datasets that have a folder.
 fn contents(dataset: &Listed, marks: Marks) -> String {
+    let held = held_here(dataset, marks);
+    if dataset.dropped {
+        return format!("{held}, dropped here");
+    }
+    held
+}
+
+/// what a dataset holds, as [`contents`] says it.
+fn held_here(dataset: &Listed, marks: Marks) -> String {
     match (dataset.files, dataset.bytes) {
         (Some(files), Some(bytes)) if dataset.downloaded == Some(false) => format!(
             "{} {} {}, not downloaded yet",
@@ -590,7 +600,7 @@ fn contents(dataset: &Listed, marks: Marks) -> String {
 /// where a dataset's files are, as its row says it, when `folders` shows that folder.
 fn folder(dataset: &Listed, folders: Folders) -> String {
     if dataset.dropped {
-        "dropped here".to_owned()
+        String::new()
     } else if folders == Folders::All || (folders == Folders::Unusual && !dataset.usual_folder) {
         plain(&dataset.folder).into_owned()
     } else {
@@ -863,6 +873,25 @@ mod tests {
             "a-very-long-dataset-name-for-testing  https://zen…urements.csv  1 file · 4.4 KiB\n\
              tiny                                  zenodo:1                  1 file · 4.4 KiB",
             "every folder gives way before the source does"
+        );
+    }
+
+    /// a dataset dropped here says so beside what it holds, so the other rows keep their sources
+    /// whole and lose only their usual folders, as with no dropped dataset at all.
+    #[test]
+    fn a_dropped_dataset_takes_no_folder_column_from_the_rest() {
+        let listed = |name: &str, reference: &str, bytes: u64| Listed {
+            reference: reference.to_owned(),
+            bytes: Some(bytes),
+            ..zenodo(name, None)
+        };
+        let nums = listed("nums", "http://127.0.0.1:18871/files/numbers.txt", 8909);
+        let mut table_set = listed("table", "http://127.0.0.1:18871/files/set1/table.csv", 8);
+        table_set.dropped = true;
+        assert_eq!(
+            table(&[nums, table_set], Some(80), UNICODE),
+            "nums   http://127.0.0.1:18871/files/numbers.txt     1 file · 8.7 KiB\n\
+             table  http://127.0.0.1:18871/files/set1/table.csv  1 file · 8 B, dropped here"
         );
     }
 
