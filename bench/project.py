@@ -10,9 +10,11 @@ fixed.
 import argparse
 from collections import defaultdict
 import json
+import math
 from pathlib import Path
 
 import fixtures
+import lab
 import live
 import render
 import run
@@ -63,7 +65,82 @@ def hours(rows, metas, comparators, scale=1):
     return {name: value / 3600 for name, value in seconds.items()}
 
 
+def expected_cases():
+    """the cases the real run measures, as filesystem, link and scenario: every scenario on each link
+    it applies to on ext4, and on xfs the second project and the no-op on the lan, where reflinks
+    change the result."""
+    ext4 = {("ext4", case["profile"], case["id"]) for case in fixtures.case_specs(list(lab.PROFILES), fixtures.ALL_SCENARIOS, False)}
+    return ext4 | {("xfs", "lan", "s5"), ("xfs", "lan", "s6")}
+
+
+def finite(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0
+
+
+def lacking(name, runs):
+    """why one arm's pilot runs cannot stand for it: none, more than one round or a warmup, or no
+    finite cost on record."""
+    if not runs:
+        return [f"no pilot run of {name}"]
+    if len(runs) > 1 or any(row.get("round") != 1 or row.get("warmup") for row in runs):
+        return [f"{name} ran other than one round"]
+    if not finite(runs[0].get("run_seconds")):
+        return [f"{name} has no cost on record"]
+    return []
+
+
+def unfit(rows, metas):
+    """why these results cannot stand for the real run, each a phrase, or none: a smoke run, a case or
+    a live service of the real run it never measured, an arm of a case with no run, more than one
+    round or a warmup, or a run with no finite cost."""
+    found = []
+    labs = [meta for meta in metas if meta.get("kind") == "lab"]
+    lives = [meta for meta in metas if meta.get("kind") == "live"]
+    if any(meta.get("quick") for meta in metas) or any(row.get("quick") for row in rows):
+        found.append("a smoke run, not a full-size pilot")
+    planned = {(case.get("filesystem"), case.get("profile"), case.get("id")): case for meta in labs for case in meta.get("cases") or []}
+    found += [f"{'/'.join(key)} never measured" for key in sorted(expected_cases() - planned.keys())]
+    measured = defaultdict(list)
+    for row in rows:
+        if row.get("kind") == "lab" and "tool" in row:
+            measured[row.get("filesystem"), row.get("profile"), row.get("scenario"), row["tool"]].append(row)
+    for key, case in sorted(planned.items(), key=str):
+        name = "/".join(map(str, key))
+        arms = case.get("arm_rounds") or {}
+        if not arms or case.get("warmup") or any(rounds != 1 for rounds in arms.values()):
+            found.append(f"{name} is not planned as one round of each arm with no warmup")
+        for arm in sorted(arms):
+            found += lacking(f"{name} {arm}", measured.pop((*key, arm), []))
+    found += [f"{'/'.join(map(str, key[:3]))} {key[3]} ran outside its plan" for key in sorted(measured, key=str)]
+    if not lives:
+        found.append("no live pilot")
+    if any(meta.get("rounds") != 1 for meta in lives):
+        found.append("the live pilot is not one round")
+    datasets = {dataset.get("service"): dataset for meta in lives for dataset in meta.get("datasets") or []}
+    for service in live.RUN if lives else ():
+        dataset = datasets.get(service)
+        if dataset is None:
+            found.append(f"live {service} never measured")
+            continue
+        if not finite(dataset.get("reference_seconds")):
+            found.append(f"live {service} has no reference download's cost on record")
+        for tool in ("fetchloom", dataset.get("tool")):
+            found += lacking(f"live {service} {tool}", [row for row in rows if row.get("kind") == "live"
+                                                         and row.get("service") == service and row.get("tool") == tool])
+    return found
+
+
 def decide(rows, metas):
+    """the pilot's rules applied to a pilot that can stand for the real run; ValueError naming what it
+    lacks otherwise, since a run it never made would count as no time and freeze no rival."""
+    found = unfit(rows, metas)
+    if found:
+        shown = "; ".join(found[:12]) + (f"; and {len(found) - 12} more" if len(found) > 12 else "")
+        raise ValueError(f"the pilot cannot stand for the real run: {shown}")
+    return rules(rows, metas)
+
+
+def rules(rows, metas):
     """the pilot's rules applied: the comparators it freezes; the largest scale, in hundredths, that
     brings the projection to SHRINK_ABOVE, or the poor link's floor; whether the live part still fits
     under DEFER_ABOVE or moves to a daytime run; and, when it moves and the rest is still over
@@ -95,8 +172,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pilot", type=Path, help="the pilot's lab and live runs, under one folder")
     args = parser.parse_args()
-    rows, metas = render.load_results(args.pilot.resolve())
-    print(json.dumps(decide(rows, metas), indent=2, sort_keys=True))
+    try:
+        rows, metas = render.load_results(args.pilot.resolve())
+        decided = decide(rows, metas)
+    except ValueError as error:
+        parser.error(str(error))
+    print(json.dumps(decided, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":

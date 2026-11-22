@@ -1,6 +1,7 @@
 import unittest
 
 import fixtures
+import live
 import project
 
 
@@ -47,17 +48,17 @@ class ProjectionTests(unittest.TestCase):
                 dict(kind="live", service="kaggle", tool="kagglehub", round=1, status="passed", run_seconds=live_seconds)]
 
         # within 8 hours nothing changes, and two tools within 5% are both frozen
-        within = project.decide(rows(600, 36), [])
+        within = project.rules(rows(600, 36), [])
         self.assertEqual((within["scale"], within["live"], within["comparators"]),
                          (1, "with the run", {"ext4/home/s2r": ["aria2c", "curl"], "ext4/poor/s1": ["curl"]}))
         # over it, the poor link shrinks by the largest scale, in hundredths, that brings the projection to 8 hours
-        over = project.decide(rows(3000, 36), [])
+        over = project.rules(rows(3000, 36), [])
         self.assertLess(over["scale"], 1)
         self.assertLessEqual(sum(over["hours_after"].values()), project.SHRINK_ABOVE)
         self.assertGreater(sum(project.hours(rows(3000, 36), [], over["comparators"], over["scale"] + .01).values()), project.SHRINK_ABOVE)
         self.assertEqual(over["live"], "with the run")
         # still over 9 hours at the poor link's floor, the live part moves to a daytime run
-        late = project.decide(rows(6000, 3600), [])
+        late = project.rules(rows(6000, 3600), [])
         self.assertEqual((late["poor_sizes"], late["live"]), (dict(large_bytes=fixtures.POOR_FLOOR[0], files=fixtures.POOR_FLOOR[1]), "daytime"))
         self.assertAlmostEqual(late["total_hours"], sum(late["hours_after"].values()) - late["hours_after"]["live"])
 
@@ -68,18 +69,68 @@ class ProjectionTests(unittest.TestCase):
                     dict(kind="live", service="kaggle", tool="kagglehub", round=1, status="passed", run_seconds=1080)]
 
         # 6 hours of tiny files: moving the live part out is enough, so they stay
-        enough = project.decide(rows(1800), [])
+        enough = project.rules(rows(1800), [])
         self.assertEqual((enough["scale"], enough["live"], enough["apart"]), (.01, "daytime", []))
         self.assertAlmostEqual(enough["total_hours"], 1.375 + 6)
         # 9 hours of them: still over 9 hours without the live part, so s3 and s9 run as their own block,
         # each arm still 5 rounds and a warmup
-        over = project.decide(rows(2700), [])
+        over = project.rules(rows(2700), [])
         self.assertEqual((over["scale"], over["live"], over["apart"]), (.01, "daytime", ["s3", "s9"]))
         self.assertAlmostEqual(over["apart_hours"], 2 * 2700 * 6 / 3600)
         self.assertAlmostEqual(over["total_hours"], 1.375)
         # within 9 hours after the poor sizes shrink, neither moves
-        short = project.decide(rows(600), [])
+        short = project.rules(rows(600), [])
         self.assertEqual((short["live"], short["apart"]), ("with the run", []))
+
+def pilot(**changes):
+    """a whole pilot of the real run: every case it measures, with fetchloom and curl one round each,
+    and every live service's reference and one round of both tools."""
+    cases = sorted(project.expected_cases())
+    rows = [lab(scenario, profile, tool, 60, filesystem=fs) for fs, profile, scenario in cases for tool in ("fetchloom", "curl")]
+    metas = [dict(kind="lab", quick=False, cases=[dict(filesystem=fs, profile=profile, id=scenario, rounds=1, warmup=False,
+                                                       arm_rounds={"fetchloom": 1, "curl": 1}) for fs, profile, scenario in cases])]
+    metas.append(dict(kind="live", quick=False, rounds=1,
+                      datasets=[dict(service=service, tool=f"{service}-tool", reference_seconds=30) for service in live.RUN]))
+    rows += [dict(kind="live", service=service, tool=tool, round=1, status="passed", run_seconds=20)
+             for service in live.RUN for tool in ("fetchloom", f"{service}-tool")]
+    return dict(dict(rows=rows, metas=metas), **changes)
+
+
+class PilotTests(unittest.TestCase):
+    def refused(self, rows, metas):
+        with self.assertRaises(ValueError) as refused:
+            project.decide(rows, metas)
+        return str(refused.exception)
+
+    def test_a_whole_pilot_is_projected(self):
+        whole = pilot()
+        decided = project.decide(whole["rows"], whole["metas"])
+        self.assertGreater(sum(decided["hours"].values()), 0)
+
+    def test_a_pilot_that_cannot_stand_for_the_real_run_projects_nothing(self):
+        whole = pilot()
+        lab_meta, live_meta = whole["metas"]
+        first = whole["rows"][0]
+        for label, rows, metas, said in [
+            ("stopped after fetchloom's first run", [first], whole["metas"], "no pilot run of"),
+            ("an empty runs.jsonl beside its plan", [], whole["metas"], "no pilot run of"),
+            ("a smoke run", whole["rows"], [dict(lab_meta, quick=True), live_meta], "a smoke run"),
+            ("a case it never reached", whole["rows"], [dict(lab_meta, cases=lab_meta["cases"][1:]), live_meta], "never measured"),
+            ("two rounds of an arm", whole["rows"] + [dict(first, round=2)],
+             [dict(lab_meta, cases=[dict(lab_meta["cases"][0], arm_rounds={"fetchloom": 2, "curl": 1})] + lab_meta["cases"][1:]),
+              live_meta], "one round"),
+            ("a warmup", whole["rows"] + [dict(first, round=0, warmup=True)], whole["metas"], "one round"),
+            ("a cost it never recorded", [dict(first, run_seconds=None)] + whole["rows"][1:], whole["metas"], "no cost"),
+            ("a cost that is not a number", [dict(first, run_seconds=float("nan"))] + whole["rows"][1:], whole["metas"], "no cost"),
+            ("no live pilot", [row for row in whole["rows"] if row["kind"] == "lab"], [lab_meta], "live"),
+            ("a live service it skipped", [row for row in whole["rows"] if row.get("service") != "kaggle"],
+             [lab_meta, dict(live_meta, datasets=[d for d in live_meta["datasets"] if d["service"] != "kaggle"])], "kaggle"),
+        ]:
+            with self.subTest(label):
+                told = self.refused(rows, metas)
+                self.assertIn("the pilot cannot stand for the real run", told)
+                self.assertIn(said, told)
+
 
 if __name__ == "__main__":
     unittest.main()

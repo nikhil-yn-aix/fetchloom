@@ -19,6 +19,8 @@ import run
 import tools
 
 SERVICES = ("zenodo", "huggingface", "kaggle", "figshare", "dataverse")
+# the services the real run measures, as the design names them; figshare stays available to --services
+RUN = ("zenodo", "huggingface", "kaggle", "dataverse")
 # rounds of a full run; quick runs one
 ROUNDS = 10
 PYTHON = str(lab.VENV / "bin" / "python")
