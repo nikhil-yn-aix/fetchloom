@@ -2642,17 +2642,29 @@ fn an_add_never_pins_the_cache_as_an_output() -> Result {
 }
 
 /// the help of add, remove and drop tells the files fetchloom manages, placed in the data folder
-/// for a dataset it fetched, from an output's, which stay the author's.
+/// for a dataset it fetched, from an output's, which stay the author's. each says what an output
+/// is where the word first comes, and sync's --force names the folder it deletes in.
 #[test]
 fn help_tells_managed_files_from_an_outputs() -> Result {
     let sandbox = Sandbox::new()?;
+    let output =
+        "an output, a folder of your own files inside the project that add recorded where it is,";
+    let keeps = format!("{output} keeps its files");
+    let deletes = format!(
+        "in {output} such as data/processed, it also deletes each file there that data.lock does not list for it, but never one git tracks"
+    );
     for (command, said) in [
         (
             "add",
-            "a folder of the project is kept where it is instead, as an output, whose files stay yours",
+            "such as data/processed, stays where it is, as an output: a folder of your own files that fetchloom records in place.",
         ),
-        ("remove", "an output's folder keeps its files"),
-        ("drop", "an output's folder keeps its files"),
+        (
+            "add",
+            "a folder inside the project is kept where it is instead, as an output, whose files stay yours",
+        ),
+        ("remove", keeps.as_str()),
+        ("drop", keeps.as_str()),
+        ("sync", deletes.as_str()),
     ] {
         let help = sandbox.run(&[command, "--help"])?;
         let stdout = text(&help.stdout)?;

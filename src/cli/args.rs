@@ -18,14 +18,14 @@ mod examples {
   fetchloom add ./flowers    # files on this machine, copied into the cache
   fetchloom add -i links.txt    # one dataset of the files a list links to
 
-on disk: writes data.toml and data.lock, and places the dataset's files in data/<name>, where fetchloom manages them, with a .gitignore that keeps them out of git. files on this machine are only read, and a folder of the project is kept where it is instead, as an output, whose files stay yours. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
+on disk: writes data.toml and data.lock, and places the dataset's files in data/<name>, where fetchloom manages them, with a .gitignore that keeps them out of git. files on this machine are only read, and a folder inside the project is kept where it is instead, as an output, whose files stay yours. --no-sync writes only data.toml and data.lock. --dry-run writes nothing";
 
     pub(super) const REMOVE: &str = "examples:
   fetchloom remove iris
   fetchloom remove iris wine --dry-run
   fetchloom remove flowers --json
 
-on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloom placed for the dataset in data/. an output's folder keeps its files, which fetchloom stops tracking, and loses only the .gitignore fetchloom made there. a dataset imported from files on this machine is removed only after a yes, since no source can give its files back once they leave data/ and the cache: the run asks, and --yes answers for scripts. --dry-run writes nothing";
+on disk: edits data.toml and data.lock, and deletes the unchanged files fetchloom placed for the dataset in data/. an output, a folder of your own files inside the project that add recorded where it is, keeps its files, which fetchloom stops tracking, and loses only the .gitignore fetchloom made there. a dataset imported from files on this machine is removed only after a yes, since no source can give its files back once they leave data/ and the cache: the run asks, and --yes answers for scripts. --dry-run writes nothing";
 
     pub(super) const EXCLUDE: &str = "examples:
   fetchloom exclude data/pets/images/dog_010_corrupt.png
@@ -38,7 +38,7 @@ on disk: edits data.toml, and data.lock for files a source lists, and deletes th
   fetchloom drop pets    # free its space here; data.toml and data.lock keep it
   fetchloom drop pets --dry-run    # check where its files are, freeing nothing
 
-on disk: deletes the unchanged files fetchloom placed for the datasets in data/ and their files in the cache that no other dataset or project needs, and notes in .fetchloom/state that they are dropped here. an output's folder keeps its files, and only the cache's copy goes. it first asks the mirrors and sources whether they still have each file. `fetchloom sync <name>` brings one back. --dry-run writes nothing";
+on disk: deletes the unchanged files fetchloom placed for the datasets in data/ and their files in the cache that no other dataset or project needs, and notes in .fetchloom/state that they are dropped here. an output, a folder of your own files inside the project that add recorded where it is, keeps its files, and only the cache's copy goes. it first asks the mirrors and sources whether they still have each file. `fetchloom sync <name>` brings one back. --dry-run writes nothing";
 
     pub(super) const SYNC: &str = "examples:
   fetchloom sync    # put every file data.lock lists in the data folder
@@ -942,8 +942,9 @@ pub(crate) struct DryRun {
 )]
 pub(crate) struct Add {
     /// search words, a link, a DOI, an id such as zenodo:3608990, or a path to files on this
-    /// machine, such as ./flowers, which are copied into the cache. a folder of the project, such
-    /// as data/processed, stays where it is, as an output. several links add a dataset each
+    /// machine, such as ./flowers, which are copied into the cache. a folder inside the project,
+    /// such as data/processed, stays where it is, as an output: a folder of your own files that
+    /// fetchloom records in place. several links add a dataset each
     #[arg(value_name = "link", help_heading = "arguments")]
     pub(crate) links: Vec<String>,
 
@@ -1034,8 +1035,10 @@ pub(crate) struct Sync {
     pub(crate) names: Vec<String>,
 
     /// replace edited files, and files fetchloom did not place, at the paths data.lock lists,
-    /// naming each; in an output's folder, also deletes each file data.lock does not list for it.
-    /// it finds changes by size and time; add --verify for changes that kept both
+    /// naming each. in an output, a folder of your own files inside the project that add recorded
+    /// where it is, such as data/processed, it also deletes each file there that data.lock does
+    /// not list for it, but never one git tracks. it finds changes by size and time; add --verify
+    /// for changes that kept both
     #[arg(long, help_heading = "options")]
     pub(crate) force: bool,
 

@@ -22,7 +22,7 @@ names, as data.toml gives them, limit the sync to those datasets, as [named data
 
 | option | effect |
 |---|---|
-| `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. it finds changes by size and time; add `--verify` for changes that kept both |
+| `--force` | replace edited files, and files fetchloom did not place, at the paths `data.lock` lists, naming each replaced file, and remove what stands in a locked file's way: a link, never what it points to, a file where a folder belongs, or an empty folder. in an [output](../reference/data-toml.md#outputs), a folder of your own files inside the project that `add` recorded where it is, such as `data/processed`, it also deletes each file there that `data.lock` does not list for it, but never one git tracks. it finds changes by size and time; add `--verify` for changes that kept both |
 | `--locked` | fail instead of updating data.lock when it is out of date with data.toml, for CI. given names, only their entries are checked |
 | `--verify` | check the SHA-256 of every placed file and of each cached file it places, and put back or download again those that changed though their size and time did not |
 | `--strict` | fail with `data.not_ready`, exit 1, when the data asked for is not ready to use once the sync is done, naming each file or dataset with what makes it ready. the sync does the same work and keeps edits as without it, as [local changes](#local-changes) shows |
