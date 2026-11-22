@@ -93,6 +93,8 @@ struct Moved {
     /// whether the download waits for the disk to take what arrived, so its silence is the
     /// disk's rather than the network's.
     behind: AtomicBool,
+    /// whether a server answered or bytes came, before which the bar waits rather than stalls.
+    heard: AtomicBool,
     /// when, and at how many bytes moved, the rate is measured from, the older first, each
     /// moving on every [`WINDOW`].
     marks: Mutex<[(Instant, u64); 2]>,
@@ -127,6 +129,7 @@ impl Moved {
             started: AtomicU64::new(0),
             rerated: AtomicBool::new(false),
             behind: AtomicBool::new(false),
+            heard: AtomicBool::new(false),
             marks: Mutex::new([(Instant::now(), 0); 2]),
             untimed: AtomicBool::new(false),
             foreseen: Mutex::new(None),
@@ -267,6 +270,12 @@ impl Moved {
             .elapsed()
             .saturating_sub(Duration::from_millis(self.at.load(Ordering::Relaxed)))
     }
+
+    /// how long a download's data has not come, once a server answered or bytes came: until
+    /// then the bar waits for an answer, as a check of a cached file does, which is no stall.
+    fn silence(&self) -> Option<Duration> {
+        self.heard.load(Ordering::Relaxed).then(|| self.quiet())
+    }
 }
 
 impl Bar {
@@ -369,6 +378,7 @@ impl Bar {
         if let Some(bar) = &self.drawn {
             // the answer is news, before the wait for it ends, so no frame between calls it quiet
             self.moved.now();
+            self.moved.heard.store(true, Ordering::Relaxed);
             self.moved
                 .retry
                 .lock()
@@ -413,6 +423,7 @@ impl Bar {
         if let Some(bar) = &self.drawn {
             bar.inc(bytes);
             self.moved.now();
+            self.moved.heard.store(true, Ordering::Relaxed);
             let now = Instant::now();
             if self.moved.rerate(now) {
                 self.moved.mark(now, bar.position());
@@ -424,6 +435,12 @@ impl Bar {
     #[cfg(test)]
     pub(crate) fn told(&self) -> Option<String> {
         self.drawn.as_ref().map(ProgressBar::message)
+    }
+
+    /// whether a server answered the bar or bytes came, for tests.
+    #[cfg(test)]
+    pub(crate) fn heard(&self) -> bool {
+        self.moved.heard.load(Ordering::Relaxed)
     }
 
     /// whether the bar tells a time left of its own, and about how long it was foreseen to take,
@@ -617,7 +634,7 @@ fn style(
                     )
                 });
                 // unpacking and checking read local files, whose pauses mean nothing
-                let quiet = (verb == "Downloading").then(|| moved.quiet());
+                let quiet = (verb == "Downloading").then(|| moved.silence()).flatten();
                 let stopping = moved.stopping.load(Ordering::Relaxed);
                 let behind = quiet.filter(|_| moved.behind.load(Ordering::Relaxed));
                 let mut counters = waiting(done, total, moved.retrying(), behind)
@@ -1538,6 +1555,32 @@ mod tests {
             elapsed.is_some_and(|elapsed| elapsed < MOMENT),
             "{elapsed:?}"
         );
+    }
+
+    /// a download's bar that no server answered yet, as one checking a cached file, waits and
+    /// says how long; once an answer or bytes came, silence past 2 s is no data.
+    #[test]
+    fn a_bar_stalls_only_once_its_server_answered() {
+        let five = Duration::from_secs(5);
+        let born = Instant::now()
+            .checked_sub(five)
+            .unwrap_or_else(Instant::now);
+        let bar = Bar {
+            drawn: Some(ProgressBar::hidden()),
+            color: false,
+            unicode: false,
+            moved: Arc::new(Moved {
+                born,
+                ..Moved::new(Arc::default())
+            }),
+            later: None,
+        };
+        let line = |bar: &Bar| measured(0, Some(10), 0.0, five, five, bar.moved.silence(), false);
+        bar.length(10);
+        assert_eq!(line(&bar), "5 s");
+        bar.start(Some(10), 0);
+        bar.moved.heard_at(born);
+        assert_eq!(line(&bar), "no data for 5 s");
     }
 
     type Heard = Arc<Mutex<Vec<String>>>;

@@ -455,7 +455,10 @@ impl Overall {
                 units::count(downloads as u64, "file", "files"),
             );
             let (total, unknown) = sized(sizes());
-            bar.start((unknown == 0).then_some(total), 0);
+            // a length, not a start: no server answered the batch yet
+            if unknown == 0 {
+                bar.length(total);
+            }
             if unknown == 0 {
                 foresee(&bar, &hosts, limits(context));
             }
@@ -3959,6 +3962,42 @@ mod tests {
             }
             assert_eq!(bar.told(), Some(batch(2, 2)));
         }
+    }
+
+    /// a batch's bar hears nothing until bytes come, so while its downloads wait for their
+    /// servers, as checks of cached files do, it waits rather than stalls.
+    #[test]
+    fn a_batch_waits_for_its_servers_before_it_can_stall() {
+        let context = Context::new(Output::new(
+            Style {
+                color: false,
+                unicode: false,
+                interactive: true,
+                watched: false,
+                links: false,
+                accessible: false,
+            },
+            Level::Normal,
+            false,
+            false,
+        ));
+        let job = |name: &str| {
+            let mut fetch = Fetch::new(Url::parse(&format!("https://example.org/{name}")).unwrap());
+            fetch.expect.size = Some(10);
+            Job {
+                fetch,
+                label: format!("a/{name}"),
+                dataset: None,
+                named_by_caller: false,
+                again: None,
+            }
+        };
+        let overall = Overall::new(&context, &[job("one.csv"), job("two.csv")]);
+        let bar = overall.bar.as_ref().unwrap();
+        assert_eq!(bar.total(), Some(20));
+        assert!(!bar.heard());
+        bar.advance(1);
+        assert!(bar.heard());
     }
 
     /// an archive needs room for what is left to transfer plus its files again, at least its size
