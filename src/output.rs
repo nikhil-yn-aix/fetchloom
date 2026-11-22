@@ -62,6 +62,11 @@ pub(crate) struct Output {
     held: Arc<Mutex<Option<Vec<String>>>>,
     /// taken while a question waits, so two never share the terminal.
     question: Mutex<()>,
+    /// set when a question's read gave ctrl-c: the key, or a signal from another process, as
+    /// `kill -INT` sends, which cuts the read short and reads as that key. such a signal can end
+    /// the question before its stop is heard, and that stop then tells no `Stopping` line, since
+    /// the question says what it cancelled.
+    cut: AtomicBool,
     warnings: Mutex<Vec<Warned>>,
     failed: Mutex<Option<Error>>,
     /// off with `FETCHLOOM_NO_HINTS=1`, for people who know the next step already.
@@ -141,9 +146,10 @@ impl Alone<'_> {
             Interrupt::CtrlC
         };
         let _ = output.stopped_by.set(by);
-        // a question waiting for its answer ends at once and says what it cancelled, so no
-        // `Stopping` line comes before that
-        if self.held.is_none() {
+        // a question waiting for its answer, or one this signal cut short already, ends at once
+        // and says what it cancelled, so no `Stopping` line comes before that
+        let cut = output.cut.swap(false, Ordering::Relaxed);
+        if self.held.is_none() && !cut {
             self.heard("Stopping", &format!("({})", output.again(true)));
         }
         // each bar says so now, not at its next tick, which a busy machine can put off
@@ -394,6 +400,7 @@ impl Output {
             bars,
             held: Arc::default(),
             question: Mutex::new(()),
+            cut: AtomicBool::new(false),
             warnings: Mutex::new(Vec::new()),
             withheld: Mutex::new(crate::suggested::Withheld::default()),
             failed: Mutex::new(None),
@@ -1269,7 +1276,7 @@ impl Output {
                 // read ctrl-c as a key on both platforms instead of leaving a blocking read
                 // waiting after the signal handler asks network tasks to stop
                 let answer = answer(
-                    || terminal.read_key_raw(),
+                    || key(|| terminal.read_key_raw(), &self.cut),
                     |edit| {
                         match edit {
                             Edit::Typed(_) => shown += 1,
@@ -1299,7 +1306,7 @@ impl Output {
     /// no pipe brings it. a person sees `prompt`, then the masked key once enter ends it; `--json`
     /// writes nothing on stderr.
     pub(crate) fn read_hidden(&self, prompt: &str) -> Result<String, Error> {
-        raw::question(|| self.hidden(prompt))
+        self.asking(|| self.hidden(prompt))
     }
 
     /// [`Output::read_hidden`] at a terminal held for it.
@@ -1310,7 +1317,7 @@ impl Output {
         if !self.json {
             let _ = terminal.write_str(&label);
         }
-        let text = match typed_line(|| terminal.read_key_raw(), |_| {}) {
+        let text = match typed_line(|| key(|| terminal.read_key_raw(), &self.cut), |_| {}) {
             Ok(text) => text,
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {
                 return Err(Error::new(crate::error::Kind::Interrupted, "stopped")
@@ -1344,7 +1351,7 @@ impl Output {
             for _ in 0..3 {
                 let _ = terminal.write_str(&label);
                 let read = typed_line(
-                    || terminal.read_key_raw(),
+                    || key(|| terminal.read_key_raw(), &self.cut),
                     |edit| {
                         if !hidden {
                             echo(&terminal, edit, self.style.interactive);
@@ -1431,9 +1438,9 @@ impl Output {
         }
         let ask = || {
             if self.style.accessible {
-                picker::numbered(question, options, footer, self.style)
+                picker::numbered(question, options, footer, self.style, &self.cut)
             } else {
-                picker::choose(question, options, footer, self.style)
+                picker::choose(question, options, footer, self.style, &self.cut)
             }
         };
         self.asking(ask)
@@ -2413,6 +2420,22 @@ fn write_line(color: bool, text: &str) {
 enum Edit {
     Typed(char),
     Erased(char),
+}
+
+/// a key `read` at a question, noting a ctrl-c in `cut`, as [`Output::cut`] says.
+fn key(
+    read: impl FnOnce() -> std::io::Result<console::Key>,
+    cut: &AtomicBool,
+) -> std::io::Result<console::Key> {
+    let key = read();
+    let ctrl_c = match &key {
+        Ok(key) => *key == console::Key::CtrlC,
+        Err(err) => err.kind() == std::io::ErrorKind::Interrupted,
+    };
+    if ctrl_c {
+        cut.store(true, Ordering::Relaxed);
+    }
+    key
 }
 
 /// a line typed at a prompt, read one key at a time from `key` until enter, each change told to

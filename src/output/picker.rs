@@ -1,5 +1,7 @@
 //! drawing and key handling for a dataset choice.
 
+use std::sync::atomic::AtomicBool;
+
 use anstyle::Style as Paint;
 use console::{Key, Term};
 
@@ -11,6 +13,7 @@ pub(super) fn choose(
     options: &[String],
     footer: &str,
     style: Style,
+    cut: &AtomicBool,
 ) -> Result<Option<usize>, Error> {
     if options.is_empty() {
         return Err(nothing_chosen(Kind::Usage));
@@ -18,7 +21,7 @@ pub(super) fn choose(
     let terminal = Term::stderr();
     // too few rows for the question, one option and the footer: a list drawn once never stacks
     if terminal.size().0 < 5 {
-        return numbered(question, options, footer, style);
+        return numbered(question, options, footer, style, cut);
     }
     let escapes = escapes();
     let _ = terminal.hide_cursor();
@@ -34,7 +37,8 @@ pub(super) fn choose(
     draw(cursor, &mut top, &mut shown);
     let answer = loop {
         let previous = cursor;
-        match selection_key(terminal.read_key_raw(), &mut cursor, options.len()) {
+        let key = super::key(|| terminal.read_key_raw(), cut);
+        match selection_key(key, &mut cursor, options.len()) {
             Ok(None) => {
                 if previous != cursor {
                     draw(cursor, &mut top, &mut shown);
@@ -55,6 +59,7 @@ pub(super) fn numbered(
     options: &[String],
     footer: &str,
     style: Style,
+    cut: &AtomicBool,
 ) -> Result<Option<usize>, Error> {
     if options.is_empty() {
         return Err(nothing_chosen(Kind::Usage));
@@ -78,7 +83,7 @@ pub(super) fn numbered(
             "  type a number from 1 to {count} and press enter, or q to cancel: "
         ));
         let typed = super::typed_line(
-            || terminal.read_key_raw(),
+            || super::key(|| terminal.read_key_raw(), cut),
             |edit| super::echo(&terminal, edit, style.interactive),
         );
         // keys read one by one bring no line break of their own

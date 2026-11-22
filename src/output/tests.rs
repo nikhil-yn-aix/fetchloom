@@ -1861,3 +1861,39 @@ fn a_stop_at_a_question_tells_no_stopping_line() {
         output.said()
     );
 }
+
+/// a signal from another process, as `kill -INT` sends, cuts a question's read short, which reads
+/// as a ctrl-c key, and the question can end before the stop it brings is heard. it says what it
+/// cancelled, so that stop tells no `Stopping` line either; a stop after other keys does.
+#[test]
+fn a_signal_that_ends_a_question_first_tells_no_stopping_line() {
+    let output = Output::new(
+        Style {
+            color: false,
+            unicode: false,
+            interactive: false,
+            watched: false,
+            links: false,
+            accessible: false,
+        },
+        Level::Normal,
+        false,
+        false,
+    );
+    let read = super::key(|| Ok(console::Key::CtrlC), &output.cut);
+    assert!(read.is_ok());
+    output.alone().stopping();
+    assert!(
+        output.said().iter().all(|line| !line.contains("Stopping")),
+        "{:?}",
+        output.said()
+    );
+    let read = super::key(|| Ok(console::Key::Char('y')), &output.cut);
+    assert!(read.is_ok());
+    output.alone().stopping();
+    assert!(
+        output.said().iter().any(|line| line.contains("Stopping")),
+        "{:?}",
+        output.said()
+    );
+}
