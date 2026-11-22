@@ -1027,10 +1027,10 @@ class LabHelperTests(unittest.TestCase):
         with mock.patch.object(lab.os, "geteuid", return_value=0):
             self.assertIsNone(lab.require_root())
 
-    def test_the_lab_writes_out_its_root_and_the_test_filesystems_mounted_under_it(self):
+    def test_the_lab_writes_out_the_test_filesystems_mounted_under_it_and_then_their_images(self):
         root = Path("/srv/fl-bench")
         with mock.patch.object(lab, "ROOT", root), mock.patch.object(lab.os.path, "ismount", side_effect=lambda path: path.name == "xfs"):
-            self.assertEqual(lab.filesystems(), [root, root / "fs" / "xfs"])
+            self.assertEqual(lab.filesystems(), [root / "fs" / "xfs", root / "images"])
         # syncfs of no file fails as the kernel says, and touches no filesystem
         with self.assertRaises(OSError) as raised:
             lab._syncfs(-1)

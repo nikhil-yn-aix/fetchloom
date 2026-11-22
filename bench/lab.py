@@ -459,9 +459,10 @@ def flush(*paths):
 
 
 def filesystems():
-    """the lab's root and the test filesystems mounted under it."""
+    """the test filesystems mounted under the lab's root, then the filesystem holding their images,
+    last, since writing out a test filesystem leaves its image's pages unwritten there."""
     mounted = [ROOT / "fs" / fs for fs in ("ext4", "xfs")]
-    return [ROOT, *(target for target in mounted if os.path.ismount(target))]
+    return [*(target for target in mounted if os.path.ismount(target)), ROOT / "images"]
 
 
 def drop_caches(files):

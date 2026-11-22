@@ -326,8 +326,9 @@ def free_bytes(path):
 
 
 def settled_free_bytes(path, attempts=50):
-    """free space once the filesystem has finished freeing what the last run removed."""
-    lab.flush(path)
+    """free space once the filesystem has finished freeing what the last run removed, with it and
+    then the disk under its image written out, so no fsync a run times waits on either."""
+    lab.flush(path, *lab.filesystems())
     last = free_bytes(path)
     for _ in range(attempts):
         time.sleep(0.05)

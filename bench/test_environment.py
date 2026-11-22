@@ -73,8 +73,32 @@ class FlushTests(unittest.TestCase):
                  mock.patch.object(lab, "flush") as flush, \
                  mock.patch.object(lab.os, "sync", side_effect=AssertionError("a global sync waits on every mount")):
                 lab.drop_caches([])
-            flush.assert_called_once_with(Path(root))
+            flush.assert_called_once_with(Path(root) / "images")
             self.assertEqual(drop.read_text(), "3\n")
+
+    def flushed(self, act):
+        """the filesystems `act` writes out, in order, as the devices of /lab: the images' disk 1, the
+        ext4 test filesystem 2 and the xfs one 3."""
+        devices = {"/lab": 1, "/lab/images": 1, "/lab/fs/ext4": 2, "/lab/fs/ext4/work": 2, "/lab/fs/xfs": 3}
+        flushed = []
+        with mock.patch.object(lab, "ROOT", Path("/lab")), \
+             mock.patch.object(lab.os.path, "ismount", return_value=True), \
+             mock.patch.object(lab.os, "stat", side_effect=lambda path: mock.Mock(st_dev=devices[str(path)])), \
+             mock.patch.object(lab.os, "open", side_effect=lambda path, flags: devices[str(path)]), \
+             mock.patch.object(lab.os, "close"), \
+             mock.patch.object(lab, "_syncfs", side_effect=flushed.append), \
+             mock.patch.object(lab, "require_root"), \
+             mock.patch.object(lab, "DROP", mock.Mock()):
+            act()
+        return flushed
+
+    def test_every_run_writes_out_its_test_filesystems_and_then_the_disk_under_their_images(self):
+        import run
+        # writing out a test filesystem dirties its image, so the images' disk goes last; a warm run
+        # needs both layers too, or a fsync it times waits on what the image holds unwritten
+        self.assertEqual(self.flushed(lambda: lab.drop_caches(())), [2, 3, 1])
+        with mock.patch.object(run, "free_bytes", return_value=7), mock.patch.object(run.time, "sleep"):
+            self.assertEqual(self.flushed(lambda: run.settled_free_bytes(Path("/lab/fs/ext4/work"))), [2, 3, 1])
 
 
 class DurableCurlTests(unittest.TestCase):

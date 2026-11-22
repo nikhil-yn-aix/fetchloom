@@ -562,9 +562,10 @@ class HelperTests(unittest.TestCase):
 
     def test_free_space_still_moving_after_every_try_is_its_last_reading(self):
         with mock.patch.object(lab, "flush") as flush, mock.patch.object(run, "free_bytes", side_effect=range(100)), \
+             mock.patch.object(lab, "filesystems", return_value=["/lab/fs/xfs", "/lab/images"]), \
              mock.patch.object(run.time, "sleep"):
-            self.assertEqual(run.settled_free_bytes("/lab", attempts=3), 3)
-        flush.assert_called_once_with("/lab")
+            self.assertEqual(run.settled_free_bytes("/lab/fs/ext4/work", attempts=3), 3)
+        flush.assert_called_once_with("/lab/fs/ext4/work", "/lab/fs/xfs", "/lab/images")
 
     def test_the_repository_head_falls_back_to_windows_git_and_then_to_unavailable(self):
         commands = []
