@@ -3948,6 +3948,7 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
     let server = crate::support::Routes::start(vec![
         ("/iris.csv".to_owned(), file(b"a,b\n1,2\n", "\"i1\"")),
         ("/hello.txt".to_owned(), file(b"hello\n", "\"h1\"")),
+        ("/caf%C3%A9.csv".to_owned(), file(b"dish\nsoup\n", "\"c1\"")),
     ])?;
     sandbox.allow(&server.url);
     let added = sandbox.run(&["add", &format!("{}/iris.csv", server.url)])?;
@@ -4017,6 +4018,30 @@ fn o_never_writes_into_git_fetchloom_or_what_sync_placed() -> Result {
         assert_eq!(std::fs::read(work.join(path))?, before?, "{path}");
     }
     std::fs::remove_file(work.join("data/iris/data.toml"))?;
+    // a disk that ignores case and how unicode is composed takes these for the placed café.csv
+    let menu = format!("{}/caf%C3%A9.csv", server.url);
+    let added = sandbox.run(&["add", &menu, "--as", "menu"])?;
+    assert_eq!(added.status.code(), Some(0), "{}", text(&added.stderr)?);
+    let placed = std::fs::read(work.join("data/menu/caf\u{e9}.csv"))?;
+    let asked = server.requests().len();
+    for spelled in [
+        "data/menu/cafe\u{301}.csv",
+        "data/menu/CAF\u{c9}.csv",
+        "DATA/Menu/caf\u{e9}.csv",
+    ] {
+        let args = ["--json", "get", &link, "-o", spelled, "--force"];
+        let output = sandbox.command(&args).output()?;
+        let document = json(&output)?;
+        assert_eq!(output.status.code(), Some(2), "{spelled}: {document}");
+        assert!(
+            document["errors"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("data/menu/caf\u{e9}.csv")),
+            "{spelled}: {document}"
+        );
+    }
+    assert_eq!(server.requests().len(), asked, "nothing was asked for");
+    assert_eq!(std::fs::read(work.join("data/menu/caf\u{e9}.csv"))?, placed);
     let own = sandbox.run(&["get", &link, "-o", "data/iris/notes.txt"])?;
     assert_eq!(own.status.code(), Some(0), "{}", text(&own.stderr)?);
     Ok(())

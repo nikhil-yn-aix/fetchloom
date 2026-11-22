@@ -1970,8 +1970,8 @@ pub(super) fn data_links(context: &Context) -> crate::project::DataLinks {
 /// refuses `path`, the one file `-o` names, `--force` or not, when writing it would break the
 /// project or git where no command notices: a project's own data.toml or data.lock, anything in
 /// its data.lock.d, in a `.git` or a `.fetchloom` folder, and what a sync made in a data folder,
-/// a file it placed or the .gitignore it keeps there. names are compared ignoring case, as a
-/// disk that ignores case compares them.
+/// a file it placed or the .gitignore it keeps there. names are compared as [`name::fold`] keys,
+/// so a spelling that a disk ignoring case or unicode composition takes for one of these counts.
 pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
     let Ok(target) = std::path::absolute(path) else {
         return Ok(());
@@ -2016,14 +2016,19 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
         .find_map(|folder| made_by_sync(folder, name));
     match made {
         None => Ok(()),
-        Some(Made::Placed(dataset)) => Err(Error::new(
-            Kind::Usage,
-            format!(
-                "-o names {}, a file sync placed for {dataset}, and fetchloom never writes over the files it placed",
-                path.display()
-            ),
-        )
-        .help("give -o another file name: data.lock pins this one")),
+        Some(Made::Placed(dataset, alias)) => {
+            let placed = alias.map_or_else(String::new, |placed| {
+                format!(" which some disks take for {},", name::spelled(&placed))
+            });
+            Err(Error::new(
+                Kind::Usage,
+                format!(
+                    "-o names {},{placed} a file sync placed for {dataset}, and fetchloom never writes over the files it placed",
+                    name::spelled(&path.to_string_lossy())
+                ),
+            )
+            .help("give -o another file name: data.lock pins this one"))
+        }
         Some(Made::Marker(at)) => Err(Error::new(
             Kind::Usage,
             format!(
@@ -2037,8 +2042,9 @@ pub(super) fn refuse_own_file(path: &Path) -> Result<(), Error> {
 
 /// what a sync made in a project's data folder, as the project's state records it.
 enum Made {
-    /// a file it placed, by the dataset it placed it for.
-    Placed(String),
+    /// a file it placed, by the dataset it placed it for, and the path the state records when
+    /// `-o` spells it another way.
+    Placed(String, Option<String>),
     /// the .gitignore it keeps in a dataset's folder, by that folder's path in the project.
     Marker(String),
 }
@@ -2070,22 +2076,55 @@ fn made_in(project: &Project, folder: &Path, name: &str) -> Option<Made> {
         return None;
     }
     let path = format!("{at}/{name}");
-    let (state, _) = project.state_within(std::slice::from_ref(&at), &|placed| {
-        placed.eq_ignore_ascii_case(&path)
+    let key = name::fold(&path);
+    let folders = spellings(project, &at);
+    let (state, _) = project.state_within(&folders, &|placed| {
+        name::fold(placed) == key
+            && folders.iter().any(|folder| {
+                placed
+                    .strip_prefix(folder.as_str())
+                    .is_some_and(|rest| rest.starts_with('/'))
+            })
     });
-    if name.eq_ignore_ascii_case(".gitignore")
+    let marker = name::fold(&at);
+    if name::fold(name) == ".gitignore"
         && state
             .markers
             .keys()
-            .any(|marked| marked.eq_ignore_ascii_case(&at))
+            .any(|marked| name::fold(marked) == marker)
     {
         return Some(Made::Marker(at));
     }
-    let placed = state.files.values().map(|placed| &placed.dataset);
+    let placed = state.files.iter().map(|(at, placed)| (at, &placed.dataset));
     placed
-        .chain(state.copied.files.values())
+        .chain(&state.copied.files)
         .next()
-        .map(|dataset| Made::Placed(dataset.clone()))
+        .map(|(placed, dataset)| {
+            Made::Placed(dataset.clone(), (*placed != path).then(|| placed.clone()))
+        })
+}
+
+/// the folders whose records could hold what `at`, a folder in `project`, names: `at` as written
+/// and composed, and each dataset folder `at` lies in as a disk that folds names compares them.
+fn spellings(project: &Project, at: &str) -> Vec<String> {
+    let folded = name::fold(at);
+    let mut folders = vec![at.to_owned(), name::composed(at)];
+    if let Ok((_, manifest)) = project.manifest() {
+        let datasets = manifest.datasets.keys();
+        folders.extend(
+            datasets
+                .map(|dataset| plan::folder(&manifest, dataset))
+                .filter(|folder| {
+                    let key = name::fold(folder);
+                    folded
+                        .strip_prefix(&key)
+                        .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'))
+                }),
+        );
+    }
+    folders.sort_unstable();
+    folders.dedup();
+    folders
 }
 
 /// refuses `path` when it is a project's own data.toml or data.lock, or lies in its
